@@ -1,0 +1,154 @@
+@import "tailwindcss";
+
+/* Teneo Brand Colors */
+:root {
+  /* Primary Teals */
+  --brand-teal-1: #75e6ea;
+  --brand-teal-2: #bce5e3;
+  --brand-teal-3: #d3e5e4;
+  --brand-teal-4: #055e5e;
+  --brand-teal-5: #325359;
+
+  /* Blues */
+  --brand-blue-1: #0044ff;
+  --brand-blue-2: #397bff;
+
+  /* Neutrals */
+  --brand-neutral-1: #1d1f23;
+  --brand-neutral-2: #25272b;
+  --brand-neutral-3: #2e3136;
+  --brand-neutral-4: #3f4142;
+  --brand-neutral-5: #797e80;
+  --brand-neutral-6: #c2cacc;
+  --brand-neutral-7: #dfe4e5;
+  --brand-neutral-8: #f0f4f5;
+  --brand-neutral-9: #fafcfc;
+
+  /* Greens */
+  --brand-green: #055e5e;
+  --brand-green-1: #d5ede1;
+  --brand-green-2: #1f8c64;
+  --brand-green-3: #375852;
+  --brand-green-4: #41cba4;
+
+  /* Reds */
+  --brand-red-1: #fbebeb;
+  --brand-red-2: #a22628;
+  --brand-red-3: #3b2d2d;
+  --brand-red-4: #ff575a;
+
+  /* Semantic - Dark Theme */
+  --background-primary: var(--brand-neutral-1);
+  --background-secondary: var(--brand-neutral-2);
+  --background-tertiary: var(--brand-neutral-3);
+  --background-divide: var(--brand-neutral-4);
+
+  --text-primary: #fafcfc;
+  --text-secondary: #d5e2e5;
+  --text-tertiary: #797e80;
+
+  /* Synapse States */
+  --synapse-locked: #3f4142;
+  --synapse-available: #75e6ea;
+  --synapse-connected: #41cba4;
+
+  /* Rarity Colors */
+  --rarity-common: #c2cacc;
+  --rarity-uncommon: #41cba4;
+  --rarity-rare: #397bff;
+  --rarity-legendary: #ff9f43;
+
+  /* Component tokens */
+  --card-background: var(--brand-neutral-2);
+  --card-border: var(--brand-neutral-4);
+  --button-primary: var(--brand-teal-1);
+  --button-primary-hover: var(--brand-teal-2);
+
+  --radius: 0.5rem;
+}
+
+@theme inline {
+  /* Colors */
+  --color-background: var(--background-primary);
+  --color-background-secondary: var(--background-secondary);
+  --color-background-tertiary: var(--background-tertiary);
+
+  --color-foreground: var(--text-primary);
+  --color-foreground-secondary: var(--text-secondary);
+  --color-foreground-muted: var(--text-tertiary);
+
+  --color-card: var(--card-background);
+  --color-card-border: var(--card-border);
+
+  --color-brand-teal: var(--brand-teal-1);
+  --color-brand-teal-dark: var(--brand-teal-4);
+  --color-brand-blue: var(--brand-blue-1);
+  --color-brand-green: var(--brand-green-4);
+
+  --color-synapse-locked: var(--synapse-locked);
+  --color-synapse-available: var(--synapse-available);
+  --color-synapse-connected: var(--synapse-connected);
+
+  --color-rarity-common: var(--rarity-common);
+  --color-rarity-uncommon: var(--rarity-uncommon);
+  --color-rarity-rare: var(--rarity-rare);
+  --color-rarity-legendary: var(--rarity-legendary);
+
+  /* Font */
+  --font-family-sans: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Radius */
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+}
+
+/* Base styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  background-color: var(--background-primary);
+  color: var(--text-primary);
+  font-family: var(--font-family-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background-secondary);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--brand-neutral-5);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--brand-teal-4);
+}
+
+/* Selection */
+::selection {
+  background-color: var(--brand-teal-4);
+  color: var(--text-primary);
+}
