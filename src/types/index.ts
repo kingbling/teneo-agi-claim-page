@@ -33,7 +33,7 @@ export type BrainRegion =
   | 'cerebellum'
   | 'brainstem'
 
-export type SynapseState = 'locked' | 'available' | 'connected'
+export type SynapseState = 'locked' | 'available' | 'pending' | 'connected'
 
 export interface SynapseNode {
   id: string
@@ -41,8 +41,11 @@ export interface SynapseNode {
   region: BrainRegion
   state: SynapseState
   connectedAt?: Date
-  connectedBy?: string // wallet address of who connected this synapse
+  connectedBy?: string // Short wallet address for display
+  fullWalletAddress?: string // Full wallet address for search
   connectedToIds: string[]
+  clusterWeight?: number // How many synapses this cluster represents (for visualization)
+  synapseCount?: number // Actual number of synapses in this cluster
 }
 
 export interface Synapse {
@@ -111,3 +114,6 @@ export interface Milestone {
   reward: string
   achieved: boolean
 }
+
+// Re-export database types
+export * from './database'

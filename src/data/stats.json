@@ -1,0 +1,11 @@
+{
+  "totalSynapses": 200000000,
+  "lod0Clusters": 500,
+  "lod1Clusters": 1500,
+  "lod2Clusters": 800,
+  "uniqueWallets": 200000,
+  "lod0Connections": 2243,
+  "lod1Connections": 7805,
+  "lod2Connections": 2732,
+  "generatedAt": "2026-01-04T10:06:25.044Z"
+}

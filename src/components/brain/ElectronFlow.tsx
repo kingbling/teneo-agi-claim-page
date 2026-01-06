@@ -5,9 +5,10 @@ import type { SynapseNode } from '@/types'
 
 interface ElectronFlowProps {
   synapseNodes: SynapseNode[]
+  opacity?: number // 0-1 for LOD cross-fade transitions
 }
 
-export function ElectronFlow({ synapseNodes }: ElectronFlowProps) {
+export function ElectronFlow({ synapseNodes, opacity = 1 }: ElectronFlowProps) {
   const linesRef = useRef<THREE.Group>(null)
   const electronsRef = useRef<THREE.Points>(null)
   const materialRef = useRef<THREE.ShaderMaterial>(null)
@@ -30,19 +31,40 @@ export function ElectronFlow({ synapseNodes }: ElectronFlowProps) {
         const targetNode = nodeMap.get(targetId)
         if (!targetNode || targetNode.state !== 'connected') return
 
+        // Calculate positions matching SynapseNodeMarkers (volume-based)
+        // Source node position with depth factor
+        const sRawLen = Math.sqrt(
+          node.position[0] * node.position[0] +
+          node.position[1] * node.position[1] +
+          node.position[2] * node.position[2]
+        )
+        const sDepthFactor = Math.max(0.35, Math.min(1.1, sRawLen))
+        const snx = node.position[0] / sRawLen
+        const sny = node.position[1] / sRawLen
+        const snz = node.position[2] / sRawLen
+
+        // Target node position with depth factor
+        const eRawLen = Math.sqrt(
+          targetNode.position[0] * targetNode.position[0] +
+          targetNode.position[1] * targetNode.position[1] +
+          targetNode.position[2] * targetNode.position[2]
+        )
+        const eDepthFactor = Math.max(0.35, Math.min(1.1, eRawLen))
+        const enx = targetNode.position[0] / eRawLen
+        const eny = targetNode.position[1] / eRawLen
+        const enz = targetNode.position[2] / eRawLen
+
+        // Scale to brain volume using depthFactor (matches SynapseNodeMarkers)
         const startPos = new THREE.Vector3(
-          node.position[0] * brainScale.x * brainRadius,
-          node.position[1] * brainScale.y * brainRadius,
-          node.position[2] * brainScale.z * brainRadius
+          snx * brainScale.x * brainRadius * sDepthFactor,
+          sny * brainScale.y * brainRadius * sDepthFactor,
+          snz * brainScale.z * brainRadius * sDepthFactor
         )
         const endPos = new THREE.Vector3(
-          targetNode.position[0] * brainScale.x * brainRadius,
-          targetNode.position[1] * brainScale.y * brainRadius,
-          targetNode.position[2] * brainScale.z * brainRadius
+          enx * brainScale.x * brainRadius * eDepthFactor,
+          eny * brainScale.y * brainRadius * eDepthFactor,
+          enz * brainScale.z * brainRadius * eDepthFactor
         )
-
-        startPos.normalize().multiplyScalar(startPos.length() + 0.05)
-        endPos.normalize().multiplyScalar(endPos.length() + 0.05)
 
         const midPoint = new THREE.Vector3()
           .addVectors(startPos, endPos)
@@ -101,6 +123,7 @@ export function ElectronFlow({ synapseNodes }: ElectronFlowProps) {
 
     if (materialRef.current) {
       materialRef.current.uniforms.uTime.value = time
+      materialRef.current.uniforms.uOpacity.value = opacity
     }
   })
 
@@ -109,8 +132,8 @@ export function ElectronFlow({ synapseNodes }: ElectronFlowProps) {
   return (
     <group ref={linesRef}>
       {/* Connection lines - more visible */}
-      <lineSegments>
-        <bufferGeometry>
+      <lineSegments key={`lines-${curves.length}`}>
+        <bufferGeometry key={`lines-geom-${linePositions.length}`}>
           <bufferAttribute
             attach="attributes-position"
             count={linePositions.length / 3}
@@ -121,14 +144,14 @@ export function ElectronFlow({ synapseNodes }: ElectronFlowProps) {
         <lineBasicMaterial
           color="#75e6ea"
           transparent
-          opacity={0.6}
+          opacity={0.6 * opacity}
           linewidth={1}
         />
       </lineSegments>
 
       {/* Electrons - DISTINCT: larger, brighter, white core */}
-      <points ref={electronsRef}>
-        <bufferGeometry>
+      <points key={`electrons-${curves.length}`} ref={electronsRef}>
+        <bufferGeometry key={`electrons-geom-${curves.length}`}>
           <bufferAttribute
             attach="attributes-position"
             count={curves.length}
@@ -140,6 +163,7 @@ export function ElectronFlow({ synapseNodes }: ElectronFlowProps) {
           ref={materialRef}
           uniforms={{
             uTime: { value: 0 },
+            uOpacity: { value: opacity },
           }}
           vertexShader={`
             uniform float uTime;
@@ -153,6 +177,7 @@ export function ElectronFlow({ synapseNodes }: ElectronFlowProps) {
           `}
           fragmentShader={`
             uniform float uTime;
+            uniform float uOpacity;
             void main() {
               vec2 c = gl_PointCoord - vec2(0.5);
               float d = length(c);
@@ -167,7 +192,7 @@ export function ElectronFlow({ synapseNodes }: ElectronFlowProps) {
               // Full opacity for visibility
               float alpha = smoothstep(0.5, 0.0, d);
 
-              gl_FragColor = vec4(color, alpha);
+              gl_FragColor = vec4(color, alpha * uOpacity);
             }
           `}
           transparent

@@ -1,0 +1,80 @@
+[
+  {
+    "id": "brainstem",
+    "name": "Brainstem",
+    "description": "The foundation of neural activity. Always active.",
+    "unlock_threshold": 0,
+    "reward_multiplier": 1,
+    "passive_bonus_percent": 0,
+    "color_hex": "#3d5a6c",
+    "glow_color_hex": "#5a8a9a",
+    "is_unlocked": 1,
+    "unlocked_at": "2026-01-02 17:11:38",
+    "display_order": 1
+  },
+  {
+    "id": "cerebellum",
+    "name": "Cerebellum",
+    "description": "Coordination center. Unlocks at 100 collective synapses.",
+    "unlock_threshold": 100,
+    "reward_multiplier": 1.15,
+    "passive_bonus_percent": 2,
+    "color_hex": "#4a7a8a",
+    "glow_color_hex": "#6abacc",
+    "is_unlocked": 1,
+    "unlocked_at": "2026-01-02 17:11:38",
+    "display_order": 2
+  },
+  {
+    "id": "occipital",
+    "name": "Occipital Lobe",
+    "description": "Visual processing hub. Unlocks at 250 collective synapses.",
+    "unlock_threshold": 250,
+    "reward_multiplier": 1.25,
+    "passive_bonus_percent": 4,
+    "color_hex": "#5a8a9a",
+    "glow_color_hex": "#7adaea",
+    "is_unlocked": 0,
+    "unlocked_at": null,
+    "display_order": 3
+  },
+  {
+    "id": "temporal",
+    "name": "Temporal Lobe",
+    "description": "Memory and language center. Unlocks at 500 collective synapses.",
+    "unlock_threshold": 500,
+    "reward_multiplier": 1.4,
+    "passive_bonus_percent": 6,
+    "color_hex": "#6a9aaa",
+    "glow_color_hex": "#8aeafa",
+    "is_unlocked": 0,
+    "unlocked_at": null,
+    "display_order": 4
+  },
+  {
+    "id": "parietal",
+    "name": "Parietal Lobe",
+    "description": "Sensory integration zone. Unlocks at 750 collective synapses.",
+    "unlock_threshold": 750,
+    "reward_multiplier": 1.6,
+    "passive_bonus_percent": 8,
+    "color_hex": "#7aaaBA",
+    "glow_color_hex": "#9afaff",
+    "is_unlocked": 0,
+    "unlocked_at": null,
+    "display_order": 5
+  },
+  {
+    "id": "frontal",
+    "name": "Frontal Lobe",
+    "description": "Executive function apex. Unlocks at 1000 collective synapses.",
+    "unlock_threshold": 1000,
+    "reward_multiplier": 2,
+    "passive_bonus_percent": 12,
+    "color_hex": "#8abaCA",
+    "glow_color_hex": "#aaffff",
+    "is_unlocked": 0,
+    "unlocked_at": null,
+    "display_order": 6
+  }
+]

@@ -49,12 +49,23 @@ export function InteractiveSynapsePoints({
     <group>
       {connectedNodes.map((node) => {
         const isUserNode = userNodeSet.has(node.id)
-        const position = new THREE.Vector3(
-          node.position[0] * brainScale.x * brainRadius,
-          node.position[1] * brainScale.y * brainRadius,
-          node.position[2] * brainScale.z * brainRadius
+
+        // Normalize to unit sphere first, then scale to brain surface
+        const rawLen = Math.sqrt(
+          node.position[0] * node.position[0] +
+          node.position[1] * node.position[1] +
+          node.position[2] * node.position[2]
         )
-        // Push outward from brain surface
+        const nx = node.position[0] / rawLen
+        const ny = node.position[1] / rawLen
+        const nz = node.position[2] / rawLen
+
+        const position = new THREE.Vector3(
+          nx * brainScale.x * brainRadius,
+          ny * brainScale.y * brainRadius,
+          nz * brainScale.z * brainRadius
+        )
+        // Push slightly outward from brain surface
         const len = position.length()
         position.multiplyScalar((len + 0.05) / len)
 

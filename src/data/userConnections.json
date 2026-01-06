@@ -1,0 +1,29 @@
+[
+  {
+    "id": 1,
+    "user_id": "user_mjx4sbt6_3ofvr2",
+    "connection_type": "wallet",
+    "connection_id": "0xca5833dfd68434c60e161f9e7aac73ff57cb3af6",
+    "display_name": "0xca5833df...",
+    "is_verified": 1,
+    "connected_at": "2026-01-02 17:11:38"
+  },
+  {
+    "id": 2,
+    "user_id": "user_mjx4sbt6_3ofvr2",
+    "connection_type": "twitter",
+    "connection_id": "@neural_explorer",
+    "display_name": "NeuralExplorer",
+    "is_verified": 1,
+    "connected_at": "2026-01-02 17:11:38"
+  },
+  {
+    "id": 3,
+    "user_id": "user_mjx4sbt6_3ofvr2",
+    "connection_type": "discord",
+    "connection_id": "neural#1234",
+    "display_name": "neural#1234",
+    "is_verified": 1,
+    "connected_at": "2026-01-02 17:11:38"
+  }
+]
