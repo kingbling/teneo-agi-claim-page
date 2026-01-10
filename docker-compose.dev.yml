@@ -1,0 +1,26 @@
+services:
+  teneo-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "4444:4444"   # Server
+      - "5175:5175"   # Frontend (Vite)
+    volumes:
+      # Mount source code for hot reload
+      - .:/app
+      # Preserve node_modules (don't override with host)
+      - /app/node_modules
+      - /app/server/node_modules
+      # Persistent data
+      - teneo-data:/app/server/data
+    environment:
+      - NODE_ENV=development
+      - PORT=4444
+      - VITE_API_URL=http://localhost:4444
+      - VITE_WS_URL=ws://localhost:4444
+    stdin_open: true
+    tty: true
+
+volumes:
+  teneo-data:

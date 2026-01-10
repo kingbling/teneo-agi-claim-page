@@ -152,8 +152,8 @@ const accentColors = {
   green: 'from-[hsl(var(--success))]/20 to-[hsl(var(--success))]/5 text-[hsl(var(--success))]',
   amber: 'from-[hsl(var(--accent))]/20 to-[hsl(var(--accent))]/5 text-[hsl(var(--accent))]',
   red: 'from-[hsl(var(--destructive))]/20 to-[hsl(var(--destructive))]/5 text-[hsl(var(--destructive))]',
-  blue: 'from-blue-500/20 to-blue-500/5 text-blue-400',
-  purple: 'from-purple-500/20 to-purple-500/5 text-purple-400',
+  blue: 'from-[var(--brand-blue-2)]/20 to-[var(--brand-blue-2)]/5 text-[var(--brand-blue-2)]',
+  purple: 'from-[hsl(var(--tier-mythic))]/20 to-[hsl(var(--tier-mythic))]/5 text-[hsl(var(--tier-mythic))]',
 }
 
 function StatCard({
