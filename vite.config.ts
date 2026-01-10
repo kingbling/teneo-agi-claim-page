@@ -11,4 +11,19 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    port: 5175,
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Split vendor chunks for better caching
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-three': ['three', '@react-three/fiber', '@react-three/drei', '@react-three/postprocessing'],
+          'vendor-ui': ['framer-motion', '@radix-ui/react-dialog', '@radix-ui/react-progress', '@radix-ui/react-tabs', '@radix-ui/react-tooltip'],
+        },
+      },
+    },
+  },
 })
