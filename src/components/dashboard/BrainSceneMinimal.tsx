@@ -5,13 +5,16 @@ import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsType } from 'three-stdlib'
 import { SynapseParticlesMinimal } from '@/components/brain/SynapseParticlesMinimal'
 import { SpaceMarkersNew } from '@/components/brain/SpaceMarkersNew'
-import { AgentMarkersNew } from '@/components/brain/AgentMarkersNew'
-import { SynapseNetwork } from '@/components/brain/SynapseNetwork'
+import { ShipMarkersNew } from '@/components/brain/AgentMarkersNew'
+import { SynapseNetworkNew } from '@/components/brain/SynapseNetworkNew'
 import { BurnParticlesNew } from '@/components/brain/BurnParticlesNew'
 import { ElectronFlowNew } from '@/components/brain/ElectronFlowNew'
 import { DiscoveryBurstNew } from '@/components/brain/DiscoveryBurstNew'
+import { PostProcessingEffects } from '@/components/brain/PostProcessingEffects'
 import { CAMERA_CONFIG, LOD_THRESHOLDS } from '@/components/brain/core/brainConstants'
-import type { SpaceCluster, Agent, AgentCluster, SpaceDiscoveryEvent } from '@/types/agent'
+// Masterplan 2026: Types no longer imported - using 'any' for compatibility
+// Old types: SpaceCluster, Agent, AgentCluster, SpaceDiscoveryEvent from @/types/agent
+// New types: SynapseCluster, Ship, ShipCluster, SynapseDiscoveryEvent from @/stores/shipStore
 
 /**
  * Region camera target for navigating to brain regions
@@ -146,15 +149,18 @@ export function CameraController({
   return null
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface BrainSceneMinimalProps {
-  spaceClusters?: SpaceCluster[]
-  agentClusters?: AgentCluster[]
-  userAgents?: Agent[]
-  recentDiscoveries?: SpaceDiscoveryEvent[]
+  // Masterplan 2026: Accept any cluster/entity types for forward compatibility
+  // The visualization layer works with both old and new types since structure is similar
+  spaceClusters?: any[]
+  agentClusters?: any[]
+  userAgents?: any[]
+  recentDiscoveries?: any[]
   zoomTarget?: THREE.Vector3 | null
   setZoomInfo?: (info: { distance: number; lod: number }) => void
-  onSpaceClick?: (cluster: SpaceCluster, position: THREE.Vector3) => void
-  onAgentClick?: (agent: Agent) => void
+  onSpaceClick?: (cluster: any, position: THREE.Vector3) => void
+  onAgentClick?: (agent: any) => void
   // Region navigation props
   regionCamera?: RegionCamera | null
   selectedRegionIndex?: number
@@ -206,6 +212,9 @@ export function BrainSceneMinimal({
         maxPolarAngle={Math.PI * 0.75}
       />
 
+      {/* Atmospheric fog for depth - subtle fog to avoid washing out scene */}
+      <fog attach="fog" args={['#0a0a1a', 4, 10]} />
+
       {/* Lighting */}
       <ambientLight intensity={0.5} />
       <pointLight position={[10, 10, 10]} intensity={0.8} />
@@ -225,22 +234,22 @@ export function BrainSceneMinimal({
         lodLevel={currentLodLevel}
       />
 
-      {/* Space clusters */}
+      {/* Synapse clusters (Masterplan 2026: renamed from space clusters) */}
       {spaceClusters.length > 0 && (
-        <SpaceMarkersNew clusters={spaceClusters} onSpaceClick={onSpaceClick} />
+        <SpaceMarkersNew clusters={spaceClusters} onSynapseClick={onSpaceClick} />
       )}
 
       {/* Synapse network connections */}
       {spaceClusters.length > 0 && (
-        <SynapseNetwork spaceClusters={spaceClusters} />
+        <SynapseNetworkNew synapseClusters={spaceClusters} />
       )}
 
-      {/* Agent markers */}
+      {/* Ship markers (Masterplan 2026: renamed from agent markers) */}
       {userAgents.length > 0 && (
-        <AgentMarkersNew
-          userAgents={userAgents}
-          agentClusters={agentClusters}
-          onAgentClick={onAgentClick}
+        <ShipMarkersNew
+          userShips={userAgents}
+          shipClusters={agentClusters}
+          onShipClick={onAgentClick}
         />
       )}
 
@@ -252,6 +261,9 @@ export function BrainSceneMinimal({
       {/* Discovery effects */}
       <ElectronFlowNew recentDiscoveries={recentDiscoveries} spaceClusters={spaceClusters} />
       <DiscoveryBurstNew recentDiscoveries={recentDiscoveries} />
+
+      {/* Post-processing effects - bloom glow and vignette */}
+      <PostProcessingEffects bloomIntensity={1.5} vignetteIntensity={0.5} />
     </>
   )
 }

@@ -21,22 +21,22 @@ export interface BrainRegion {
   cameraTarget: [number, number, number]
 }
 
-// Color palette - distinct colors for each region
+// Color palette - vibrant, high-saturation colors for each region
 const COLORS = {
-  prefrontal: { r: 0.4, g: 0.6, b: 0.9 },      // Blue - decision making
-  motor: { r: 0.9, g: 0.4, b: 0.4 },            // Red - movement
-  somatosensory: { r: 0.9, g: 0.6, b: 0.3 },   // Orange - touch
-  parietal: { r: 0.8, g: 0.8, b: 0.3 },        // Yellow - spatial
-  temporal: { r: 0.5, g: 0.8, b: 0.5 },        // Green - memory/hearing
-  occipital: { r: 0.7, g: 0.4, b: 0.8 },       // Purple - vision
-  cerebellum: { r: 0.3, g: 0.7, b: 0.7 },      // Teal - coordination
-  brainstem: { r: 0.6, g: 0.5, b: 0.4 },       // Brown - vital functions
-  limbic: { r: 0.9, g: 0.5, b: 0.7 },          // Pink - emotion
-  insular: { r: 0.5, g: 0.5, b: 0.7 },         // Slate - awareness
-  broca: { r: 0.3, g: 0.5, b: 0.8 },           // Deep blue - speech production
-  wernicke: { r: 0.4, g: 0.7, b: 0.6 },        // Sea green - language comprehension
-  hippocampus: { r: 0.7, g: 0.6, b: 0.5 },     // Tan - memory formation
-  amygdala: { r: 0.8, g: 0.3, b: 0.5 },        // Magenta - fear/emotion
+  prefrontal: { r: 0.3, g: 0.5, b: 0.95 },     // Deep blue - decision making
+  motor: { r: 0.95, g: 0.25, b: 0.25 },        // Bright red - movement
+  somatosensory: { r: 1.0, g: 0.55, b: 0.2 },  // Vivid orange - touch
+  parietal: { r: 0.95, g: 0.85, b: 0.15 },     // Bright yellow - spatial
+  temporal: { r: 0.2, g: 0.85, b: 0.4 },       // Vibrant green - memory/hearing
+  occipital: { r: 0.75, g: 0.3, b: 0.9 },      // Vivid purple - vision
+  cerebellum: { r: 0.15, g: 0.8, b: 0.8 },     // Bright teal - coordination
+  brainstem: { r: 0.7, g: 0.5, b: 0.35 },      // Warm brown - vital functions
+  limbic: { r: 1.0, g: 0.4, b: 0.65 },         // Hot pink - emotion
+  insular: { r: 0.45, g: 0.45, b: 0.8 },       // Rich slate - awareness
+  broca: { r: 0.2, g: 0.4, b: 0.9 },           // Deep azure - speech production
+  wernicke: { r: 0.3, g: 0.8, b: 0.6 },        // Emerald - language comprehension
+  hippocampus: { r: 0.8, g: 0.65, b: 0.45 },   // Warm tan - memory formation
+  amygdala: { r: 0.9, g: 0.2, b: 0.45 },       // Deep magenta - fear/emotion
 }
 
 export const FUNCTIONAL_BRAIN_REGIONS: BrainRegion[] = [

@@ -2,10 +2,10 @@ import { useEffect, useState, useCallback, useRef, Suspense, useMemo } from 'rea
 import { Canvas } from '@react-three/fiber'
 import * as THREE from 'three'
 
-import { useAgentStore } from '@/stores/agentStore'
+import { useShipStore } from '@/stores/shipStore'
+import { useUserStore } from '@/stores/userStore'
 import { useBrainRegionStore } from '@/stores/brainRegionStore'
 import { useWebSocketConnection, useDashboardStats, useVisualizationState } from '@/hooks'
-import { DeploymentDialog } from '@/components/agents/DeploymentDialog'
 import { TopDownView } from '@/components/brain/TopDownView'
 import { PerformanceMonitor } from '@/components/ui/PerformanceMonitor'
 import { ToastNotifications, useToasts } from '@/components/ui/ToastNotifications'
@@ -17,22 +17,37 @@ import {
   LoginOverlay,
   HelpOverlay,
   DashboardHeader,
-  TranceModeOverlay,
   ViewModeToggle,
 } from '@/components/dashboard'
-import { AgentSidebar } from '@/components/dashboard/AgentSidebar'
 import { RegionNavigator, SelectedRegionInfo } from '@/components/dashboard/RegionNavigator'
 import { BrainSceneMinimal } from '@/components/dashboard/BrainSceneMinimal'
 
-import type { SpaceCluster } from '@/types/agent'
-import { BRAIN_SCALE, LOOT_THRESHOLDS, TOAST_DURATIONS, FUEL_THRESHOLDS } from '@/constants'
+// Masterplan 2026 Components
+import { ShipSidebar } from '@/components/ships/ShipSidebar'
+import { CreateShipDialog } from '@/components/ships/CreateShipDialog'
+import { ExplorationDialog } from '@/components/exploration/ExplorationDialog'
+
+import type { Ship } from '@/stores/shipStore'
+import { BRAIN_SCALE, TOAST_DURATIONS } from '@/constants'
+import { getSynapseTypeLabel, formatPoints } from '@/types/game'
+
+// Synapse discovery loot thresholds (replaces space tier thresholds)
+const SYNAPSE_LOOT_THRESHOLDS = {
+  MIN_NOTIFY: 50,
+  CONFETTI: 1000,
+  DEEP: 4000,
+  CORE: 40000,
+  RARE: 100000,
+  LEGENDARY: 200000,
+  UNIQUE: 1000000,
+} as const
 
 export function DiscoveryDashboard() {
   const { toasts, addToast, removeToast } = useToasts()
 
   // Custom hooks for connection, stats, and visualization
   useWebSocketConnection()
-  const { userPoints } = useDashboardStats()
+  useDashboardStats() // Keep for side effects, stats displayed in header
   const {
     viewMode,
     setViewMode,
@@ -43,15 +58,26 @@ export function DiscoveryDashboard() {
     agentClustersLod0,
   } = useVisualizationState()
 
-  // Store values still needed directly
+  // User store values
+  const { userId, loginUser, initFromStorage } = useUserStore()
+
+  // Auto-login from localStorage on mount
+  useEffect(() => {
+    if (!userId) {
+      initFromStorage()
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ship store values
   const {
-    loginUser,
-    userId,
-    userAgents,
-    selectedAgentId,
+    userShips,
+    selectedShipId,
     recentDiscoveries,
-    refuelAgent,
-  } = useAgentStore()
+    recentLoot,
+  } = useShipStore()
+
+  // Ship store - select ship for exploration
+  const { selectShip } = useShipStore()
 
   // Brain region navigation state
   const selectedRegionIndex = useBrainRegionStore(state => state.selectedRegionIndex)
@@ -69,74 +95,96 @@ export function DiscoveryDashboard() {
   }, [selectedRegionIndex, getSelectedRegion])
 
   // Local UI state
-  const [deploymentTarget, setDeploymentTarget] = useState<SpaceCluster | null>(null)
+  const [isCreateShipOpen, setIsCreateShipOpen] = useState(false)
   const [walletInput, setWalletInput] = useState('')
   const [showHelp, setShowHelp] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
   const [mobileTab, setMobileTab] = useState<'home' | 'agents' | 'stats' | 'settings'>('home')
 
-  // Handle focus on agent to zoom camera to their position
-  const handleFocusAgent = useCallback((x: number, y: number, z: number) => {
+  // Handle focus on ship to zoom camera to their position
+  const handleFocusShip = useCallback((ship: Ship) => {
     const target = new THREE.Vector3(
-      x * BRAIN_SCALE.x,
-      y * BRAIN_SCALE.y,
-      z * BRAIN_SCALE.z
+      ship.positionX * BRAIN_SCALE.x,
+      ship.positionY * BRAIN_SCALE.y,
+      ship.positionZ * BRAIN_SCALE.z
     )
     setZoomTarget(target)
     setViewMode('3d')
-  }, [BRAIN_SCALE])
 
-  // Show toast notifications and confetti for significant discoveries
-  const lastNotifiedDiscoveryRef = useRef<string | null>(null)
+    addToast({
+      type: 'info',
+      title: 'Camera Focus',
+      message: `Focusing on ${ship.name}`,
+      duration: TOAST_DURATIONS.SHORT,
+    })
+  }, [BRAIN_SCALE, setZoomTarget, setViewMode, addToast])
+
+  // Handle starting exploration for a ship - select ship then user clicks synapse
+  const handleStartExploration = useCallback((ship: Ship) => {
+    // Select the ship - user then clicks on a synapse marker to start exploration
+    selectShip(ship.id)
+    addToast({
+      type: 'info',
+      title: 'Ship Selected',
+      message: `Click on a synapse to start exploring with ${ship.name}`,
+      duration: TOAST_DURATIONS.MEDIUM,
+    })
+  }, [selectShip, addToast])
+
+  // Handle create ship
+  const handleCreateShip = useCallback(() => {
+    setIsCreateShipOpen(true)
+  }, [])
+
+  // Show toast notifications for loot distributions
+  const lastNotifiedLootRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (recentDiscoveries.length > 0) {
-      const latestDiscovery = recentDiscoveries[0]
+    if (recentLoot.length > 0) {
+      const latestLoot = recentLoot[0]
 
-      if (lastNotifiedDiscoveryRef.current === latestDiscovery.spaceId) {
-        return
-      }
+      // Only notify for user's own loot
+      if (latestLoot.userId !== userId) return
 
-      const lootAmount = latestDiscovery.lootDistribution.reduce((s, d) => s + d.amount, 0)
+      // Avoid duplicate notifications
+      const lootKey = `${latestLoot.synapseId}-${latestLoot.timestamp}`
+      if (lastNotifiedLootRef.current === lootKey) return
 
-      if (lootAmount < LOOT_THRESHOLDS.MIN_NOTIFY) return
+      const agiAmount = latestLoot.agiAmount
+      if (agiAmount < SYNAPSE_LOOT_THRESHOLDS.MIN_NOTIFY) return
 
-      lastNotifiedDiscoveryRef.current = latestDiscovery.spaceId
+      lastNotifiedLootRef.current = lootKey
 
-      const discovererAgentId = latestDiscovery.discoveredBy.find(
-        (agentId) => userAgents.some((a) => a.id === agentId)
-      )
-      const discovererAgent = discovererAgentId
-        ? userAgents.find((a) => a.id === discovererAgentId)
-        : null
+      const ship = userShips.find(s => s.id === latestLoot.shipId)
+      const shipName = ship?.name || 'Your ship'
 
-      const tierInfo =
-        lootAmount >= LOOT_THRESHOLDS.MYTHIC
-          ? { tier: 'Mythic', emoji: '🌟' }
-          : lootAmount >= LOOT_THRESHOLDS.LEGENDARY
+      // Determine tier based on synapse type rewards
+      const tierInfo = latestLoot.isLotteryWin
+        ? { tier: 'Lottery Win! 🎰', emoji: '🌟' }
+        : agiAmount >= SYNAPSE_LOOT_THRESHOLDS.UNIQUE
+          ? { tier: 'Unique', emoji: '🌟' }
+          : agiAmount >= SYNAPSE_LOOT_THRESHOLDS.LEGENDARY
             ? { tier: 'Legendary', emoji: '✨' }
-            : lootAmount >= LOOT_THRESHOLDS.TEAM
-              ? { tier: 'Team', emoji: '💎' }
-              : { tier: 'Trait', emoji: '💫' }
-
-      const agentName = discovererAgent?.name || 'Unknown'
-      const title = discovererAgent
-        ? `${agentName} found a ${tierInfo.tier} Space!`
-        : `${tierInfo.tier} Space Discovered!`
+            : agiAmount >= SYNAPSE_LOOT_THRESHOLDS.RARE
+              ? { tier: 'Rare', emoji: '💎' }
+              : agiAmount >= SYNAPSE_LOOT_THRESHOLDS.CORE
+                ? { tier: 'Core', emoji: '💫' }
+                : { tier: getSynapseTypeLabel(latestLoot.synapseType), emoji: '⚡' }
 
       addToast({
         type: 'discovery',
-        title,
-        message: `${tierInfo.emoji} +${lootAmount.toLocaleString()} AGI earned`,
-        duration: lootAmount >= LOOT_THRESHOLDS.CONFETTI ? TOAST_DURATIONS.LONG : TOAST_DURATIONS.MEDIUM,
+        title: `${shipName} earned ${tierInfo.tier} rewards!`,
+        message: `${tierInfo.emoji} +${formatPoints(agiAmount)} $AGI earned`,
+        duration: agiAmount >= SYNAPSE_LOOT_THRESHOLDS.CONFETTI ? TOAST_DURATIONS.LONG : TOAST_DURATIONS.MEDIUM,
       })
 
-      if (lootAmount >= LOOT_THRESHOLDS.CONFETTI) {
+      // Show confetti for big wins
+      if (agiAmount >= SYNAPSE_LOOT_THRESHOLDS.CONFETTI || latestLoot.isLotteryWin) {
         setShowConfetti(true)
         setTimeout(() => setShowConfetti(false), 100)
       }
     }
-  }, [recentDiscoveries, userAgents, addToast])
+  }, [recentLoot, userId, userShips, addToast])
 
   // Login handler
   const handleLogin = () => {
@@ -144,33 +192,6 @@ export function DiscoveryDashboard() {
       loginUser(walletInput.trim())
     }
   }
-
-  // Trance state
-  const tranceAgent = userAgents.find(a => a.tranceActive)
-  const tranceActive = !!tranceAgent
-  const tranceEndTime = tranceAgent?.tranceEndTime || null
-  const prevTranceActiveRef = useRef(false)
-
-  // Show trance notifications
-  useEffect(() => {
-    if (tranceActive && !prevTranceActiveRef.current) {
-      addToast({
-        type: 'trance',
-        title: 'Trance Mode Activated!',
-        message: '20x slowdown - auto-continue when done',
-        duration: TOAST_DURATIONS.MEDIUM,
-      })
-    }
-    if (!tranceActive && prevTranceActiveRef.current) {
-      addToast({
-        type: 'trance',
-        title: 'Auto-Continue!',
-        message: 'Agent redeploying to new location...',
-        duration: TOAST_DURATIONS.MEDIUM,
-      })
-    }
-    prevTranceActiveRef.current = tranceActive
-  }, [tranceActive, addToast])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -183,44 +204,28 @@ export function DiscoveryDashboard() {
       // ESC - Close dialogs
       if (e.key === 'Escape') {
         setShowHelp(false)
-        setDeploymentTarget(null)
+        setIsCreateShipOpen(false)
       }
 
-      // R - Refuel all agents that need it
-      if (e.key === 'r' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-        const agentsNeedingFuel = userAgents.filter(a => a.pointsBalance < FUEL_THRESHOLDS.LOW)
-        const costPerAgent = Math.floor(userPoints / agentsNeedingFuel.length)
-        if (costPerAgent > 0) {
-          Promise.all(agentsNeedingFuel.map(a => refuelAgent(a.id, costPerAgent)))
-          addToast({
-            type: 'success',
-            title: 'Agents Refueled',
-            message: `${agentsNeedingFuel.length} agents refueled`,
-            duration: TOAST_DURATIONS.DEFAULT,
-          })
-        }
-      }
-
-      // F - Focus camera on selected agent
+      // F - Focus camera on selected ship
       if (e.key === 'f' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-        if (selectedAgentId) {
-          const agent = userAgents.find(a => a.id === selectedAgentId)
-          if (agent && agent.state !== 'idle') {
-            handleFocusAgent(agent.positionX, agent.positionY, agent.positionZ)
-            addToast({
-              type: 'info',
-              title: 'Camera Focus',
-              message: `Focusing on ${agent.name}`,
-              duration: TOAST_DURATIONS.SHORT,
-            })
+        if (selectedShipId) {
+          const ship = userShips.find(s => s.id === selectedShipId)
+          if (ship && ship.state !== 'idle') {
+            handleFocusShip(ship)
           }
         }
+      }
+
+      // N - Create new ship
+      if (e.key === 'n' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        setIsCreateShipOpen(true)
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [userAgents, userPoints, selectedAgentId, refuelAgent, addToast, handleFocusAgent])
+  }, [userShips, selectedShipId, handleFocusShip])
 
   // Login overlay
   if (!userId) {
@@ -254,11 +259,15 @@ export function DiscoveryDashboard() {
 
           {viewMode === '3d' ? (
             <Suspense fallback={<div className="w-full h-full flex items-center justify-center text-[var(--text-muted)]">Loading 3D...</div>}>
-              <Canvas gl={{ antialias: true, alpha: true }} className="w-full h-full">
+              <Canvas
+                gl={{ antialias: true, alpha: true }}
+                className="w-full h-full"
+                style={{ background: 'radial-gradient(ellipse at center, #0d1526 0%, #050810 70%, #020305 100%)' }}
+              >
                 <BrainSceneMinimal
                   spaceClusters={currentSpaceClusters}
                   agentClusters={agentClustersLod0}
-                  userAgents={userAgents}
+                  userAgents={userShips}
                   recentDiscoveries={recentDiscoveries}
                   zoomTarget={zoomTarget}
                   setZoomInfo={setZoomInfo}
@@ -269,7 +278,7 @@ export function DiscoveryDashboard() {
               </Canvas>
             </Suspense>
           ) : (
-            <TopDownView spaceClusters={currentSpaceClusters} userAgents={userAgents} />
+            <TopDownView spaceClusters={currentSpaceClusters} userAgents={userShips} />
           )}
 
           {/* Selected region info panel - shows in both views */}
@@ -288,20 +297,27 @@ export function DiscoveryDashboard() {
           </div>
         </div>
 
-        {/* Right Sidebar - Agent Management */}
+        {/* Right Sidebar - Ship Management */}
         <div className="w-72 flex-shrink-0 border-l border-[var(--card-border)] bg-[var(--background-secondary)]">
-          <AgentSidebar onFocusAgent={handleFocusAgent} />
+          <ShipSidebar
+            onCreateShip={handleCreateShip}
+            onStartExploration={handleStartExploration}
+            onFocusShip={handleFocusShip}
+          />
         </div>
       </main>
 
       {/* Overlays */}
-      <TranceModeOverlay isActive={tranceActive} endTime={tranceEndTime} />
       <HelpOverlay isOpen={showHelp} onClose={() => setShowHelp(false)} />
-      <DeploymentDialog
-        isOpen={deploymentTarget !== null}
-        onClose={() => setDeploymentTarget(null)}
-        spaceCluster={deploymentTarget}
+
+      {/* Create Ship Dialog */}
+      <CreateShipDialog
+        open={isCreateShipOpen}
+        onOpenChange={(open) => setIsCreateShipOpen(open)}
       />
+
+      {/* Exploration Dialog (controlled by explorationStore) */}
+      <ExplorationDialog />
 
       {/* Confetti effect */}
       {showConfetti && <Confetti active={true} />}

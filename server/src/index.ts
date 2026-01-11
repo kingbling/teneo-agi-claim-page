@@ -32,10 +32,18 @@ import {
   onAgentsUpdated,
   getTickCount,
   isSimulationRunning,
+  // Masterplan 2026: Synapse Exploration
+  joinSynapseExploration,
+  leaveSynapseExploration,
+  updateExplorationRate,
+  onSynapseCompleted,
+  onExplorationProgress,
+  onUserLevelUp,
 } from './simulation/engine.js'
 import type { Agent, AgentTrait, ClientMessage, ServerMessage, WorldState, User } from './types/index.js'
 import { getAgentLimit } from './types/index.js'
 import { getGameConfig, COSTS, WORLD, calculateAgentCost, calculateRepairCost } from './config/gameConfig.js'
+import { mountMasterplanRoutes } from './routes/index.js'
 
 const PORT = process.env.PORT
 
@@ -59,6 +67,9 @@ const wss = new WebSocketServer({ server })
 
 // Track connected clients
 const clients = new Map<string, { ws: WebSocket; userId: string | null }>()
+
+// ============ MASTERPLAN 2026 ROUTES ============
+mountMasterplanRoutes(app)
 
 // ============ REST API ============
 
@@ -341,17 +352,17 @@ app.get('/api/world', (req, res) => {
   const stats = getDiscoveryStats()
 
   const worldState: WorldState = {
-    spaceClusters: [
+    synapseClusters: [
       ...getSpaceClusters(0),
       ...getSpaceClusters(1),
       ...getSpaceClusters(2),
     ],
-    agentClusters: [
+    shipClusters: [
       ...getAgentClusters(0),
       ...getAgentClusters(1),
       ...getAgentClusters(2),
     ],
-    userAgents: [],  // Will be populated per-user via WebSocket
+    userShips: [],  // Will be populated per-user via WebSocket
     discoveryProgress: stats,
   }
 
@@ -379,17 +390,17 @@ wss.on('connection', (ws) => {
   const initialState: ServerMessage = {
     type: 'state:sync',
     data: {
-      spaceClusters: [
+      synapseClusters: [
         ...getSpaceClusters(0),
         ...getSpaceClusters(1),
         ...getSpaceClusters(2),
       ],
-      agentClusters: [
+      shipClusters: [
         ...getAgentClusters(0),
         ...getAgentClusters(1),
         ...getAgentClusters(2),
       ],
-      userAgents: [],
+      userShips: [],
       discoveryProgress: stats,
     },
   }
@@ -453,15 +464,28 @@ onAgentsUpdated((agents) => {
   broadcast({ type: 'agents:update', data: agents as any })
 })
 
+// Masterplan 2026: New event handlers
+onSynapseCompleted((event) => {
+  broadcast({ type: 'synapse:completed', data: event as any })
+})
+
+onExplorationProgress((event) => {
+  broadcast({ type: 'exploration:progress', data: event as any })
+})
+
+onUserLevelUp((event) => {
+  broadcast({ type: 'user:levelup', data: event as any })
+})
+
 // Periodic state broadcast (every 5 seconds)
 setInterval(() => {
   const stats = getDiscoveryStats()
   broadcast({
     type: 'state:sync',
     data: {
-      spaceClusters: getSpaceClusters(0),  // Just LOD 0 for periodic updates
-      agentClusters: getAgentClusters(0),
-      userAgents: [],
+      synapseClusters: getSpaceClusters(0),  // Just LOD 0 for periodic updates
+      shipClusters: getAgentClusters(0),
+      userShips: [],
       discoveryProgress: stats,
     },
   })

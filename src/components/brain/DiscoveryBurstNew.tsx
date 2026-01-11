@@ -111,10 +111,10 @@ export function DiscoveryBurstNew({ recentDiscoveries }: DiscoveryBurstProps) {
         latestDiscovery.positionZ * BRAIN_SCALE.z
       )
 
-      // Intensity based on loot tier
-      const intensity = lootAmount >= LOOT_THRESHOLDS.MYTHIC ? 3.0 :
+      // Intensity based on synapse reward tier
+      const intensity = lootAmount >= LOOT_THRESHOLDS.UNIQUE ? 3.0 :
                        lootAmount >= LOOT_THRESHOLDS.LEGENDARY ? 2.0 :
-                       lootAmount >= LOOT_THRESHOLDS.TEAM ? 1.5 : 1.0
+                       lootAmount >= LOOT_THRESHOLDS.DEEP ? 1.5 : 1.0
 
       const newBurst: Burst = {
         id: latestDiscovery.spaceId,

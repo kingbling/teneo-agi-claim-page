@@ -2,7 +2,6 @@ import { useRef, useMemo, useEffect, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { SpaceCluster, SpaceDiscoveryEvent } from '@/types/agent'
-import { useTranceTime } from '@/hooks/useTranceTime'
 
 const BRAIN_SCALE = { x: 1.3, y: 1.0, z: 1.1 }
 
@@ -225,9 +224,6 @@ function ElectronFlowEffect({
   const materialRef = useRef<THREE.ShaderMaterial>(null)
   const startTimeRef = useRef<number>(-1)
 
-  // Trance time scaling (server-authoritative)
-  const { scaledTime } = useTranceTime()
-
   const burstParticleCount = 60
   const totalParticles = effect.paths.length * maxParticlesPerPath + burstParticleCount
 
@@ -298,10 +294,10 @@ function ElectronFlowEffect({
     return { positions, pathStarts, pathControls, pathEnds, pathIndices, lifetimeOffsets }
   }, [effect, maxParticlesPerPath, totalParticles, burstParticleCount])
 
-  useFrame(() => {
+  useFrame((state) => {
     if (!materialRef.current) return
 
-    const time = scaledTime
+    const time = state.clock.elapsedTime
 
     if (startTimeRef.current < 0) {
       startTimeRef.current = time
@@ -365,8 +361,6 @@ export function ElectronFlow({
     })
 
     if (newDiscoveries.length === 0) return
-
-    console.log('New discoveries for electron effect:', newDiscoveries.length)
 
     const newEffects = newDiscoveries.map(discovery => {
       // Find the cluster that contains this space (or closest match)

@@ -2,14 +2,15 @@ import { useRef, useMemo, useCallback, useState, useEffect } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrthographicCamera, MapControls } from '@react-three/drei'
 import * as THREE from 'three'
-import type { SpaceCluster, Agent } from '@/types/agent'
+// Masterplan 2026: Using 'any' types for compatibility with old and new stores
 import { FUNCTIONAL_BRAIN_REGIONS } from '@/constants/brainRegions'
 import { useBrainRegionStore } from '@/stores/brainRegionStore'
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface TopDownViewProps {
-  spaceClusters: SpaceCluster[]
-  userAgents: Agent[]
-  onSpaceClick?: (cluster: SpaceCluster) => void
+  spaceClusters: any[]
+  userAgents: any[]
+  onSpaceClick?: (cluster: any) => void
 }
 
 export function TopDownView({
@@ -41,10 +42,11 @@ export function TopDownView({
   )
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface TopDownContentProps {
-  spaceClusters: SpaceCluster[]
-  userAgents: Agent[]
-  onSpaceClick?: (cluster: SpaceCluster) => void
+  spaceClusters: any[]
+  userAgents: any[]
+  onSpaceClick?: (cluster: any) => void
 }
 
 function TopDownContent({
@@ -106,19 +108,20 @@ function TopDownContent({
 
     spaceClusters.forEach((cluster, i) => {
       // X-Z plane (looking down Y axis)
-      const x = cluster.positionX * 1.3  // Match brain scale
-      const z = cluster.positionZ * 1.1
+      // Server positions are already in [-1.3, 1.3] range, no scaling needed
+      const x = cluster.positionX
+      const z = cluster.positionZ
 
       positions[i * 3] = x
       positions[i * 3 + 1] = 0  // Flattened Y
       positions[i * 3 + 2] = z
       clusterPositions.push(new THREE.Vector3(x, 0, z))
 
-      const discoveryRatio = cluster.discoveredCount / Math.max(1, cluster.spaceCount)
-      const solvingRatio = cluster.beingSolvedCount / Math.max(1, cluster.spaceCount)
+      const discoveryRatio = cluster.discoveredCount / Math.max(1, cluster.synapseCount)
+      const exploringRatio = cluster.beingExploredCount / Math.max(1, cluster.synapseCount)
 
-      // Size based on space count
-      const weightScale = 1.0 + Math.log10(Math.max(1, cluster.spaceCount)) * 0.5
+      // Size based on synapse count
+      const weightScale = 1.0 + Math.log10(Math.max(1, cluster.synapseCount)) * 0.5
       sizes[i] = 8.0 * weightScale
 
       // Colors - more vivid distinction
@@ -132,8 +135,8 @@ function TopDownContent({
         colors[i * 3] = 1.0
         colors[i * 3 + 1] = 0.6
         colors[i * 3 + 2] = 0.15
-      } else if (solvingRatio > 0.1) {
-        // Being solved - teal
+      } else if (exploringRatio > 0.1) {
+        // Being explored - teal
         colors[i * 3] = 0.2
         colors[i * 3 + 1] = 0.8
         colors[i * 3 + 2] = 0.8
@@ -150,7 +153,7 @@ function TopDownContent({
 
   // Agent data
   const agentData = useMemo(() => {
-    const allAgents = [...userAgents]
+    const allAgents = Array.isArray(userAgents) ? [...userAgents] : []
     const positions = new Float32Array(allAgents.length * 3)
     const colors = new Float32Array(allAgents.length * 3)
     const sizes = new Float32Array(allAgents.length)
@@ -165,8 +168,9 @@ function TopDownContent({
     }
 
     allAgents.forEach((agent, i) => {
-      const x = agent.positionX * 1.3
-      const z = agent.positionZ * 1.1
+      // Server positions are already in [-1.3, 1.3] range
+      const x = agent.positionX
+      const z = agent.positionZ
 
       positions[i * 3] = x
       positions[i * 3 + 1] = 0.01  // Slightly above spaces
@@ -362,7 +366,7 @@ function TopDownContent({
         )}
 
         {/* User agents */}
-        {userAgents.length > 0 && (
+        {Array.isArray(userAgents) && userAgents.length > 0 && (
           <points ref={agentPointsRef} frustumCulled={false}>
             <bufferGeometry>
               <bufferAttribute
@@ -436,12 +440,13 @@ function TopDownCameraController() {
     // If a region is selected, zoom to it with dynamic zoom based on region size
     if (selectedRegionIndex >= 0 && selectedRegionIndex < FUNCTIONAL_BRAIN_REGIONS.length) {
       const region = FUNCTIONAL_BRAIN_REGIONS[selectedRegionIndex]
-      targetX = ((region.bounds.xMin + region.bounds.xMax) / 2) * 1.3
-      targetZ = ((region.bounds.zMin + region.bounds.zMax) / 2) * 1.1
+      // Brain region bounds are in same coordinate space as synapses
+      targetX = (region.bounds.xMin + region.bounds.xMax) / 2
+      targetZ = (region.bounds.zMin + region.bounds.zMax) / 2
 
       // Dynamic zoom: smaller regions = higher zoom to frame them properly
-      const width = (region.bounds.xMax - region.bounds.xMin) * 1.3
-      const depth = (region.bounds.zMax - region.bounds.zMin) * 1.1
+      const width = region.bounds.xMax - region.bounds.xMin
+      const depth = region.bounds.zMax - region.bounds.zMin
       const regionSize = Math.max(width, depth)
 
       // Adaptive zoom: base zoom ~100, scale inversely with region size
@@ -516,10 +521,11 @@ function BrainRegions() {
     <group position={[0, -0.02, 0]}>
       {FUNCTIONAL_BRAIN_REGIONS.map((region, index) => {
         // Project bounds to X-Z plane (top-down view)
-        const centerX = ((region.bounds.xMin + region.bounds.xMax) / 2) * 1.3
-        const centerZ = ((region.bounds.zMin + region.bounds.zMax) / 2) * 1.1
-        const width = (region.bounds.xMax - region.bounds.xMin) * 1.3
-        const depth = (region.bounds.zMax - region.bounds.zMin) * 1.1
+        // Brain region bounds are in same coordinate space as synapses
+        const centerX = (region.bounds.xMin + region.bounds.xMax) / 2
+        const centerZ = (region.bounds.zMin + region.bounds.zMax) / 2
+        const width = region.bounds.xMax - region.bounds.xMin
+        const depth = region.bounds.zMax - region.bounds.zMin
 
         const isSelected = selectedRegionIndex === index
         const isHovered = hoveredIndex === index
@@ -564,7 +570,8 @@ function BrainRegions() {
 /**
  * TopDownConnections - 2D synapse network with flowing electrons
  */
-function TopDownConnections({ spaceClusters }: { spaceClusters: SpaceCluster[] }) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function TopDownConnections({ spaceClusters }: { spaceClusters: any[] }) {
   const materialRef = useRef<THREE.ShaderMaterial>(null)
 
   // Build 2D network of connections between discovered clusters
@@ -579,16 +586,17 @@ function TopDownConnections({ spaceClusters }: { spaceClusters: SpaceCluster[] }
     // Find nearby discovered clusters
     for (let i = 0; i < discovered.length; i++) {
       for (let j = i + 1; j < discovered.length; j++) {
-        const ax = discovered[i].positionX * 1.3
-        const az = discovered[i].positionZ * 1.1
-        const bx = discovered[j].positionX * 1.3
-        const bz = discovered[j].positionZ * 1.1
+        // Server positions are already in [-1.3, 1.3] range
+        const ax = discovered[i].positionX
+        const az = discovered[i].positionZ
+        const bx = discovered[j].positionX
+        const bz = discovered[j].positionZ
 
         const dist = Math.sqrt((ax - bx) ** 2 + (az - bz) ** 2)
         if (dist <= maxDistance) {
           const avgRatio = (
-            (discovered[i].discoveredCount / Math.max(1, discovered[i].spaceCount)) +
-            (discovered[j].discoveredCount / Math.max(1, discovered[j].spaceCount))
+            (discovered[i].discoveredCount / Math.max(1, discovered[i].synapseCount)) +
+            (discovered[j].discoveredCount / Math.max(1, discovered[j].synapseCount))
           ) / 2
           connections.push({
             from: new THREE.Vector3(ax, 0.005, az),

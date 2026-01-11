@@ -1,4 +1,4 @@
-import { useRef, useMemo } from 'react'
+import { useRef, useMemo, memo } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { SpaceCluster, NetworkConnection } from '@/types/agent'
@@ -169,11 +169,11 @@ const CURVE_FRAGMENT_SHADER = `
     // Pulsing glow effect
     float pulse = 0.7 + 0.3 * sin(uTime * (2.0 + vSpeedMultiplier) + vConnectionIndex);
 
-    // Alpha based on dash pattern and brightness - reduced to prevent overexposure
-    float alpha = dash * (0.15 + vBrightness * 0.25) * pulse;
+    // Alpha based on dash pattern and brightness - increased for visibility
+    float alpha = dash * (0.25 + vBrightness * 0.45) * pulse;
 
-    // Very subtle constant glow
-    float constantGlow = 0.03 + vBrightness * 0.05;
+    // Constant glow layer for visibility even without dash
+    float constantGlow = 0.08 + vBrightness * 0.12;
     alpha = max(alpha, constantGlow);
 
     gl_FragColor = vec4(baseColor * pulse, alpha * uOpacity);
@@ -384,7 +384,7 @@ const ELECTRON_FRAGMENT_SHADER = `
   }
 `
 
-export function SynapseNetwork({
+export const SynapseNetwork = memo(function SynapseNetwork({
   spaceClusters,
   maxConnectionDistance = 2.0,
   particlesPerConnection = 16,
@@ -684,4 +684,4 @@ export function SynapseNetwork({
       )}
     </group>
   )
-}
+})

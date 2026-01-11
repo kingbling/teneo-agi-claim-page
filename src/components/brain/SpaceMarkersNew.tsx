@@ -2,76 +2,121 @@ import { useRef, useMemo, useCallback, useState, useEffect } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { Html } from '@react-three/drei'
 import * as THREE from 'three'
-import type { SpaceCluster, SpaceTier } from '@/types/agent'
+import type { SynapseType } from '@/types/game'
+import { SYNAPSE_TYPE_COLORS, SYNAPSE_UNLOCK_LEVELS } from '@/types/game'
 import { BRAIN_SCALE } from './core/brainConstants'
 import { useScaledTime } from './core/useBrainTime'
 
-// Tier priority for determining dominant tier
-const TIER_PRIORITY: Record<SpaceTier, number> = {
-  common: 1,
-  trait: 2,
-  team: 3,
-  legendary: 4,
-  mythic: 5,
+// Synapse cluster for LOD visualization
+// Masterplan 2026: Updated property names to match shipStore mapping
+interface SynapseCluster {
+  id: string
+  lodLevel: number
+  positionX: number
+  positionY: number
+  positionZ: number
+  synapseCount: number
+  discoveredCount: number
+  beingExploredCount: number  // Renamed from beingSolvedCount
+  avgLootPool: number         // Renamed from avgReward
+  explorerCount?: number
+  // Type breakdown for visualization
+  typeCounts: Record<SynapseType, number>
+  updatedAt: number
 }
 
-// Color mapping for tiers (RGB normalized)
-const TIER_COLOR_MAP: Record<SpaceTier, [number, number, number]> = {
-  common: [0.61, 0.64, 0.68],
-  trait: [0.66, 0.55, 0.98],
-  team: [0.18, 0.83, 0.75],
-  legendary: [0.98, 0.75, 0.14],
-  mythic: [0.96, 0.45, 0.71],
+// Synapse type priority for determining dominant type (rarity order)
+const SYNAPSE_TYPE_PRIORITY: Record<SynapseType, number> = {
+  minor: 1,
+  complex: 2,
+  deep: 3,
+  core: 4,
+  rare: 5,
+  legendary: 6,
+  unique: 7,
 }
 
-function getDominantTier(tierCounts?: Record<SpaceTier, number>): SpaceTier {
-  if (!tierCounts) return 'common'
+// Color mapping for 7 synapse types (RGB normalized from SYNAPSE_TYPE_COLORS)
+const SYNAPSE_COLOR_MAP: Record<SynapseType, [number, number, number]> = {
+  minor:     [SYNAPSE_TYPE_COLORS.minor.r, SYNAPSE_TYPE_COLORS.minor.g, SYNAPSE_TYPE_COLORS.minor.b],         // Blue
+  complex:   [SYNAPSE_TYPE_COLORS.complex.r, SYNAPSE_TYPE_COLORS.complex.g, SYNAPSE_TYPE_COLORS.complex.b],   // Purple
+  deep:      [SYNAPSE_TYPE_COLORS.deep.r, SYNAPSE_TYPE_COLORS.deep.g, SYNAPSE_TYPE_COLORS.deep.b],           // Teal
+  core:      [SYNAPSE_TYPE_COLORS.core.r, SYNAPSE_TYPE_COLORS.core.g, SYNAPSE_TYPE_COLORS.core.b],           // Gold
+  rare:      [SYNAPSE_TYPE_COLORS.rare.r, SYNAPSE_TYPE_COLORS.rare.g, SYNAPSE_TYPE_COLORS.rare.b],           // Red-pink
+  legendary: [SYNAPSE_TYPE_COLORS.legendary.r, SYNAPSE_TYPE_COLORS.legendary.g, SYNAPSE_TYPE_COLORS.legendary.b], // Bright magenta
+  unique:    [SYNAPSE_TYPE_COLORS.unique.r, SYNAPSE_TYPE_COLORS.unique.g, SYNAPSE_TYPE_COLORS.unique.b],     // Brilliant yellow
+}
 
-  let dominantTier: SpaceTier = 'common'
+function getDominantSynapseType(typeCounts?: Record<SynapseType, number>): SynapseType {
+  if (!typeCounts) return 'minor'
+
+  let dominantType: SynapseType = 'minor'
   let highestPriority = 0
 
-  for (const [tier, count] of Object.entries(tierCounts)) {
-    if (count > 0 && TIER_PRIORITY[tier as SpaceTier] > highestPriority) {
-      dominantTier = tier as SpaceTier
-      highestPriority = TIER_PRIORITY[tier as SpaceTier]
+  for (const [type, count] of Object.entries(typeCounts)) {
+    if (count > 0 && SYNAPSE_TYPE_PRIORITY[type as SynapseType] > highestPriority) {
+      dominantType = type as SynapseType
+      highestPriority = SYNAPSE_TYPE_PRIORITY[type as SynapseType]
     }
   }
 
-  return dominantTier
+  return dominantType
 }
 
-// Vertex shader for space markers
-const SPACE_VERTEX_SHADER = `
+// Vertex shader for synapse markers with state-based animation
+// Exported for future WebGL implementation
+export const SYNAPSE_VERTEX_SHADER = `
   attribute vec3 aColor;
   attribute float aSize;
   attribute float aState;
+  attribute float aSynapseType;
 
   uniform float uTime;
 
   varying vec3 vColor;
   varying float vState;
+  varying float vSynapseType;
 
   void main() {
     vColor = aColor;
     vState = aState;
+    vSynapseType = aSynapseType;
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
-    // Pulse for undiscovered/solving clusters
     float pulse = 1.0;
-    if (aState < 2.0) {
-      pulse = 1.0 + sin(uTime * 2.0 + position.x * 10.0) * 0.15;
+    float sizeMultiplier = 1.0;
+
+    // State-based animation: 0=undiscovered, 1=exploring, 2=discovered
+    if (aState < 0.5) {
+      // Undiscovered: subtle breathing pulse
+      pulse = 1.0 + sin(uTime * 1.5 + position.x * 5.0) * 0.1;
+      sizeMultiplier = 1.0;
+    } else if (aState < 1.5) {
+      // Being explored: active golden pulse, slightly larger
+      pulse = 1.0 + sin(uTime * 3.0 + position.y * 8.0) * 0.2;
+      sizeMultiplier = 1.15;
+    } else {
+      // Discovered: stable, full size
+      sizeMultiplier = 1.2;
     }
 
-    gl_PointSize = aSize * pulse;
+    // Extra glow pulse for unique synapses (type 6)
+    if (aSynapseType > 5.5) {
+      pulse *= 1.0 + sin(uTime * 4.0) * 0.25;
+    }
+
+    gl_PointSize = aSize * pulse * sizeMultiplier;
     gl_Position = projectionMatrix * mvPosition;
   }
 `
 
-// Fragment shader for space markers
-const SPACE_FRAGMENT_SHADER = `
+// Fragment shader for synapse markers with distinct state visuals
+// Exported for future WebGL implementation
+export const SYNAPSE_FRAGMENT_SHADER = `
   varying vec3 vColor;
   varying float vState;
+  varying float vSynapseType;
 
   void main() {
     vec2 center = gl_PointCoord - vec2(0.5);
@@ -80,21 +125,46 @@ const SPACE_FRAGMENT_SHADER = `
     // Soft circular falloff
     float alpha = 1.0 - smoothstep(0.3, 0.5, dist);
 
-    // Brighter core for discovered
-    if (vState > 1.5) {
+    vec3 finalColor = vColor;
+
+    // State-based visual treatment
+    if (vState < 0.5) {
+      // Undiscovered: slightly dimmer but still visible
+      finalColor *= 0.8;
+      alpha *= 0.9;
+    } else if (vState < 1.5) {
+      // Being explored: golden glow overlay
+      finalColor = mix(finalColor, vec3(1.0, 0.8, 0.3), 0.4);
+      alpha *= 1.2;
+      // Add warm glow core
+      float warmCore = smoothstep(0.25, 0.0, dist) * 0.5;
+      finalColor += warmCore * vec3(1.0, 0.6, 0.2);
+    } else {
+      // Discovered: full brightness with white core highlight
       alpha *= 1.0 + (1.0 - dist * 2.0) * 0.3;
+      float whiteCore = smoothstep(0.2, 0.0, dist) * 0.5;
+      finalColor = mix(finalColor, vec3(1.0), whiteCore);
     }
 
-    gl_FragColor = vec4(vColor, alpha * 0.8);
+    // Extra glow for legendary and unique synapses
+    if (vSynapseType > 4.5) {
+      alpha *= 1.2;
+      // Add sparkle
+      float sparkle = smoothstep(0.15, 0.0, dist) * 0.3;
+      finalColor += sparkle * vec3(1.0, 1.0, 0.9);
+    }
+
+    gl_FragColor = vec4(finalColor, alpha * 0.85);
   }
 `
 
-interface SpaceMarkersProps {
-  clusters: SpaceCluster[]
-  onSpaceClick?: (cluster: SpaceCluster, position: THREE.Vector3) => void
+interface SynapseMarkersProps {
+  clusters: SynapseCluster[]
+  userBrainLevel?: number  // For showing locked synapse types
+  onSynapseClick?: (cluster: SynapseCluster, position: THREE.Vector3) => void
 }
 
-export function SpaceMarkersNew({ clusters, onSpaceClick }: SpaceMarkersProps) {
+export function SynapseMarkersNew({ clusters, userBrainLevel = 1, onSynapseClick }: SynapseMarkersProps) {
   const pointsRef = useRef<THREE.Points>(null)
   const materialRef = useRef<THREE.ShaderMaterial>(null)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
@@ -139,11 +209,12 @@ export function SpaceMarkersNew({ clusters, onSpaceClick }: SpaceMarkersProps) {
   }, [gl])
 
   // Build geometry data
-  const { positions, colors, sizes, states, clusterPositions } = useMemo(() => {
+  const { positions, colors, sizes, states, synapseTypes, clusterPositions } = useMemo(() => {
     const positions = new Float32Array(clusters.length * 3)
     const colors = new Float32Array(clusters.length * 3)
     const sizes = new Float32Array(clusters.length)
     const states = new Float32Array(clusters.length)
+    const synapseTypes = new Float32Array(clusters.length)
     const clusterPositions: THREE.Vector3[] = []
 
     clusters.forEach((cluster, i) => {
@@ -157,38 +228,51 @@ export function SpaceMarkersNew({ clusters, onSpaceClick }: SpaceMarkersProps) {
       clusterPositions.push(new THREE.Vector3(x, y, z))
 
       // Discovery ratios
-      const discoveryRatio = cluster.discoveredCount / Math.max(1, cluster.spaceCount)
-      const solvingRatio = cluster.beingSolvedCount / Math.max(1, cluster.spaceCount)
+      const discoveryRatio = cluster.discoveredCount / Math.max(1, cluster.synapseCount)
+      const exploringRatio = cluster.beingExploredCount / Math.max(1, cluster.synapseCount)
 
-      // Get dominant tier
-      const dominantTier = getDominantTier(cluster.tierCounts)
+      // Get dominant synapse type
+      const dominantType = getDominantSynapseType(cluster.typeCounts)
+      const typeIndex = SYNAPSE_TYPE_PRIORITY[dominantType] - 1  // 0-6 for shader
+      synapseTypes[i] = typeIndex
 
-      // Size based on space count and tier
-      const baseSize = 6.0
-      const weightScale = 1.0 + Math.log10(Math.max(1, cluster.spaceCount)) * 0.4
-      const tierBoost = 1.0 + (TIER_PRIORITY[dominantTier] - 1) * 0.15
-      sizes[i] = baseSize * weightScale * tierBoost
+      // Check if this synapse type is locked for the user
+      const unlockLevel = SYNAPSE_UNLOCK_LEVELS[dominantType]
+      const isLocked = userBrainLevel < unlockLevel
 
-      // State: 0=undiscovered, 1=solving, 2=discovered
+      // Size based on synapse count and type rarity
+      // DEBUG: Increase base size for visibility (was 6.0)
+      const baseSize = 15.0
+      const weightScale = 1.0 + Math.log10(Math.max(1, cluster.synapseCount)) * 0.4
+      const typeBoost = 1.0 + typeIndex * 0.12  // Rarer types are slightly larger
+      sizes[i] = baseSize * weightScale * typeBoost
+
+      // State: 0=undiscovered, 1=exploring, 2=discovered
       if (discoveryRatio > 0.5) {
         states[i] = 2.0
-      } else if (solvingRatio > 0.1 || discoveryRatio > 0) {
+      } else if (exploringRatio > 0.1 || discoveryRatio > 0) {
         states[i] = 1.0
       } else {
         states[i] = 0.0
       }
 
-      // Colors based on tier and state
-      const tierColor = TIER_COLOR_MAP[dominantTier]
-      const brightness = states[i] === 2 ? 1.3 : states[i] === 1 ? 1.0 : 0.4
+      // Colors based on synapse type and state
+      const typeColor = SYNAPSE_COLOR_MAP[dominantType]
 
-      colors[i * 3] = Math.min(1.0, tierColor[0] * brightness)
-      colors[i * 3 + 1] = Math.min(1.0, tierColor[1] * brightness)
-      colors[i * 3 + 2] = Math.min(1.0, tierColor[2] * brightness)
+      // Brightness based on state, dimmed if locked
+      // DEBUG: Increase visibility for undiscovered synapses (was 0.4)
+      let brightness = states[i] === 2 ? 1.3 : states[i] === 1 ? 1.0 : 0.8
+      if (isLocked) {
+        brightness *= 0.3  // Gray out locked synapse types
+      }
+
+      colors[i * 3] = Math.min(1.0, typeColor[0] * brightness)
+      colors[i * 3 + 1] = Math.min(1.0, typeColor[1] * brightness)
+      colors[i * 3 + 2] = Math.min(1.0, typeColor[2] * brightness)
     })
 
-    return { positions, colors, sizes, states, clusterPositions }
-  }, [clusters])
+    return { positions, colors, sizes, states, synapseTypes, clusterPositions }
+  }, [clusters, userBrainLevel])
 
   // Time for animations
   const scaledTime = useScaledTime()
@@ -235,36 +319,49 @@ export function SpaceMarkersNew({ clusters, onSpaceClick }: SpaceMarkersProps) {
     if (isDragging.current) return
 
     const closestIndex = findClosestCluster()
-    if (closestIndex !== null && onSpaceClick) {
+    if (closestIndex !== null && onSynapseClick) {
       const cluster = clusters[closestIndex]
       const pos = clusterPositions[closestIndex]
-      onSpaceClick(cluster, pos)
+      onSynapseClick(cluster, pos)
     }
-  }, [findClosestCluster, clusters, clusterPositions, onSpaceClick])
+  }, [findClosestCluster, clusters, clusterPositions, onSynapseClick])
+
+  // Build geometry with proper bounds computation - MUST be before any early returns
+  const geometry = useMemo(() => {
+    if (clusters.length === 0) return null
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))  // Standard 'color' attribute
+    geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1))
+    geo.setAttribute('aState', new THREE.BufferAttribute(states, 1))
+    geo.setAttribute('aSynapseType', new THREE.BufferAttribute(synapseTypes, 1))
+    geo.computeBoundingSphere()
+    return geo
+  }, [positions, colors, sizes, states, synapseTypes, clusters.length])
 
   // Get hovered cluster for tooltip
   const hoveredCluster = hoveredIndex !== null ? clusters[hoveredIndex] : null
   const hoveredPosition = hoveredIndex !== null ? clusterPositions[hoveredIndex] : null
 
-  if (clusters.length === 0) return null
+  if (clusters.length === 0 || !geometry) {
+    return null
+  }
+
+  // Get dominant type for tooltip
+  const hoveredDominantType = hoveredCluster ? getDominantSynapseType(hoveredCluster.typeCounts) : null
+  const hoveredIsLocked = hoveredDominantType
+    ? userBrainLevel < SYNAPSE_UNLOCK_LEVELS[hoveredDominantType]
+    : false
 
   return (
     <group>
-      <points ref={pointsRef} frustumCulled={false} onClick={handleClick}>
-        <bufferGeometry>
-          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-          <bufferAttribute attach="attributes-aColor" args={[colors, 3]} />
-          <bufferAttribute attach="attributes-aSize" args={[sizes, 1]} />
-          <bufferAttribute attach="attributes-aState" args={[states, 1]} />
-        </bufferGeometry>
-        <shaderMaterial
-          ref={materialRef}
-          uniforms={{ uTime: { value: 0 } }}
-          vertexShader={SPACE_VERTEX_SHADER}
-          fragmentShader={SPACE_FRAGMENT_SHADER}
+      <points ref={pointsRef} geometry={geometry} frustumCulled={false} onClick={handleClick}>
+        <pointsMaterial
+          size={0.03}
+          vertexColors
           transparent
-          depthWrite={false}
-          blending={THREE.AdditiveBlending}
+          opacity={1.0}
+          sizeAttenuation={true}
         />
       </points>
 
@@ -273,14 +370,27 @@ export function SpaceMarkersNew({ clusters, onSpaceClick }: SpaceMarkersProps) {
         <Html position={hoveredPosition} center style={{ pointerEvents: 'none' }}>
           <div className="bg-[var(--card-bg)]/95 backdrop-blur-sm border border-[var(--card-border)] rounded-lg px-3 py-2 text-xs whitespace-nowrap">
             <div className="font-medium text-[var(--text-primary)]">
-              {hoveredCluster.spaceCount} spaces
+              {hoveredCluster.synapseCount} synapses
             </div>
+            {hoveredDominantType && (
+              <div className="text-[var(--text-secondary)] capitalize">
+                {hoveredDominantType} type
+                {hoveredIsLocked && (
+                  <span className="text-red-400 ml-1">(Locked - Lvl {SYNAPSE_UNLOCK_LEVELS[hoveredDominantType]})</span>
+                )}
+              </div>
+            )}
             <div className="text-[var(--text-secondary)]">
               {hoveredCluster.discoveredCount} discovered
             </div>
-            {hoveredCluster.beingSolvedCount > 0 && (
+            {hoveredCluster.beingExploredCount > 0 && (
               <div className="text-yellow-400">
-                {hoveredCluster.beingSolvedCount} solving
+                {hoveredCluster.beingExploredCount} exploring
+              </div>
+            )}
+            {hoveredCluster.explorerCount !== undefined && hoveredCluster.explorerCount > 0 && (
+              <div className="text-cyan-400">
+                {hoveredCluster.explorerCount} explorers
               </div>
             )}
           </div>
@@ -289,3 +399,6 @@ export function SpaceMarkersNew({ clusters, onSpaceClick }: SpaceMarkersProps) {
     </group>
   )
 }
+
+// Re-export for backward compatibility
+export { SynapseMarkersNew as SpaceMarkersNew }

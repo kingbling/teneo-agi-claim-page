@@ -74,12 +74,12 @@ export const NETWORK_CONFIG = {
   maxSpeedMultiplier: 5.0,
 } as const
 
-// Camera defaults
+// Camera defaults - closer default for better detail, limited max to prevent over-exposure
 export const CAMERA_CONFIG = {
-  defaultPosition: [0, 0, 4] as const,
+  defaultPosition: [0, 0, 3] as const,
   fov: 50,
   minDistance: 1.5,
-  maxDistance: 6,
+  maxDistance: 5,
 } as const
 
 // LOD thresholds (camera distance)

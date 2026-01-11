@@ -1,6 +1,9 @@
-import { HelpCircle, Wallet } from 'lucide-react'
+import { HelpCircle, Wallet, Zap, Coins, Ship, Calendar } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { useWebSocketConnection } from '@/hooks'
-import { useAgentStore } from '@/stores/agentStore'
+import { useUserStore, useShipStore, useEventStore } from '@/stores'
+import { UserLevelBadge, BrainLevelMini } from '@/components/progression'
+import { formatPoints } from '@/types/game'
 import { cn } from '@/lib/utils'
 
 export interface DashboardHeaderProps {
@@ -9,7 +12,19 @@ export interface DashboardHeaderProps {
 
 export function DashboardHeader({ onHelpClick }: DashboardHeaderProps) {
   const { isConnected } = useWebSocketConnection()
-  const userWallet = useAgentStore(state => state.userWallet)
+
+  // User store data
+  const userWallet = useUserStore(state => state.userWallet)
+  const agenticBalance = useUserStore(state => state.agenticBalance)
+  const totalAgiEarned = useUserStore(state => state.totalAgiEarned)
+
+  // Ship store data
+  const userShips = useShipStore(state => state.userShips)
+  const maxShips = useUserStore(state => state.maxShips)
+
+  // Event store data
+  const hasActiveEvents = useEventStore(state => state.hasActiveEvents())
+  const activeEvents = useEventStore(state => state.activeEvents)
 
   return (
     <header className="fixed left-0 right-0 top-0 z-50 h-12 border-b border-[var(--card-border)] bg-[var(--background-primary)]">
@@ -24,8 +39,63 @@ export function DashboardHeader({ onHelpClick }: DashboardHeaderProps) {
           <span className="text-sm font-semibold text-[var(--text-primary)]">TENEO</span>
         </div>
 
+        {/* Center section - User Level + Brain Level */}
+        <div className="flex items-center gap-4">
+          {/* User Level Badge */}
+          <UserLevelBadge size="sm" showLabel={false} showMultiplier />
+
+          {/* Brain Level Progress */}
+          <BrainLevelMini />
+        </div>
+
         {/* Right side */}
         <div className="flex items-center gap-3">
+          {/* Currency Balances */}
+          <div className="flex items-center gap-2">
+            {/* $AGENTIC Balance */}
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--background-secondary)] border border-[var(--card-border)]">
+              <Coins className="w-3.5 h-3.5 text-amber-400" />
+              <span className="text-xs font-medium text-[var(--text-primary)]">
+                {formatPoints(agenticBalance)}
+              </span>
+              <span className="text-[10px] text-[var(--text-muted)]">$AGENTIC</span>
+            </div>
+
+            {/* $AGI Earned */}
+            {totalAgiEarned > 0 && (
+              <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--background-secondary)] border border-[var(--card-border)]">
+                <Zap className="w-3.5 h-3.5 text-purple-400" />
+                <span className="text-xs font-medium text-[var(--text-primary)]">
+                  {formatPoints(totalAgiEarned)}
+                </span>
+                <span className="text-[10px] text-[var(--text-muted)]">$AGI</span>
+              </div>
+            )}
+          </div>
+
+          {/* Ship Count */}
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--background-secondary)] border border-[var(--card-border)]">
+            <Ship className="w-3.5 h-3.5 text-[var(--brand-teal-1)]" />
+            <span className="text-xs font-medium text-[var(--text-primary)]">
+              {userShips.length}/{maxShips}
+            </span>
+          </div>
+
+          {/* Active Event Indicator */}
+          {hasActiveEvents && (
+            <Link
+              to="/events"
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-purple-500/20 border border-purple-500/40 hover:bg-purple-500/30 transition-colors"
+              title={`${activeEvents.length} active event${activeEvents.length > 1 ? 's' : ''}`}
+            >
+              <Calendar className="w-3.5 h-3.5 text-purple-400" />
+              <span className="text-xs font-medium text-purple-300">
+                {activeEvents.length}
+              </span>
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+            </Link>
+          )}
+
           {/* Help */}
           <button
             onClick={onHelpClick}

@@ -1,32 +1,43 @@
 import { useMemo } from 'react'
-import { useAgentStore } from '@/stores/agentStore'
+import { useShipStore } from '@/stores/shipStore'
+import { useUserStore } from '@/stores/userStore'
 
 /**
- * useDashboardStats - Computes dashboard statistics from agent store
+ * useDashboardStats - Computes dashboard statistics from stores
  *
- * Extracts and memoizes computed stats from the agent store to avoid
+ * Masterplan 2026: Updated to use shipStore and userStore
+ * Extracts and memoizes computed stats to avoid
  * recalculating on every render. Used by DashboardHeader and other components.
  */
 export function useDashboardStats() {
-  const { userAgents, discoveryProgress, userPoints } = useAgentStore()
+  const { userShips, discoveryProgress } = useShipStore()
+  const { userPoints, totalAgiEarned } = useUserStore()
 
   return useMemo(() => {
+    // Safeguard: ensure userShips is always an array
+    const ships = Array.isArray(userShips) ? userShips : []
+
     const discoveryPercent = discoveryProgress.total > 0
       ? ((discoveryProgress.discovered / discoveryProgress.total) * 100).toFixed(2)
       : '0'
 
-    const activeAgents = userAgents.filter(a => a.state !== 'idle').length
-    const totalAgents = userAgents.length
-    const totalLoot = userAgents.reduce((sum, a) => sum + a.totalLoot, 0)
-    const hasIdleAgents = userAgents.some(a => a.state === 'idle' && a.pointsBalance > 0)
+    const activeShips = ships.filter(s => s.state !== 'idle').length
+    const totalShips = ships.length
+    const totalLoot = ships.reduce((sum, s) => sum + s.totalAgiEarned, 0)
+    const hasIdleShips = ships.some(s => s.state === 'idle')
 
     return {
       discoveryPercent,
-      activeAgents,
-      totalAgents,
+      activeShips,
+      totalShips,
       totalLoot,
-      hasIdleAgents,
+      hasIdleShips,
       userPoints,
+      totalAgiEarned,
+      // Backwards compatibility aliases
+      activeAgents: activeShips,
+      totalAgents: totalShips,
+      hasIdleAgents: hasIdleShips,
     }
-  }, [userAgents, discoveryProgress, userPoints])
+  }, [userShips, discoveryProgress, userPoints, totalAgiEarned])
 }

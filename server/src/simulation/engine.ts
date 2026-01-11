@@ -27,6 +27,15 @@ import {
   calculateSolveProbability as configCalculateSolveProbability,
   calculateLootShare as configCalculateLootShare,
   calculateTranceDuration,
+  // Masterplan 2026
+  SYNAPSE_CONFIG,
+  calculateFinalETA,
+  runLotteryDistribution,
+  runFairShareDistribution,
+  getXPForLevel,
+  BRAIN_LEVEL_CONFIG,
+  type SynapseType,
+  type UserLevel,
 } from '../config/gameConfig.js'
 
 // Use configuration constants
@@ -57,6 +66,55 @@ export function onLootDistributed(callback: LootCallback) {
 
 export function onAgentsUpdated(callback: AgentUpdateCallback) {
   agentUpdateCallback = callback
+}
+
+// ============ MASTERPLAN 2026: EVENT CALLBACKS ============
+
+export interface SynapseCompletionEvent {
+  synapseId: string
+  synapseType: SynapseType
+  totalReward: number
+  distribution: 'fair_share' | 'lottery'
+  explorers: Array<{ userId: string; shipId: string; reward: number; isWinner?: boolean }>
+  timestamp: number
+}
+
+export interface ExplorationProgressEvent {
+  synapseId: string
+  synapseType: SynapseType
+  pointsAccumulated: number
+  pointsRequired: number
+  currentETAMinutes: number
+  explorerCount: number
+  timestamp: number
+}
+
+export interface UserLevelUpEvent {
+  userId: string
+  newLevel: UserLevel
+  newBrainLevel: number
+  brainXpEarned: number
+  timestamp: number
+}
+
+type SynapseCompletionCallback = (event: SynapseCompletionEvent) => void
+type ExplorationProgressCallback = (event: ExplorationProgressEvent) => void
+type UserLevelUpCallback = (event: UserLevelUpEvent) => void
+
+let synapseCompletionCallback: SynapseCompletionCallback | null = null
+let explorationProgressCallback: ExplorationProgressCallback | null = null
+let userLevelUpCallback: UserLevelUpCallback | null = null
+
+export function onSynapseCompleted(callback: SynapseCompletionCallback) {
+  synapseCompletionCallback = callback
+}
+
+export function onExplorationProgress(callback: ExplorationProgressCallback) {
+  explorationProgressCallback = callback
+}
+
+export function onUserLevelUp(callback: UserLevelUpCallback) {
+  userLevelUpCallback = callback
 }
 
 // ============ TRAIT CALCULATIONS ============
@@ -572,6 +630,10 @@ async function processTick() {
       }
     }
   }
+
+  // ============ MASTERPLAN 2026: Process synapse exploration ============
+  // Accumulate points for all active explorers and check for completion
+  await processSynapseExploration(deltaSeconds)
 }
 
 async function solveSpace(spaceId: string, solverAgentIds: string[]) {
@@ -687,4 +749,660 @@ export function getTickCount() {
 
 export function isSimulationRunning() {
   return isRunning
+}
+
+// ============================================================================
+// MASTERPLAN 2026: SYNAPSE EXPLORATION SYSTEM
+// ============================================================================
+
+/**
+ * Get active live event multipliers
+ * Returns the highest active reward multiplier and XP multiplier
+ */
+function getActiveEventMultipliers(): {
+  rewardMultiplier: number
+  xpMultiplier: number
+  eventName: string | null
+} {
+  const now = Date.now()
+
+  // Get all active events
+  const events = db.prepare(`
+    SELECT name, event_type, multiplier
+    FROM live_events
+    WHERE is_active = 1 AND start_time <= ? AND end_time >= ?
+    ORDER BY multiplier DESC
+  `).all(now, now) as Array<{ name: string; event_type: string; multiplier: number }>
+
+  if (events.length === 0) {
+    return { rewardMultiplier: 1, xpMultiplier: 1, eventName: null }
+  }
+
+  // Calculate multipliers based on event types
+  let rewardMultiplier = 1
+  let xpMultiplier = 1
+  let eventName: string | null = null
+
+  for (const event of events) {
+    if (event.event_type === 'double_xp' || event.event_type === 'bonus_xp') {
+      xpMultiplier = Math.max(xpMultiplier, event.multiplier)
+    }
+    if (event.event_type === 'bonus_agi' || event.event_type === 'double_rewards') {
+      rewardMultiplier = Math.max(rewardMultiplier, event.multiplier)
+    }
+    // Use the first (highest multiplier) event name for display
+    if (!eventName) eventName = event.name
+  }
+
+  return { rewardMultiplier, xpMultiplier, eventName }
+}
+
+/**
+ * Get equipped item effects for a ship
+ * Returns accumulated effect values for speed boost, luck, and XP multiplier
+ */
+function getShipItemEffects(shipId: string): {
+  speedBoost: number
+  luckBoost: number
+  xpMultiplier: number
+} {
+  const effects = db.prepare(`
+    SELECT ish.effect_type, ish.effect_value
+    FROM user_purchases up
+    JOIN item_shop ish ON up.item_id = ish.id
+    WHERE up.ship_id = ? AND up.is_active = 1
+      AND (up.expires_at IS NULL OR up.expires_at > ?)
+  `).all(shipId, Date.now()) as Array<{ effect_type: string; effect_value: number }>
+
+  let speedBoost = 0, luckBoost = 0, xpMultiplier = 0
+  for (const effect of effects) {
+    if (effect.effect_type === 'speed_boost') speedBoost += effect.effect_value
+    if (effect.effect_type === 'luck_charm') luckBoost += effect.effect_value
+    if (effect.effect_type === 'xp_amplifier') xpMultiplier += effect.effect_value
+  }
+  return { speedBoost, luckBoost, xpMultiplier }
+}
+
+/**
+ * Process points accumulation for all active synapse explorers
+ * Called every tick to add points based on each explorer's spending rate
+ */
+export async function processSynapseExploration(deltaSeconds: number) {
+  // Get all synapses currently being explored
+  const exploringSynapses = db.prepare(`
+    SELECT DISTINCT synapse_id FROM synapse_explorers
+  `).all() as { synapse_id: string }[]
+
+  for (const { synapse_id } of exploringSynapses) {
+    await updateSynapseProgress(synapse_id, deltaSeconds)
+  }
+}
+
+/**
+ * Update progress for a single synapse based on all explorers' contributions
+ */
+async function updateSynapseProgress(synapseId: string, deltaSeconds: number) {
+  // Get synapse details
+  const synapse = db.prepare(`
+    SELECT id, synapse_type, points_required, points_accumulated, state
+    FROM spaces WHERE id = ?
+  `).get(synapseId) as {
+    id: string
+    synapse_type: SynapseType
+    points_required: number
+    points_accumulated: number
+    state: string
+  } | undefined
+
+  if (!synapse || synapse.state === 'discovered') return
+
+  // Get all explorers for this synapse
+  const explorers = db.prepare(`
+    SELECT se.id, se.ship_id, se.user_id, se.points_per_minute, se.points_contributed,
+           u.user_level
+    FROM synapse_explorers se
+    JOIN users u ON se.user_id = u.id
+    WHERE se.synapse_id = ?
+  `).all(synapseId) as Array<{
+    id: string
+    ship_id: string
+    user_id: string
+    points_per_minute: number
+    points_contributed: number
+    user_level: number
+  }>
+
+  if (explorers.length === 0) return
+
+  const config = SYNAPSE_CONFIG[synapse.synapse_type]
+  const now = Date.now()
+  let totalPointsThisTick = 0
+
+  // Calculate points contributed by each explorer this tick
+  for (const explorer of explorers) {
+    // Get item effects for this ship (speed boost applies to exploration rate)
+    const itemEffects = getShipItemEffects(explorer.ship_id)
+    const speedMultiplier = 1 + itemEffects.speedBoost
+
+    // Apply speed boost then clamp to max points per minute for this synapse type
+    const boostedRate = explorer.points_per_minute * speedMultiplier
+    const effectiveRate = Math.min(boostedRate, config.maxPerMin)
+    const pointsThisTick = (effectiveRate / 60) * deltaSeconds
+
+    totalPointsThisTick += pointsThisTick
+
+    // Update explorer's contribution
+    db.prepare(`
+      UPDATE synapse_explorers
+      SET points_contributed = points_contributed + ?,
+          last_updated_at = ?
+      WHERE id = ?
+    `).run(pointsThisTick, now, explorer.id)
+  }
+
+  // Update synapse's total accumulated points
+  const newAccumulated = synapse.points_accumulated + totalPointsThisTick
+  const isCompleted = newAccumulated >= synapse.points_required
+
+  // Calculate current ETA
+  const userLevels = explorers.map(e => e.user_level as UserLevel)
+  const currentETA = calculateFinalETA(config.etaMinutes, explorers.length, userLevels)
+
+  db.prepare(`
+    UPDATE spaces
+    SET points_accumulated = ?,
+        current_eta_minutes = ?,
+        state = ?
+    WHERE id = ?
+  `).run(
+    Math.min(newAccumulated, synapse.points_required),
+    currentETA,
+    isCompleted ? 'discovered' : 'being_solved',
+    synapseId
+  )
+
+  // Emit progress event
+  if (explorationProgressCallback) {
+    explorationProgressCallback({
+      synapseId,
+      synapseType: synapse.synapse_type,
+      pointsAccumulated: Math.min(newAccumulated, synapse.points_required),
+      pointsRequired: synapse.points_required,
+      currentETAMinutes: currentETA,
+      explorerCount: explorers.length,
+      timestamp: now,
+    })
+  }
+
+  // Check if synapse is completed
+  if (isCompleted) {
+    await completeSynapse(synapseId, synapse.synapse_type, explorers)
+  }
+}
+
+/**
+ * Complete a synapse and distribute rewards
+ */
+async function completeSynapse(
+  synapseId: string,
+  synapseType: SynapseType,
+  explorers: Array<{
+    id: string
+    ship_id: string
+    user_id: string
+    points_contributed: number
+  }>
+) {
+  const config = SYNAPSE_CONFIG[synapseType]
+  const now = Date.now()
+
+  // Get live event multipliers
+  const eventMultipliers = getActiveEventMultipliers()
+  const finalAgiReward = Math.floor(config.agiReward * eventMultipliers.rewardMultiplier)
+  const finalBrainXpBase = Math.floor(config.brainXpReward * eventMultipliers.xpMultiplier)
+
+  if (eventMultipliers.eventName) {
+    console.log(`[Live Event] "${eventMultipliers.eventName}" active! Rewards: x${eventMultipliers.rewardMultiplier}, XP: x${eventMultipliers.xpMultiplier}`)
+  }
+
+  // Prepare explorer data for distribution
+  const explorerData = explorers.map(e => ({
+    userId: e.user_id,
+    shipId: e.ship_id,
+    pointsContributed: e.points_contributed,
+  }))
+
+  let rewardDistribution: Array<{ userId: string; shipId: string; reward: number; isWinner?: boolean }>
+
+  if (config.distribution === 'lottery') {
+    // Lottery distribution - one winner takes all
+    // Apply luck_charm effect to boost each explorer's weighted contribution
+    const luckBoostedData = explorerData.map(e => {
+      const itemEffects = getShipItemEffects(e.shipId)
+      const luckMultiplier = 1 + itemEffects.luckBoost
+      return {
+        ...e,
+        pointsContributed: e.pointsContributed * luckMultiplier,
+      }
+    })
+
+    const result = runLotteryDistribution(luckBoostedData, finalAgiReward)
+
+    rewardDistribution = explorerData.map(e => ({
+      userId: e.userId,
+      shipId: e.shipId,
+      reward: e.userId === result.winnerId ? result.reward : 0,
+      isWinner: e.userId === result.winnerId,
+    }))
+
+    // Record lottery draw
+    db.prepare(`
+      INSERT INTO lottery_draws (id, synapse_id, synapse_type, winner_user_id, winner_ship_id,
+                                 reward_agi, total_participants, total_points_contributed,
+                                 winner_contribution, drawn_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      uuid(),
+      synapseId,
+      synapseType,
+      result.winnerId,
+      result.winnerShipId,
+      result.reward,
+      result.totalParticipants,
+      result.totalPoints,
+      explorerData.find(e => e.userId === result.winnerId)?.pointsContributed || 0,
+      now
+    )
+
+    // Give lottery tickets to non-winners
+    for (const explorer of explorerData) {
+      if (explorer.userId !== result.winnerId) {
+        db.prepare(`
+          UPDATE users SET lottery_tickets = lottery_tickets + 1 WHERE id = ?
+        `).run(explorer.userId)
+      }
+    }
+  } else {
+    // Fair share distribution
+    const shares = runFairShareDistribution(explorerData, finalAgiReward)
+    rewardDistribution = shares.map(s => ({
+      ...s,
+      isWinner: false,
+    }))
+  }
+
+  // Award rewards to users
+  for (const dist of rewardDistribution) {
+    // Get item effects for XP amplifier (stacks with event multiplier)
+    const itemEffects = getShipItemEffects(dist.shipId)
+    const xpItemMultiplier = 1 + itemEffects.xpMultiplier
+    const finalBrainXp = Math.floor(finalBrainXpBase * xpItemMultiplier)
+
+    if (dist.reward > 0) {
+      // Update user's AGI balance and brain XP (winner gets both)
+      db.prepare(`
+        UPDATE users
+        SET total_agi_earned = total_agi_earned + ?,
+            brain_xp = brain_xp + ?,
+            total_brain_xp = total_brain_xp + ?
+        WHERE id = ?
+      `).run(dist.reward, finalBrainXp, finalBrainXp, dist.userId)
+
+      // Update ship stats
+      db.prepare(`
+        UPDATE agents
+        SET total_agi_earned = total_agi_earned + ?,
+            total_brain_xp_earned = total_brain_xp_earned + ?,
+            spaces_discovered = spaces_discovered + 1
+        WHERE id = ?
+      `).run(dist.reward, finalBrainXp, dist.shipId)
+    } else if (config.distribution === 'lottery') {
+      // For lottery losers, still award brain XP (with amplifier) but no AGI
+      db.prepare(`
+        UPDATE users
+        SET brain_xp = brain_xp + ?,
+            total_brain_xp = total_brain_xp + ?
+        WHERE id = ?
+      `).run(finalBrainXp, finalBrainXp, dist.userId)
+
+      // Update ship stats (XP only, no discovery increment since they didn't win)
+      db.prepare(`
+        UPDATE agents
+        SET total_brain_xp_earned = total_brain_xp_earned + ?
+        WHERE id = ?
+      `).run(finalBrainXp, dist.shipId)
+    }
+  }
+
+  // ============ NFT MINTING FOR RARE SYNAPSES ============
+  // Mint NFT for first discoverer of Core, Legendary, or Unique synapses
+  const nftEligibleTypes: SynapseType[] = ['core', 'rare', 'legendary', 'unique']
+  if (nftEligibleTypes.includes(synapseType)) {
+    // For lottery distribution, the winner gets the NFT
+    // For fair share, the highest contributor gets the NFT
+    let nftRecipient: { userId: string; shipId: string } | null = null
+
+    if (config.distribution === 'lottery') {
+      // Winner already determined in rewardDistribution
+      const winner = rewardDistribution.find(d => d.isWinner)
+      if (winner) {
+        nftRecipient = { userId: winner.userId, shipId: winner.shipId }
+      }
+    } else {
+      // Fair share - highest contributor gets NFT
+      const maxContributor = explorers.reduce((max, e) =>
+        e.points_contributed > max.points_contributed ? e : max
+      , explorers[0])
+      if (maxContributor) {
+        nftRecipient = { userId: maxContributor.user_id, shipId: maxContributor.ship_id }
+      }
+    }
+
+    if (nftRecipient) {
+      const nftId = uuid()
+      const nftMetadata = JSON.stringify({
+        synapseType,
+        discoveredAt: now,
+        synapseId,
+        rarity: synapseType,
+        name: `${synapseType.charAt(0).toUpperCase() + synapseType.slice(1)} Synapse Discovery`,
+        description: `First to discover a ${synapseType} synapse in the neural network.`,
+      })
+
+      // Insert NFT record
+      db.prepare(`
+        INSERT INTO nfts (id, user_id, nft_type, synapse_id, metadata, minted_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(nftId, nftRecipient.userId, 'synapse_discovery', synapseId, nftMetadata, now)
+
+      // Increment user's NFT count
+      db.prepare(`
+        UPDATE users SET nft_count = nft_count + 1 WHERE id = ?
+      `).run(nftRecipient.userId)
+
+      console.log(`[Masterplan 2026] NFT minted for ${synapseType} synapse discovery to user ${nftRecipient.userId}`)
+    }
+  }
+
+  // Clear all explorers from this synapse
+  db.prepare(`DELETE FROM synapse_explorers WHERE synapse_id = ?`).run(synapseId)
+
+  // Update synapse state
+  db.prepare(`
+    UPDATE spaces
+    SET state = 'discovered',
+        discovered_at = ?
+    WHERE id = ?
+  `).run(now, synapseId)
+
+  // Emit synapse completion event
+  if (synapseCompletionCallback) {
+    synapseCompletionCallback({
+      synapseId,
+      synapseType,
+      totalReward: finalAgiReward,
+      distribution: config.distribution,
+      explorers: rewardDistribution,
+      timestamp: now,
+    })
+  }
+
+  console.log(`[Masterplan 2026] Synapse ${synapseId} (${synapseType}) completed! ${finalAgiReward} $AGI distributed via ${config.distribution}${eventMultipliers.eventName ? ` (${eventMultipliers.eventName} active)` : ''}`)
+
+  // Check for brain level-ups after awarding XP
+  // For lottery distributions, all explorers receive XP so check all of them
+  // For fair share, only those with reward > 0 receive XP
+  for (const dist of rewardDistribution) {
+    if (dist.reward > 0 || config.distribution === 'lottery') {
+      await checkBrainLevelUp(dist.userId)
+    }
+  }
+
+  // Process autopilot for all ships that were exploring this synapse
+  for (const explorer of explorers) {
+    await processAutopilot(explorer.ship_id, explorer.user_id)
+  }
+}
+
+/**
+ * Check if a user has earned enough XP to level up their brain
+ * Emits user:levelup event when threshold is crossed
+ */
+async function checkBrainLevelUp(userId: string): Promise<void> {
+  const user = db.prepare(`
+    SELECT brain_level, brain_xp, total_brain_xp FROM users WHERE id = ?
+  `).get(userId) as { brain_level: number; brain_xp: number; total_brain_xp: number } | undefined
+
+  if (!user) return
+
+  let currentLevel = user.brain_level
+  let currentXP = user.brain_xp
+  let levelsGained = 0
+
+  // Check for level ups (can level up multiple times)
+  while (currentLevel < BRAIN_LEVEL_CONFIG.maxLevel) {
+    const xpRequired = getXPForLevel(currentLevel + 1)
+    if (currentXP >= xpRequired) {
+      currentXP -= xpRequired
+      currentLevel++
+      levelsGained++
+    } else {
+      break
+    }
+  }
+
+  if (levelsGained > 0) {
+    // Update user's brain level
+    db.prepare(`
+      UPDATE users SET brain_level = ?, brain_xp = ? WHERE id = ?
+    `).run(currentLevel, currentXP, userId)
+
+    // Emit level-up event
+    if (userLevelUpCallback) {
+      userLevelUpCallback({
+        userId,
+        newLevel: 1 as UserLevel, // User level unchanged
+        newBrainLevel: currentLevel,
+        brainXpEarned: 0, // Already tracked
+        timestamp: Date.now(),
+      })
+    }
+
+    console.log(`[Masterplan 2026] User ${userId} brain leveled up to ${currentLevel}! (+${levelsGained} levels)`)
+  }
+}
+
+/**
+ * Add a ship to explore a synapse
+ */
+export function joinSynapseExploration(
+  synapseId: string,
+  shipId: string,
+  userId: string,
+  pointsPerMinute: number
+): boolean {
+  const synapse = db.prepare(`
+    SELECT synapse_type, state FROM spaces WHERE id = ?
+  `).get(synapseId) as { synapse_type: SynapseType; state: string } | undefined
+
+  if (!synapse || synapse.state === 'discovered') {
+    return false
+  }
+
+  const config = SYNAPSE_CONFIG[synapse.synapse_type]
+
+  // Check explorer limit
+  if (config.maxExplorers > 0) {
+    const currentCount = db.prepare(`
+      SELECT COUNT(*) as count FROM synapse_explorers WHERE synapse_id = ?
+    `).get(synapseId) as { count: number }
+
+    if (currentCount.count >= config.maxExplorers) {
+      return false
+    }
+  }
+
+  // Clamp points per minute to max allowed
+  const effectiveRate = Math.min(pointsPerMinute, config.maxPerMin)
+  const now = Date.now()
+
+  // Add explorer
+  db.prepare(`
+    INSERT OR REPLACE INTO synapse_explorers
+    (id, synapse_id, ship_id, user_id, points_contributed, points_per_minute, joined_at, last_updated_at)
+    VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+  `).run(uuid(), synapseId, shipId, userId, effectiveRate, now, now)
+
+  // Update synapse state if needed
+  db.prepare(`
+    UPDATE spaces SET state = 'being_solved' WHERE id = ? AND state = 'undiscovered'
+  `).run(synapseId)
+
+  // Update ship state
+  db.prepare(`
+    UPDATE agents
+    SET state = 'exploring',
+        target_space_id = ?,
+        current_points_per_min = ?
+    WHERE id = ?
+  `).run(synapseId, effectiveRate, shipId)
+
+  console.log(`[Masterplan 2026] Ship ${shipId} joined synapse ${synapseId} at ${effectiveRate} pts/min`)
+  return true
+}
+
+/**
+ * Remove a ship from synapse exploration
+ */
+export function leaveSynapseExploration(shipId: string): boolean {
+  const explorer = db.prepare(`
+    SELECT synapse_id FROM synapse_explorers WHERE ship_id = ?
+  `).get(shipId) as { synapse_id: string } | undefined
+
+  if (!explorer) {
+    return false
+  }
+
+  // Remove explorer
+  db.prepare(`DELETE FROM synapse_explorers WHERE ship_id = ?`).run(shipId)
+
+  // Update ship state
+  db.prepare(`
+    UPDATE agents
+    SET state = 'idle',
+        target_space_id = NULL,
+        current_points_per_min = 0
+    WHERE id = ?
+  `).run(shipId)
+
+  // Check if synapse has no more explorers
+  const remaining = db.prepare(`
+    SELECT COUNT(*) as count FROM synapse_explorers WHERE synapse_id = ?
+  `).get(explorer.synapse_id) as { count: number }
+
+  if (remaining.count === 0) {
+    // Reset synapse state if no explorers
+    db.prepare(`
+      UPDATE spaces SET state = 'undiscovered' WHERE id = ? AND state = 'being_solved'
+    `).run(explorer.synapse_id)
+  }
+
+  console.log(`[Masterplan 2026] Ship ${shipId} left synapse exploration`)
+  return true
+}
+
+/**
+ * Process autopilot for ships that have completed exploration
+ * Finds the next available synapse matching the ship's target types
+ */
+export async function processAutopilot(shipId: string, userId: string): Promise<boolean> {
+  // Check if ship has autopilot enabled
+  const ship = db.prepare(`
+    SELECT autopilot_enabled, current_points_per_min FROM agents WHERE id = ?
+  `).get(shipId) as { autopilot_enabled: number; current_points_per_min: number } | undefined
+
+  if (!ship || !ship.autopilot_enabled) {
+    return false
+  }
+
+  // Get user's brain level to determine accessible synapse types
+  const user = db.prepare(`
+    SELECT brain_level FROM users WHERE id = ?
+  `).get(userId) as { brain_level: number } | undefined
+
+  const brainLevel = user?.brain_level || 1
+
+  // Find the next available synapse (prioritize by synapse type: minor < complex < deep etc.)
+  // Only show synapses the user can access based on brain level
+  const nextSynapse = db.prepare(`
+    SELECT s.id, s.synapse_type, s.position_x, s.position_y, s.position_z
+    FROM spaces s
+    WHERE s.state = 'undiscovered' OR s.state = 'being_solved'
+    ORDER BY
+      CASE s.synapse_type
+        WHEN 'minor' THEN 1
+        WHEN 'complex' THEN 2
+        WHEN 'deep' THEN 3
+        WHEN 'core' THEN 4
+        WHEN 'rare' THEN 5
+        WHEN 'legendary' THEN 6
+        WHEN 'unique' THEN 7
+      END ASC,
+      RANDOM()
+    LIMIT 1
+  `).get() as { id: string; synapse_type: string; position_x: number; position_y: number; position_z: number } | undefined
+
+  if (!nextSynapse) {
+    console.log(`[Autopilot] No available synapses for ship ${shipId}`)
+    return false
+  }
+
+  // Check brain level requirements for synapse type
+  const synapseUnlockLevels: Record<string, number> = {
+    minor: 1, complex: 5, deep: 20, core: 50, rare: 100, legendary: 175, unique: 248
+  }
+  const requiredLevel = synapseUnlockLevels[nextSynapse.synapse_type] || 1
+  if (brainLevel < requiredLevel) {
+    console.log(`[Autopilot] Ship ${shipId} owner brain level ${brainLevel} too low for ${nextSynapse.synapse_type} (needs ${requiredLevel})`)
+    return false
+  }
+
+  // Join the synapse exploration
+  const pointsPerMin = ship.current_points_per_min || 100
+  const success = joinSynapseExploration(nextSynapse.id, shipId, userId, pointsPerMin)
+
+  if (success) {
+    console.log(`[Autopilot] Ship ${shipId} automatically joined ${nextSynapse.synapse_type} synapse ${nextSynapse.id}`)
+  }
+
+  return success
+}
+
+/**
+ * Update a ship's spending rate
+ */
+export function updateExplorationRate(shipId: string, newPointsPerMinute: number): boolean {
+  const explorer = db.prepare(`
+    SELECT se.synapse_id, s.synapse_type
+    FROM synapse_explorers se
+    JOIN spaces s ON se.synapse_id = s.id
+    WHERE se.ship_id = ?
+  `).get(shipId) as { synapse_id: string; synapse_type: SynapseType } | undefined
+
+  if (!explorer) {
+    return false
+  }
+
+  const config = SYNAPSE_CONFIG[explorer.synapse_type]
+  const effectiveRate = Math.min(newPointsPerMinute, config.maxPerMin)
+
+  db.prepare(`
+    UPDATE synapse_explorers SET points_per_minute = ? WHERE ship_id = ?
+  `).run(effectiveRate, shipId)
+
+  db.prepare(`
+    UPDATE agents SET current_points_per_min = ? WHERE id = ?
+  `).run(effectiveRate, shipId)
+
+  return true
 }
