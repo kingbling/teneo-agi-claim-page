@@ -141,7 +141,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     const socket = new WebSocket(WS_URL)
 
     socket.onopen = () => {
-      console.log('WebSocket connected to server')
       set({ isConnected: true, ws: socket })
     }
 
@@ -149,13 +148,12 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       try {
         const message: ServerMessage = JSON.parse(event.data)
         handleServerMessage(message, set)
-      } catch (error) {
-        console.error('Failed to parse server message:', error)
+      } catch {
+        // Failed to parse server message
       }
     }
 
     socket.onclose = () => {
-      console.log('WebSocket disconnected')
       set({ isConnected: false, ws: null })
 
       // Auto-reconnect after 3 seconds
@@ -167,8 +165,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       }, 3000)
     }
 
-    socket.onerror = (error) => {
-      console.error('WebSocket error:', error)
+    socket.onerror = () => {
+      // WebSocket error - will trigger onclose for reconnection
     }
 
     set({ ws: socket })
@@ -207,8 +205,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       // Fetch user's agents after login
       await get().fetchUserAgents()
       set({ isLoadingAgents: false })
-    } catch (error) {
-      console.error('Failed to login user:', error)
+    } catch {
       set({ isLoadingAgents: false })
     }
   },
@@ -217,7 +214,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   createAgent: async (name: string, traits: AgentTrait[]): Promise<Agent | null> => {
     const { userId } = get()
     if (!userId) {
-      console.error('Cannot create agent: userId is null')
       return null
     }
 
@@ -230,7 +226,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
       if (!response.ok) {
         const error = await response.json()
-        console.error('Agent creation failed:', error)
         throw new Error(error.error || 'Failed to create agent')
       }
 
@@ -248,10 +243,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         ...(updatedPoints !== undefined && { userPoints: updatedPoints }),
       }))
 
-      console.log('Agent created:', agent.name, 'Points remaining:', updatedPoints)
       return agent
-    } catch (error) {
-      console.error('Failed to create agent:', error)
+    } catch {
       return null
     }
   },
@@ -260,18 +253,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   deployAgent: async (agentId: string, targetX: number, targetY: number, targetZ: number) => {
     // Check if agent can be deployed (idle or exhausted+repaired)
     const agent = get().userAgents.find(a => a.id === agentId)
-    if (!agent) {
-      console.error('Agent not found:', agentId)
-      return false
-    }
-    if (agent.state !== 'idle') {
-      console.error('Agent must be idle to deploy:', agent.state)
-      return false
-    }
-    if (agent.needsRepair) {
-      console.error('Agent needs repair before deploying')
-      return false
-    }
+    if (!agent) return false
+    if (agent.state !== 'idle') return false
+    if (agent.needsRepair) return false
 
     try {
       // Use deploy-to-region endpoint for position-based deployment
@@ -291,15 +275,11 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         set((state) => ({
           userAgents: state.userAgents.map((a) => (a.id === updatedAgent.id ? updatedAgent : a)),
         }))
-        console.log(`Agent ${updatedAgent.name} deployed from center toward (${targetX.toFixed(2)}, ${targetY.toFixed(2)}, ${targetZ.toFixed(2)})`)
         return true
       }
 
-      const error = await response.json()
-      console.error('Deploy failed:', error.error || error)
       return false
-    } catch (error) {
-      console.error('Failed to deploy agent:', error)
+    } catch {
       return false
     }
   },
@@ -322,7 +302,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
       // If still no clusters, try fetching world state first
       if (clusters.length === 0) {
-        console.log('No clusters loaded, fetching world state...')
         await fetchWorldState()
         const state = get()
         clusters = state.spaceClustersLod0.length > 0
@@ -331,7 +310,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       }
 
       if (clusters.length === 0) {
-        console.log('No space clusters available after fetch')
         return false
       }
 
@@ -340,13 +318,11 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
       // If all are discovered, just pick any cluster
       if (targetClusters.length === 0) {
-        console.log('All clusters discovered, picking random cluster anyway')
         targetClusters = clusters
       }
 
       // Pick a random cluster as the target for biased random walk
       const randomCluster = targetClusters[Math.floor(Math.random() * targetClusters.length)]
-      console.log('Deploying toward random cluster:', randomCluster.id, 'at', randomCluster.positionX, randomCluster.positionY, randomCluster.positionZ)
 
       // Deploy from center toward that cluster's position
       const result = await deployAgent(
@@ -413,29 +389,20 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
           userPoints: data.userPoints,
         }))
       }
-    } catch (error) {
-      console.error('Failed to refuel agent:', error)
+    } catch {
+      // Failed to refuel agent
     }
   },
 
   // Repair exhausted agent (costs 50% of creation cost)
   repairAgent: async (agentId: string) => {
     const agent = get().userAgents.find(a => a.id === agentId)
-    if (!agent) {
-      console.error('Agent not found:', agentId)
-      return false
-    }
-    if (!agent.needsRepair) {
-      console.error('Agent does not need repair:', agent.state, agent.needsRepair)
-      return false
-    }
+    if (!agent) return false
+    if (!agent.needsRepair) return false
 
     const repairCost = Math.ceil(agent.creationCost * 0.5)
     const { userPoints } = get()
-    if (userPoints < repairCost) {
-      console.error('Not enough points to repair. Need:', repairCost, 'Have:', userPoints)
-      return false
-    }
+    if (userPoints < repairCost) return false
 
     try {
       const response = await fetch(`${API_URL}/api/agents/${agentId}/repair`, {
@@ -449,15 +416,11 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
           userAgents: state.userAgents.map((a) => (a.id === data.agent.id ? data.agent : a)),
           userPoints: data.userPoints,
         }))
-        console.log(`Agent ${agent.name} repaired for ${repairCost} points`)
         return true
       }
 
-      const error = await response.json()
-      console.error('Repair failed:', error.error || error)
       return false
-    } catch (error) {
-      console.error('Failed to repair agent:', error)
+    } catch {
       return false
     }
   },
@@ -492,8 +455,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
       const agents = await response.json()
       set({ userAgents: agents })
-    } catch (error) {
-      console.error('Failed to fetch user agents:', error)
+    } catch {
+      // Failed to fetch user agents
     }
   },
 
@@ -527,8 +490,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         networkConnections: world.networkConnections ?? [],
         isLoadingWorld: false,
       })
-    } catch (error) {
-      console.error('Failed to fetch world state:', error)
+    } catch {
       set({ isLoadingWorld: false })
     }
   },
@@ -616,11 +578,7 @@ function handleServerMessage(
         // Update user's agents if any of them are in the update
         const updatedUserAgents = state.userAgents.map((agent) => {
           const updated = updatedAgents.find((u) => u.id === agent.id)
-          if (updated) {
-            console.log(`Agent ${agent.name} updated:`, updated.state, `pos: (${updated.positionX.toFixed(2)}, ${updated.positionY.toFixed(2)}, ${updated.positionZ.toFixed(2)})`)
-            return updated
-          }
-          return agent
+          return updated ?? agent
         })
 
         return { userAgents: updatedUserAgents }
@@ -629,7 +587,7 @@ function handleServerMessage(
     }
 
     case 'error': {
-      console.error('Server error:', message.data.message)
+      // Server error - could be logged to error tracking service
       break
     }
   }

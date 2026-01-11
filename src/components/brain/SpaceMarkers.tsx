@@ -402,7 +402,6 @@ export function SpaceMarkers({
     if (closestIndex !== null && onSpaceClick) {
       const cluster = clusters[closestIndex]
       const position = clusterPositions[closestIndex]
-      console.log('Deploying to cluster:', cluster.id, 'at position:', position)
       onSpaceClick(cluster, position)
     }
   }, [findClosestCluster, clusters, clusterPositions, onSpaceClick])

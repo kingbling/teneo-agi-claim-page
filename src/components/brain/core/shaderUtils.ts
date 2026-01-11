@@ -183,7 +183,7 @@ export const BRAIN_REGION_VERTEX_SHADER = `
   }
 `
 
-// Region-aware brain particle fragment shader
+// Region-aware brain particle fragment shader with depth fog
 export const BRAIN_REGION_FRAGMENT_SHADER = `
   varying vec3 vColor;
   varying float vHighlight;
@@ -198,8 +198,12 @@ export const BRAIN_REGION_FRAGMENT_SHADER = `
     // Boost brightness for highlighted region
     vec3 finalColor = vColor * (1.0 + vHighlight * 0.8);
 
-    // MUCH lower base alpha to prevent overexposure with additive blending
-    float alpha = softness * (0.25 + vHighlight * 0.35);
+    // Subtle glow for core of bright particles (reduced to prevent over-bloom)
+    float coreGlow = smoothstep(0.25, 0.0, dist) * 0.15;
+    finalColor += coreGlow * vColor * 0.8;
+
+    // Base alpha balanced for visibility without over-exposure
+    float alpha = softness * (0.28 + vHighlight * 0.5);
 
     // Dim non-highlighted particles when something is selected
     float dimFactor = 1.0 - (1.0 - vHighlight) * 0.4 * step(0.01, vHighlight + 0.01);

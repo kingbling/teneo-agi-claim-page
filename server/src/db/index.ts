@@ -25,12 +25,15 @@ db.pragma('synchronous = NORMAL')
 
 // Initialize database schema
 export function initializeDatabase() {
+  // Run migrations FIRST to add any missing columns to existing tables
+  // This ensures indexes in schema.sql can be created on columns that exist
+  runMigrations(db)
+
+  // Then apply schema (CREATE TABLE IF NOT EXISTS won't modify existing tables,
+  // but will create new tables and indexes)
   const schema = readFileSync(join(__dirname, 'schema.sql'), 'utf-8')
   db.exec(schema)
   console.log('Database initialized at:', DB_PATH)
-
-  // Run any pending migrations
-  runMigrations(db)
 }
 
 // Check if database needs seeding (call after initializeDatabase)
@@ -93,6 +96,80 @@ export function updateSpace(space: Partial<Space> & { id: string }) {
 export function getSpaceSolvers(spaceId: string): string[] {
   const rows = db.prepare('SELECT agent_id FROM space_solvers WHERE space_id = ?').all(spaceId) as any[]
   return rows.map(r => r.agent_id)
+}
+
+// ============ UNIQUE SYNAPSE PER SECTOR ENFORCEMENT ============
+
+/**
+ * Check if a sector already has a unique synapse
+ * Returns the existing unique synapse ID if one exists
+ */
+export function getUniqueSynapseInSector(sectorId: string): string | null {
+  const result = db.prepare(`
+    SELECT id FROM spaces
+    WHERE sector_id = ? AND synapse_type = 'unique'
+    LIMIT 1
+  `).get(sectorId) as { id: string } | undefined
+
+  return result?.id || null
+}
+
+/**
+ * Check if a synapse type can be assigned to a space in a given sector
+ * Prevents multiple unique synapses per sector
+ */
+export function canAssignSynapseType(synapseType: string, sectorId: string | null): boolean {
+  // If not a unique synapse, always allow
+  if (synapseType !== 'unique') {
+    return true
+  }
+
+  // If no sector assigned, allow unique synapse
+  if (!sectorId) {
+    return true
+  }
+
+  // Check if sector already has a unique synapse
+  const existingUnique = getUniqueSynapseInSector(sectorId)
+  return existingUnique === null
+}
+
+/**
+ * Assign synapse type to a space with unique per sector enforcement
+ * Returns false if the assignment would violate the unique constraint
+ */
+export function assignSynapseTypeToSpace(
+  spaceId: string,
+  synapseType: string,
+  sectorId: string | null
+): boolean {
+  // Check constraint
+  if (!canAssignSynapseType(synapseType, sectorId)) {
+    console.warn(`[Unique Constraint] Cannot assign unique synapse to sector ${sectorId} - already has one`)
+    return false
+  }
+
+  // Update the space
+  db.prepare(`
+    UPDATE spaces
+    SET synapse_type = ?, sector_id = ?
+    WHERE id = ?
+  `).run(synapseType, sectorId, spaceId)
+
+  return true
+}
+
+/**
+ * Get count of unique synapses by sector
+ * Useful for debugging and admin views
+ */
+export function getUniqueSynapseCountBySector(): Array<{ sectorId: string; count: number }> {
+  return db.prepare(`
+    SELECT sector_id as sectorId, COUNT(*) as count
+    FROM spaces
+    WHERE synapse_type = 'unique' AND sector_id IS NOT NULL
+    GROUP BY sector_id
+  `).all() as Array<{ sectorId: string; count: number }>
 }
 
 export function addSpaceSolver(spaceId: string, agentId: string) {
@@ -352,6 +429,14 @@ function rowToUser(row: any): User {
     points: row.points,
     totalLootEarned: row.total_loot_earned,
     createdAt: row.created_at,
+    // Masterplan 2026 fields
+    brain_level: row.brain_level,
+    brain_xp: row.brain_xp,
+    total_brain_xp: row.total_brain_xp,
+    usdc_spent: row.usdc_spent,
+    agentic_balance: row.agentic_balance,
+    total_agi_earned: row.total_agi_earned,
+    lottery_tickets: row.lottery_tickets,
   }
 }
 

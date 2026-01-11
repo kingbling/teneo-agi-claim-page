@@ -117,6 +117,14 @@ export interface User {
   points: number
   totalLootEarned: number
   createdAt: number
+  // Masterplan 2026 fields
+  brain_level?: number
+  brain_xp?: number
+  total_brain_xp?: number
+  usdc_spent?: number
+  agentic_balance?: number
+  total_agi_earned?: number
+  lottery_tickets?: number
 }
 
 // WebSocket message types
@@ -135,11 +143,15 @@ export type ServerMessage =
   | { type: 'space:discovered'; data: SpaceDiscovery }
   | { type: 'loot:distributed'; data: LootEvent }
   | { type: 'error'; data: { message: string } }
+  // Masterplan 2026 message types
+  | { type: 'synapse:completed'; data: SynapseCompletionData }
+  | { type: 'exploration:progress'; data: ExplorationProgressData }
+  | { type: 'user:levelup'; data: UserLevelUpData }
 
 export interface WorldState {
-  spaceClusters: SpaceCluster[]
-  agentClusters: AgentCluster[]
-  userAgents: Agent[]
+  synapseClusters: SpaceCluster[]
+  shipClusters: AgentCluster[]
+  userShips: Agent[]
   discoveryProgress: {
     total: number
     discovered: number
@@ -179,6 +191,40 @@ export interface LootEvent {
   agentId: string
   spaceId: string
   amount: number
+  timestamp: number
+}
+
+// ============================================================================
+// MASTERPLAN 2026: WebSocket Message Data Types
+// ============================================================================
+
+export type SynapseType = 'minor' | 'complex' | 'deep' | 'core' | 'rare' | 'legendary' | 'unique'
+export type UserLevel = 1 | 2 | 3 | 4 | 5
+
+export interface SynapseCompletionData {
+  synapseId: string
+  synapseType: SynapseType
+  totalReward: number
+  distribution: 'fair_share' | 'lottery'
+  explorers: Array<{ userId: string; shipId: string; reward: number; isWinner?: boolean }>
+  timestamp: number
+}
+
+export interface ExplorationProgressData {
+  synapseId: string
+  synapseType: SynapseType
+  pointsAccumulated: number
+  pointsRequired: number
+  currentETAMinutes: number
+  explorerCount: number
+  timestamp: number
+}
+
+export interface UserLevelUpData {
+  userId: string
+  newLevel: UserLevel
+  newBrainLevel: number
+  brainXpEarned: number
   timestamp: number
 }
 

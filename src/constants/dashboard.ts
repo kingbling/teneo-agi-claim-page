@@ -12,16 +12,37 @@ export const BRAIN_SCALE = {
   z: 1.1,
 } as const
 
-// Agent fuel thresholds (points)
+// DEPRECATED: Fuel system removed in Masterplan 2026
+// Keeping for backwards compatibility during migration
 export const FUEL_THRESHOLDS = {
-  LOW: 500,        // Agents below this need refueling
-  CRITICAL: 100,   // Agents in critical fuel state
+  LOW: 500,
+  CRITICAL: 100,
 } as const
 
-// Fuel bar percentage thresholds
+// DEPRECATED: Fuel system removed in Masterplan 2026
 export const FUEL_PERCENT_THRESHOLDS = {
-  CRITICAL: 20,    // Below this is critical (red)
-  LOW: 50,         // Below this is low (orange/warning)
+  CRITICAL: 20,
+  LOW: 50,
+} as const
+
+// Masterplan 2026: Synapse type colors
+export const SYNAPSE_TYPE_COLORS = {
+  minor: '#60A5FA',     // Blue
+  complex: '#A78BFA',   // Purple
+  deep: '#2DD4BF',      // Teal
+  core: '#FBBF24',      // Yellow/Gold
+  rare: '#F87171',      // Red
+  legendary: '#F472B6', // Pink
+  unique: '#FCD34D',    // Amber/Gold
+} as const
+
+// Masterplan 2026: User level colors
+export const USER_LEVEL_COLORS = {
+  1: '#6B7280', // Gray - Novice
+  2: '#3B82F6', // Blue - Apprentice
+  3: '#10B981', // Green - Explorer
+  4: '#F59E0B', // Amber - Veteran
+  5: '#8B5CF6', // Purple - Elite
 } as const
 
 // Toast notification durations (ms)
@@ -32,13 +53,15 @@ export const TOAST_DURATIONS = {
   LONG: 5000,
 } as const
 
-// Discovery loot thresholds
+// Masterplan 2026: Synapse discovery loot thresholds (based on $AGI rewards)
 export const LOOT_THRESHOLDS = {
-  MIN_NOTIFY: 50,      // Minimum loot to show notification
-  CONFETTI: 100,       // Loot amount to trigger confetti
-  TEAM: 100,           // Team tier threshold
-  LEGENDARY: 200,      // Legendary tier threshold
-  MYTHIC: 500,         // Mythic tier threshold
+  MIN_NOTIFY: 10,       // Minor synapses: 10 $AGI
+  CONFETTI: 1000,       // Deep synapses: 4000 $AGI - confetti for big wins
+  DEEP: 4000,           // Deep synapse reward
+  CORE: 40000,          // Core synapse reward
+  RARE: 100000,         // Rare synapse reward
+  LEGENDARY: 200000,    // Legendary synapse reward
+  UNIQUE: 1000000,      // Unique synapse reward
 } as const
 
 // Brain region classification thresholds

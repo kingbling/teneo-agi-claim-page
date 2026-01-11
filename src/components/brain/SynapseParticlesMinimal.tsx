@@ -1,4 +1,4 @@
-import { useRef, useMemo, useEffect } from 'react'
+import { useRef, useMemo, useEffect, memo } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import { BRAIN_REGION_VERTEX_SHADER, BRAIN_REGION_FRAGMENT_SHADER } from './core/shaderUtils'
@@ -159,18 +159,27 @@ function generateBrainSynapses(count: number) {
       cb *= 1.4
     }
 
-    colors[i * 3] = cr
-    colors[i * 3 + 1] = cg
-    colors[i * 3 + 2] = cb
+    // Boost RGB for visibility without increasing alpha (prevents over-bloom)
+    colors[i * 3] = Math.min(1.0, cr * 1.3)
+    colors[i * 3 + 1] = Math.min(1.0, cg * 1.3)
+    colors[i * 3 + 2] = Math.min(1.0, cb * 1.3)
 
-    // Sizes
+    // Sizes - with noise-based variation for organic feel
     const sizeRoll = Math.random()
-    if (sizeRoll > 0.98) {
-      sizes[i] = 1.8
-    } else if (sizeRoll > 0.92) {
-      sizes[i] = 1.3
+    const depthVariation = Math.abs(noise3D(x * 0.5, y * 0.5, z * 0.5))
+
+    if (sizeRoll > 0.995) {
+      // Rare large "hub" synapses (0.5%)
+      sizes[i] = 2.5 + depthVariation * 0.5
+    } else if (sizeRoll > 0.97) {
+      // Medium-large particles (2.5%)
+      sizes[i] = 1.8 + depthVariation * 0.3
+    } else if (sizeRoll > 0.85) {
+      // Medium particles (12%)
+      sizes[i] = 1.3 + depthVariation * 0.2
     } else {
-      sizes[i] = 1.0
+      // Base particles with variation (85%)
+      sizes[i] = 0.8 + depthVariation * 0.4
     }
   }
 
@@ -181,7 +190,7 @@ function generateBrainSynapses(count: number) {
  * SynapseParticlesMinimal - Brain-shaped particle cloud with region coloring
  * Supports LOD-based particle count: more particles when zoomed in, fewer when zoomed out
  */
-export function SynapseParticlesMinimal({
+export const SynapseParticlesMinimal = memo(function SynapseParticlesMinimal({
   count,
   selectedRegionIndex = -1,
   highlightIntensity = 0,
@@ -237,4 +246,4 @@ export function SynapseParticlesMinimal({
       />
     </points>
   )
-}
+})

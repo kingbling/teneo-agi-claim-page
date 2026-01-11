@@ -13,7 +13,6 @@ export { StatCard, CompactStatCard, type StatCardProps, type CompactStatCardProp
 export { StatGrid, type StatGridProps } from './StatGrid'
 export { StatusBadge, StatusDot, StatusIndicator, type StatusBadgeProps, type StatusDotProps, type StatusIndicatorProps } from './StatusBadge'
 export * from './ConfirmDialog'
-export * from './FuelBar'
 export * from './FilterSortBar'
 export {
   DataList,

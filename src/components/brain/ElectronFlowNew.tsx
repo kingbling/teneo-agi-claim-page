@@ -2,8 +2,7 @@ import { useRef, useMemo, useEffect, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { SpaceDiscoveryEvent, SpaceCluster } from '@/types/agent'
-import { BRAIN_SCALE, TRANCE_CONFIG } from './core/brainConstants'
-import { useAgentStore } from '@/stores/agentStore'
+import { BRAIN_SCALE } from './core/brainConstants'
 
 interface ElectronFlowProps {
   recentDiscoveries: SpaceDiscoveryEvent[]
@@ -131,10 +130,8 @@ export function ElectronFlowNew({ recentDiscoveries, spaceClusters, maxFlows = 5
   const scaledTimeRef = useRef(0)
   const lastTimeRef = useRef(0)
 
-  // Get time scale from store for trance mode
-  const userAgents = useAgentStore((state) => state.userAgents)
-  const isTranceActive = userAgents.some((a) => a.tranceActive)
-  const timeScale = isTranceActive ? TRANCE_CONFIG.timeScale : TRANCE_CONFIG.normalScale
+  // Masterplan 2026: No trance mode, use normal time scale
+  const timeScale = 1.0
 
   // Create new flows when discoveries happen
   useEffect(() => {
