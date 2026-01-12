@@ -1,71 +1,55 @@
-import { useRef } from 'react'
-import { useFrame } from '@react-three/fiber'
-import { useAgentStore } from '@/stores/agentStore'
+/**
+ * useBrainTime - SolidJS Version (Stub)
+ *
+ * Unified time management for brain visualization.
+ * Trance mode has been deprecated - always uses normal time scale.
+ */
+
+import { createSignal, onMount, onCleanup } from 'solid-js'
 import { TRANCE_CONFIG } from './brainConstants'
 
 /**
- * useBrainTime - Unified time management for brain visualization
- *
- * Provides time values that respect trance mode slowdown.
- * Replaces duplicated time scaling logic across 8+ components.
+ * useBrainTime - Provides time values for brain visualization
  *
  * @returns Object with:
- *   - scaledTime: Cumulative time adjusted for trance mode
- *   - deltaTime: Frame delta adjusted for trance mode
- *   - timeScale: Current time multiplier (0.05 in trance, 1.0 normal)
- *   - isTranceActive: Boolean for trance state
- *   - realTime: Actual elapsed time (not scaled)
+ *   - scaledTime: Cumulative time (always at normal scale since trance is deprecated)
+ *   - deltaTime: Frame delta
+ *   - timeScale: Always 1.0 (trance mode deprecated)
+ *   - realTime: Actual elapsed time
  */
 export function useBrainTime() {
-  const userAgents = useAgentStore((state) => state.userAgents)
+  const [scaledTime, setScaledTime] = createSignal(0)
+  const [deltaTime, setDeltaTime] = createSignal(0)
+  const [realTime, setRealTime] = createSignal(0)
 
-  // Check if any agent has active trance
-  const isTranceActive = userAgents.some((a) => a.tranceActive)
-  const timeScale = isTranceActive ? TRANCE_CONFIG.timeScale : TRANCE_CONFIG.normalScale
+  let lastTime = performance.now()
+  let animationId: number
 
-  // Refs to track time across frames
-  const scaledTimeRef = useRef(0)
-  const lastRealTimeRef = useRef(0)
-  const deltaMsRef = useRef(0)
+  onMount(() => {
+    const update = () => {
+      const now = performance.now()
+      const delta = (now - lastTime) / 1000
+      lastTime = now
 
-  useFrame(({ clock }) => {
-    const realTime = clock.getElapsedTime()
-    const deltaReal = realTime - lastRealTimeRef.current
-    lastRealTimeRef.current = realTime
+      setDeltaTime(delta)
+      setRealTime((prev) => prev + delta)
+      setScaledTime((prev) => prev + delta * TRANCE_CONFIG.normalScale)
 
-    // Apply time scaling
-    const deltaScaled = deltaReal * timeScale
-    scaledTimeRef.current += deltaScaled
-    deltaMsRef.current = deltaScaled
+      animationId = requestAnimationFrame(update)
+    }
+
+    animationId = requestAnimationFrame(update)
+
+    onCleanup(() => {
+      cancelAnimationFrame(animationId)
+    })
   })
 
   return {
-    scaledTime: scaledTimeRef.current,
-    deltaTime: deltaMsRef.current,
-    timeScale,
-    isTranceActive,
-    realTime: lastRealTimeRef.current,
+    scaledTime,
+    deltaTime,
+    timeScale: () => TRANCE_CONFIG.normalScale,
+    isTranceActive: () => false, // Trance mode deprecated
+    realTime,
   }
-}
-
-/**
- * Simplified hook for components that only need scaled time
- * (lighter weight - no delta tracking)
- */
-export function useScaledTime() {
-  const userAgents = useAgentStore((state) => state.userAgents)
-  const isTranceActive = userAgents.some((a) => a.tranceActive)
-  const timeScale = isTranceActive ? TRANCE_CONFIG.timeScale : TRANCE_CONFIG.normalScale
-
-  const scaledTimeRef = useRef(0)
-  const lastTimeRef = useRef(0)
-
-  useFrame(({ clock }) => {
-    const realTime = clock.getElapsedTime()
-    const delta = realTime - lastTimeRef.current
-    lastTimeRef.current = realTime
-    scaledTimeRef.current += delta * timeScale
-  })
-
-  return scaledTimeRef.current
 }

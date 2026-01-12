@@ -21,22 +21,23 @@ export interface BrainRegion {
   cameraTarget: [number, number, number]
 }
 
-// Color palette - vibrant, high-saturation colors for each region
+// Color palette - high-contrast, well-separated hues for each region
+// Phase 4.1: Increased saturation and pushed similar colors apart
 const COLORS = {
-  prefrontal: { r: 0.3, g: 0.5, b: 0.95 },     // Deep blue - decision making
-  motor: { r: 0.95, g: 0.25, b: 0.25 },        // Bright red - movement
-  somatosensory: { r: 1.0, g: 0.55, b: 0.2 },  // Vivid orange - touch
-  parietal: { r: 0.95, g: 0.85, b: 0.15 },     // Bright yellow - spatial
-  temporal: { r: 0.2, g: 0.85, b: 0.4 },       // Vibrant green - memory/hearing
-  occipital: { r: 0.75, g: 0.3, b: 0.9 },      // Vivid purple - vision
-  cerebellum: { r: 0.15, g: 0.8, b: 0.8 },     // Bright teal - coordination
-  brainstem: { r: 0.7, g: 0.5, b: 0.35 },      // Warm brown - vital functions
-  limbic: { r: 1.0, g: 0.4, b: 0.65 },         // Hot pink - emotion
-  insular: { r: 0.45, g: 0.45, b: 0.8 },       // Rich slate - awareness
-  broca: { r: 0.2, g: 0.4, b: 0.9 },           // Deep azure - speech production
-  wernicke: { r: 0.3, g: 0.8, b: 0.6 },        // Emerald - language comprehension
-  hippocampus: { r: 0.8, g: 0.65, b: 0.45 },   // Warm tan - memory formation
-  amygdala: { r: 0.9, g: 0.2, b: 0.45 },       // Deep magenta - fear/emotion
+  prefrontal: { r: 0.25, g: 0.45, b: 1.0 },    // Bright blue - decision making (pushed bluer)
+  motor: { r: 1.0, g: 0.2, b: 0.2 },           // Pure red - movement (more saturated)
+  somatosensory: { r: 1.0, g: 0.5, b: 0.15 },  // Vibrant orange - touch (more saturated)
+  parietal: { r: 1.0, g: 0.9, b: 0.1 },        // Bright gold-yellow - spatial
+  temporal: { r: 0.15, g: 0.95, b: 0.35 },     // Pure green - memory/hearing (more saturated)
+  occipital: { r: 0.8, g: 0.25, b: 1.0 },      // Electric purple - vision (more saturated)
+  cerebellum: { r: 0.1, g: 0.9, b: 0.9 },      // Cyan - coordination (more saturated)
+  brainstem: { r: 0.75, g: 0.5, b: 0.3 },      // Warm brown - vital functions
+  limbic: { r: 1.0, g: 0.35, b: 0.7 },         // Hot pink - emotion (more saturated)
+  insular: { r: 0.55, g: 0.5, b: 0.95 },       // Periwinkle - awareness (pushed more purple)
+  broca: { r: 0.45, g: 0.65, b: 1.0 },         // Light azure - speech (distinct from prefrontal)
+  wernicke: { r: 0.4, g: 1.0, b: 0.75 },       // Mint - language comprehension (distinct from temporal)
+  hippocampus: { r: 0.9, g: 0.7, b: 0.4 },     // Warm amber - memory formation (more saturated)
+  amygdala: { r: 1.0, g: 0.15, b: 0.5 },       // Deep magenta - fear/emotion (more saturated)
 }
 
 export const FUNCTIONAL_BRAIN_REGIONS: BrainRegion[] = [

@@ -1,13 +1,14 @@
-import type { LucideIcon } from 'lucide-react'
+import { Show, type JSX, type Component } from 'solid-js'
+import type { LucideIcon } from 'lucide-solid'
 import { cn } from '@/lib/utils'
 
 interface SectionHeaderProps {
   icon?: LucideIcon
   title: string
   subtitle?: string
-  action?: React.ReactNode
+  action?: JSX.Element
   gradient?: 'teal' | 'purple' | 'rose' | 'yellow' | 'cyan' | 'amber'
-  className?: string
+  class?: string
   size?: 'sm' | 'default' | 'lg'
 }
 
@@ -44,49 +45,34 @@ const sizeStyles = {
   },
 }
 
-export function SectionHeader({
-  icon: Icon,
-  title,
-  subtitle,
-  action,
-  gradient = 'teal',
-  className,
-  size = 'default',
-}: SectionHeaderProps) {
-  const styles = sizeStyles[size]
-  const gradientClass = gradients[gradient]
-  const textColor = gradientClass.split(' ').pop() // Get the text color from gradient
+export function SectionHeader(props: SectionHeaderProps) {
+  const gradient = () => props.gradient ?? 'teal'
+  const size = () => props.size ?? 'default'
+  const styles = () => sizeStyles[size()]
+  const gradientClass = () => gradients[gradient()]
+  const textColor = () => gradientClass().split(' ').pop() // Get the text color from gradient
 
   return (
-    <div className={cn('flex items-center justify-between', styles.container, className)}>
-      <div className="flex items-center gap-3">
-        {Icon && (
-          <div className={cn(
-            'flex items-center justify-center',
-            styles.iconWrapper,
-            'bg-gradient-to-br',
-            gradientClass
-          )}>
-            <Icon className={cn(styles.icon, textColor)} />
-          </div>
-        )}
-        <div>
-          <h3 className={cn('text-foreground', styles.title)}>
-            {title}
-          </h3>
-          {subtitle && (
-            <p className={cn('text-muted-foreground mt-1', styles.subtitle)}>
-              {subtitle}
-            </p>
+    <div class={cn('flex items-center justify-between', styles().container, props.class)}>
+      <div class="flex items-center gap-3">
+        <Show when={props.icon}>
+          {(Icon) => (
+            <div class={cn('flex items-center justify-center', styles().iconWrapper, 'bg-gradient-to-br', gradientClass())}>
+              <Icon class={cn(styles().icon, textColor())} />
+            </div>
           )}
+        </Show>
+        <div>
+          <h3 class={cn('text-foreground', styles().title)}>{props.title}</h3>
+          <Show when={props.subtitle}>
+            <p class={cn('text-muted-foreground mt-1', styles().subtitle)}>{props.subtitle}</p>
+          </Show>
         </div>
       </div>
 
-      {action && (
-        <div className="flex items-center">
-          {action}
-        </div>
-      )}
+      <Show when={props.action}>
+        <div class="flex items-center">{props.action}</div>
+      </Show>
     </div>
   )
 }
@@ -94,24 +80,21 @@ export function SectionHeader({
 // Divider variant for section breaks
 interface SectionDividerProps {
   label?: string
-  className?: string
+  class?: string
 }
 
-export function SectionDivider({ label, className }: SectionDividerProps) {
-  if (label) {
-    return (
-      <div className={cn('flex items-center gap-4 my-6', className)}>
-        <div className="flex-1 h-px bg-border" />
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-          {label}
-        </span>
-        <div className="flex-1 h-px bg-border" />
-      </div>
-    )
-  }
-
+export function SectionDivider(props: SectionDividerProps) {
   return (
-    <div className={cn('h-px bg-border my-5', className)} />
+    <Show
+      when={props.label}
+      fallback={<div class={cn('h-px bg-border my-5', props.class)} />}
+    >
+      <div class={cn('flex items-center gap-4 my-6', props.class)}>
+        <div class="flex-1 h-px bg-border" />
+        <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider">{props.label}</span>
+        <div class="flex-1 h-px bg-border" />
+      </div>
+    </Show>
   )
 }
 
@@ -123,24 +106,15 @@ interface StatDisplayProps {
   size?: 'sm' | 'default'
 }
 
-export function StatDisplay({ value, label, color = 'text-[var(--brand-teal-1)]', size = 'default' }: StatDisplayProps) {
+export function StatDisplay(props: StatDisplayProps) {
+  const color = () => props.color ?? 'text-[var(--brand-teal-1)]'
+  const size = () => props.size ?? 'default'
+
   return (
-    <div className={cn(
-      'text-right',
-      size === 'sm' ? 'space-y-1' : 'space-y-1'
-    )}>
-      <div className={cn(
-        'font-bold tabular-nums',
-        color,
-        size === 'sm' ? 'text-sm' : 'text-lg'
-      )}>
-        {value}
-      </div>
-      <div className={cn(
-        'text-muted-foreground uppercase tracking-wide',
-        size === 'sm' ? 'text-[9px]' : 'text-[10px]'
-      )}>
-        {label}
+    <div class={cn('text-right', size() === 'sm' ? 'space-y-1' : 'space-y-1')}>
+      <div class={cn('font-bold tabular-nums', color(), size() === 'sm' ? 'text-sm' : 'text-lg')}>{props.value}</div>
+      <div class={cn('text-muted-foreground uppercase tracking-wide', size() === 'sm' ? 'text-[9px]' : 'text-[10px]')}>
+        {props.label}
       </div>
     </div>
   )

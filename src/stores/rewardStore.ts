@@ -1,6 +1,7 @@
-import { create } from 'zustand'
+import { createRoot } from 'solid-js'
+import { createStore } from 'solid-js/store'
 import { formatPoints, type SynapseType } from '@/types/game'
-import { useUserStore } from './userStore'
+import { userStore } from './userStore'
 
 // API Configuration
 const API_URL = import.meta.env.VITE_API_URL
@@ -95,33 +96,6 @@ export interface RewardState {
   showNotifications: boolean
 }
 
-export interface RewardActions {
-  // Reward Notifications
-  addReward: (type: RewardType, amount: number, source: string) => void
-  dismissReward: (id: string) => void
-  clearAllRewards: () => void
-
-  // Lottery
-  addLotteryResult: (result: LotteryResult) => void
-  startLotteryAnimation: (result: LotteryResult) => void
-  endLotteryAnimation: () => void
-  useLotteryTickets: (count: number) => Promise<boolean>
-
-  // Leaderboard
-  fetchLeaderboard: (type: LeaderboardType) => Promise<void>
-  refreshLeaderboard: () => Promise<void>
-  setActiveLeaderboardType: (type: LeaderboardType) => void
-
-  // UI
-  setShowNotifications: (show: boolean) => void
-
-  // Helpers
-  getTotalUnclaimedAgi: () => number
-  getRecentLotteryWins: () => LotteryResult[]
-}
-
-export type RewardStore = RewardState & RewardActions
-
 const initialState: RewardState = {
   // Rewards
   recentRewards: [],
@@ -145,12 +119,12 @@ const initialState: RewardState = {
   showNotifications: true,
 }
 
-export const useRewardStore = create<RewardStore>((set, get) => ({
-  ...initialState,
+function createRewardStore() {
+  const [state, setState] = createStore<RewardState>({ ...initialState })
 
   // ============ REWARD NOTIFICATIONS ============
 
-  addReward: (type: RewardType, amount: number, source: string) => {
+  const addReward = (type: RewardType, amount: number, source: string) => {
     const id = `reward-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 
     const newReward: RewardNotification = {
@@ -162,13 +136,10 @@ export const useRewardStore = create<RewardStore>((set, get) => ({
       isVisible: true,
     }
 
-    set((state) => {
-      const updatedRewards = [newReward, ...state.recentRewards].slice(0, state.maxRewardNotifications)
-      return { recentRewards: updatedRewards }
-    })
+    const updatedRewards = [newReward, ...state.recentRewards].slice(0, state.maxRewardNotifications)
+    setState({ recentRewards: updatedRewards })
 
     // Also update the user store if it's AGI, XP, or lottery tickets
-    const userStore = useUserStore.getState()
     switch (type) {
       case 'agi':
       case 'lottery_win':
@@ -187,69 +158,67 @@ export const useRewardStore = create<RewardStore>((set, get) => ({
 
     // Auto-dismiss after delay
     setTimeout(() => {
-      get().dismissReward(id)
+      dismissReward(id)
     }, 5000)
-  },
+  }
 
-  dismissReward: (id: string) => {
-    set((state) => ({
+  const dismissReward = (id: string) => {
+    setState({
       recentRewards: state.recentRewards.map((r) =>
         r.id === id ? { ...r, isVisible: false } : r
       ),
-    }))
+    })
 
     // Remove from list after animation
     setTimeout(() => {
-      set((state) => ({
+      setState({
         recentRewards: state.recentRewards.filter((r) => r.id !== id),
-      }))
+      })
     }, 300)
-  },
+  }
 
-  clearAllRewards: () => {
-    set({ recentRewards: [] })
-  },
+  const clearAllRewards = () => {
+    setState({ recentRewards: [] })
+  }
 
   // ============ LOTTERY ============
 
-  addLotteryResult: (result: LotteryResult) => {
-    set((state) => ({
+  const addLotteryResult = (result: LotteryResult) => {
+    setState({
       lotteryResults: [result, ...state.lotteryResults].slice(0, 20),
-    }))
-  },
+    })
+  }
 
-  startLotteryAnimation: (result: LotteryResult) => {
-    set({
+  const startLotteryAnimation = (result: LotteryResult) => {
+    setState({
       currentLotteryAnimation: result,
       isAnimatingLottery: true,
     })
-  },
+  }
 
-  endLotteryAnimation: () => {
-    const { currentLotteryAnimation } = get()
+  const endLotteryAnimation = () => {
+    const currentLotteryAnimation = state.currentLotteryAnimation
 
     if (currentLotteryAnimation) {
       // Add rewards after animation
       if (currentLotteryAnimation.userWon) {
-        get().addReward('lottery_win', currentLotteryAnimation.agiReward, `Lottery Win - ${currentLotteryAnimation.synapseType} Synapse`)
-        get().addReward('xp', currentLotteryAnimation.xpReward, `Lottery Win - ${currentLotteryAnimation.synapseType} Synapse`)
+        addReward('lottery_win', currentLotteryAnimation.agiReward, `Lottery Win - ${currentLotteryAnimation.synapseType} Synapse`)
+        addReward('xp', currentLotteryAnimation.xpReward, `Lottery Win - ${currentLotteryAnimation.synapseType} Synapse`)
       } else if (currentLotteryAnimation.userConsolationTickets > 0) {
-        get().addReward('lottery_ticket', currentLotteryAnimation.userConsolationTickets, 'Lottery Consolation')
+        addReward('lottery_ticket', currentLotteryAnimation.userConsolationTickets, 'Lottery Consolation')
       }
 
       // Add to history
-      get().addLotteryResult(currentLotteryAnimation)
+      addLotteryResult(currentLotteryAnimation)
     }
 
-    set({
+    setState({
       currentLotteryAnimation: null,
       isAnimatingLottery: false,
     })
-  },
+  }
 
-  useLotteryTickets: async (count: number): Promise<boolean> => {
-    const userStore = useUserStore.getState()
-
+  const useLotteryTickets = async (count: number): Promise<boolean> => {
     if (userStore.lotteryTickets < count) {
       return false
     }
@@ -278,19 +247,19 @@ export const useRewardStore = create<RewardStore>((set, get) => ({
       console.error('Failed to use lottery tickets:', error)
       return false
     }
-  },
+  }
 
   // ============ LEADERBOARD ============
 
-  fetchLeaderboard: async (type: LeaderboardType) => {
-    set({ isLoadingLeaderboard: true })
+  const fetchLeaderboard = async (type: LeaderboardType) => {
+    setState({ isLoadingLeaderboard: true })
 
     try {
-      const userId = useUserStore.getState().userId
+      const userId = userStore.userId
       const response = await fetch(`${API_URL}/api/leaderboard/${type}?userId=${userId}`)
 
       if (!response.ok) {
-        set({ isLoadingLeaderboard: false })
+        setState({ isLoadingLeaderboard: false })
         return
       }
 
@@ -308,63 +277,96 @@ export const useRewardStore = create<RewardStore>((set, get) => ({
         lastUpdated: Date.now(),
       }
 
-      set((state) => ({
-        leaderboardData: {
-          ...state.leaderboardData,
-          [type]: leaderboardData,
-        },
-        isLoadingLeaderboard: false,
-      }))
+      setState('leaderboardData', type, leaderboardData)
+      setState({ isLoadingLeaderboard: false })
     } catch (error) {
       console.error('Failed to fetch leaderboard:', error)
-      set({ isLoadingLeaderboard: false })
+      setState({ isLoadingLeaderboard: false })
     }
-  },
+  }
 
-  refreshLeaderboard: async () => {
-    const { activeLeaderboardType } = get()
-    await get().fetchLeaderboard(activeLeaderboardType)
-  },
+  const refreshLeaderboard = async () => {
+    await fetchLeaderboard(state.activeLeaderboardType)
+  }
 
-  setActiveLeaderboardType: (type: LeaderboardType) => {
-    set({ activeLeaderboardType: type })
+  const setActiveLeaderboardType = (type: LeaderboardType) => {
+    setState({ activeLeaderboardType: type })
 
     // Fetch if not cached or stale (older than 5 minutes)
-    const cached = get().leaderboardData[type]
+    const cached = state.leaderboardData[type]
     if (!cached || Date.now() - cached.lastUpdated > 5 * 60 * 1000) {
-      get().fetchLeaderboard(type)
+      fetchLeaderboard(type)
     }
-  },
+  }
 
   // ============ UI ============
 
-  setShowNotifications: (show: boolean) => {
-    set({ showNotifications: show })
-  },
+  const setShowNotifications = (show: boolean) => {
+    setState({ showNotifications: show })
+  }
 
   // ============ HELPERS ============
 
-  getTotalUnclaimedAgi: (): number => {
-    const { recentRewards } = get()
-    return recentRewards
+  const getTotalUnclaimedAgi = (): number => {
+    return state.recentRewards
       .filter((r) => (r.type === 'agi' || r.type === 'lottery_win') && r.isVisible)
       .reduce((sum, r) => sum + r.amount, 0)
-  },
+  }
 
-  getRecentLotteryWins: (): LotteryResult[] => {
-    const { lotteryResults } = get()
-    return lotteryResults.filter((r) => r.userWon).slice(0, 5)
-  },
-}))
+  const getRecentLotteryWins = (): LotteryResult[] => {
+    return state.lotteryResults.filter((r) => r.userWon).slice(0, 5)
+  }
 
-// ============ SELECTORS ============
+  return {
+    // ============ REACTIVE GETTERS ============
+    // Recent Rewards
+    get recentRewards() { return state.recentRewards },
+    get maxRewardNotifications() { return state.maxRewardNotifications },
 
-export const selectRecentRewards = (state: RewardStore) => state.recentRewards.filter((r) => r.isVisible)
-export const selectIsAnimatingLottery = (state: RewardStore) => state.isAnimatingLottery
-export const selectCurrentLotteryAnimation = (state: RewardStore) => state.currentLotteryAnimation
-export const selectActiveLeaderboard = (state: RewardStore) => state.leaderboardData[state.activeLeaderboardType]
-export const selectLeaderboardType = (state: RewardStore) => state.activeLeaderboardType
-export const selectIsLoadingLeaderboard = (state: RewardStore) => state.isLoadingLeaderboard
+    // Lottery Results
+    get lotteryResults() { return state.lotteryResults },
+    get currentLotteryAnimation() { return state.currentLotteryAnimation },
+    get isAnimatingLottery() { return state.isAnimatingLottery },
+
+    // Leaderboard Data
+    get leaderboardData() { return state.leaderboardData },
+    get activeLeaderboardType() { return state.activeLeaderboardType },
+    get isLoadingLeaderboard() { return state.isLoadingLeaderboard },
+
+    // UI State
+    get showNotifications() { return state.showNotifications },
+
+    // ============ COMPUTED SELECTORS ============
+    get visibleRewards() { return state.recentRewards.filter((r) => r.isVisible) },
+    get activeLeaderboard() { return state.leaderboardData[state.activeLeaderboardType] },
+
+    // ============ ACTIONS ============
+    // Reward Notifications
+    addReward,
+    dismissReward,
+    clearAllRewards,
+
+    // Lottery
+    addLotteryResult,
+    startLotteryAnimation,
+    endLotteryAnimation,
+    useLotteryTickets,
+
+    // Leaderboard
+    fetchLeaderboard,
+    refreshLeaderboard,
+    setActiveLeaderboardType,
+
+    // UI
+    setShowNotifications,
+
+    // Helpers
+    getTotalUnclaimedAgi,
+    getRecentLotteryWins,
+  }
+}
+
+export const rewardStore = createRoot(createRewardStore)
 
 // ============ HELPER FUNCTIONS ============
 

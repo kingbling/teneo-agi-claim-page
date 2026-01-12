@@ -1,4 +1,5 @@
-import { create } from 'zustand'
+import { createRoot } from 'solid-js'
+import { createStore, produce } from 'solid-js/store'
 
 // API Configuration
 const API_URL = import.meta.env.VITE_API_URL
@@ -198,178 +199,191 @@ function transformApiEvent(apiEvent: ApiEventResponse): LiveEvent {
   }
 }
 
-export const useEventStore = create<EventStore>((set, get) => ({
-  ...initialState,
+// Create the SolidJS store
+function createEventStore() {
+  const [state, setState] = createStore<EventState>(initialState)
 
-  // ============ FETCH ============
+  const actions: EventActions = {
+    // ============ FETCH ============
 
-  fetchActiveEvents: async () => {
-    set({ isLoading: true, error: null })
+    fetchActiveEvents: async () => {
+      setState({ isLoading: true, error: null })
 
-    try {
-      const response = await fetch(`${API_URL}/api/events/active`)
-      if (!response.ok) throw new Error('Failed to fetch active events')
-      const data = await response.json()
+      try {
+        const response = await fetch(`${API_URL}/api/events/active`)
+        if (!response.ok) throw new Error('Failed to fetch active events')
+        const data = await response.json()
 
-      // Transform API events to frontend format
-      const activeEvents = (data.active || []).map(transformApiEvent)
-      const upcomingEvents = (data.upcoming || []).map(transformApiEvent)
+        // Transform API events to frontend format
+        const activeEvents = (data.active || []).map(transformApiEvent)
+        const upcomingEvents = (data.upcoming || []).map(transformApiEvent)
 
-      set({
-        activeEvents,
-        upcomingEvents,
-        isLoading: false,
-        lastFetchTime: Date.now(),
-      })
-    } catch (error) {
-      console.error('Failed to fetch active events:', error)
-      set({
-        isLoading: false,
-        error: 'Failed to load events',
-        activeEvents: [],
-        upcomingEvents: [],
-      })
-    }
-  },
-
-  fetchUpcomingEvents: async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/events?state=upcoming&limit=10`)
-      if (!response.ok) throw new Error('Failed to fetch upcoming events')
-      const data = await response.json()
-
-      // Transform API events to frontend format
-      const upcomingEvents = (data.events || []).map(transformApiEvent)
-
-      set({ upcomingEvents })
-    } catch (error) {
-      console.error('Failed to fetch upcoming events:', error)
-    }
-  },
-
-  checkEventStatus: async () => {
-    const { activeEvents, upcomingEvents } = get()
-    const now = Date.now()
-
-    // Check if any active events have ended
-    const stillActive = activeEvents.filter(event => {
-      return new Date(event.endTime).getTime() > now
-    })
-
-    const nowEnded = activeEvents.filter(event => {
-      return new Date(event.endTime).getTime() <= now
-    })
-
-    // Check if any upcoming events have started
-    const nowActive = upcomingEvents.filter(event => {
-      const startTime = new Date(event.startTime).getTime()
-      const endTime = new Date(event.endTime).getTime()
-      return startTime <= now && endTime > now
-    })
-
-    const stillUpcoming = upcomingEvents.filter(event => {
-      return new Date(event.startTime).getTime() > now
-    })
-
-    // Update state if there are changes
-    if (nowEnded.length > 0 || nowActive.length > 0) {
-      set({
-        activeEvents: [...stillActive, ...nowActive.map(e => ({ ...e, status: 'active' as EventStatus }))],
-        upcomingEvents: stillUpcoming,
-        pastEvents: [...get().pastEvents, ...nowEnded.map(e => ({ ...e, status: 'ended' as EventStatus }))],
-      })
-    }
-  },
-
-  // ============ UI ============
-
-  dismissEvent: (eventId: string) => {
-    set((state) => ({
-      dismissedEventIds: [...state.dismissedEventIds, eventId],
-    }))
-  },
-
-  restoreDismissedEvent: (eventId: string) => {
-    set((state) => ({
-      dismissedEventIds: state.dismissedEventIds.filter(id => id !== eventId),
-    }))
-  },
-
-  setExpandedEvent: (eventId: string | null) => {
-    set({ expandedEventId: eventId })
-  },
-
-  // ============ HELPERS ============
-
-  getEventById: (eventId: string) => {
-    const { activeEvents, upcomingEvents, pastEvents } = get()
-    return [...activeEvents, ...upcomingEvents, ...pastEvents].find(e => e.id === eventId)
-  },
-
-  getActiveMultiplier: (type: EventMultiplier['type']): number => {
-    const { activeEvents } = get()
-    for (const event of activeEvents) {
-      const multiplier = event.multipliers.find(m => m.type === type)
-      if (multiplier) {
-        return multiplier.value
+        setState({
+          activeEvents,
+          upcomingEvents,
+          isLoading: false,
+          lastFetchTime: Date.now(),
+        })
+      } catch (error) {
+        console.error('Failed to fetch active events:', error)
+        setState({
+          isLoading: false,
+          error: 'Failed to load events',
+          activeEvents: [],
+          upcomingEvents: [],
+        })
       }
-    }
-    return 1.0
-  },
+    },
 
-  getTotalMultiplier: (type: EventMultiplier['type']): number => {
-    const { activeEvents } = get()
-    let total = 1.0
+    fetchUpcomingEvents: async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/events?state=upcoming&limit=10`)
+        if (!response.ok) throw new Error('Failed to fetch upcoming events')
+        const data = await response.json()
 
-    for (const event of activeEvents) {
-      const multiplier = event.multipliers.find(m => m.type === type)
-      if (multiplier) {
-        // Multiplicative stacking
-        total *= multiplier.value
+        // Transform API events to frontend format
+        const upcomingEvents = (data.events || []).map(transformApiEvent)
+
+        setState({ upcomingEvents })
+      } catch (error) {
+        console.error('Failed to fetch upcoming events:', error)
       }
-    }
+    },
 
-    return total
-  },
+    checkEventStatus: async () => {
+      const { activeEvents, upcomingEvents, pastEvents } = state
+      const now = Date.now()
 
-  getTimeRemaining: (eventId: string): number | null => {
-    const event = get().getEventById(eventId)
-    if (!event) return null
+      // Check if any active events have ended
+      const stillActive = activeEvents.filter(event => {
+        return new Date(event.endTime).getTime() > now
+      })
 
-    const now = Date.now()
+      const nowEnded = activeEvents.filter(event => {
+        return new Date(event.endTime).getTime() <= now
+      })
 
-    if (event.status === 'upcoming') {
-      // Time until start
-      return Math.max(0, new Date(event.startTime).getTime() - now)
-    }
+      // Check if any upcoming events have started
+      const nowActive = upcomingEvents.filter(event => {
+        const startTime = new Date(event.startTime).getTime()
+        const endTime = new Date(event.endTime).getTime()
+        return startTime <= now && endTime > now
+      })
 
-    if (event.status === 'active') {
-      // Time until end
-      return Math.max(0, new Date(event.endTime).getTime() - now)
-    }
+      const stillUpcoming = upcomingEvents.filter(event => {
+        return new Date(event.startTime).getTime() > now
+      })
 
-    return 0 // Ended
-  },
+      // Update state if there are changes
+      if (nowEnded.length > 0 || nowActive.length > 0) {
+        setState({
+          activeEvents: [...stillActive, ...nowActive.map(e => ({ ...e, status: 'active' as EventStatus }))],
+          upcomingEvents: stillUpcoming,
+          pastEvents: [...pastEvents, ...nowEnded.map(e => ({ ...e, status: 'ended' as EventStatus }))],
+        })
+      }
+    },
 
-  isEventDismissed: (eventId: string): boolean => {
-    return get().dismissedEventIds.includes(eventId)
-  },
+    // ============ UI ============
 
-  hasActiveEvents: (): boolean => {
-    const { activeEvents, dismissedEventIds } = get()
-    return activeEvents.some(event => !dismissedEventIds.includes(event.id))
-  },
-}))
+    dismissEvent: (eventId: string) => {
+      setState(produce((s) => {
+        s.dismissedEventIds.push(eventId)
+      }))
+    },
 
-// ============ SELECTORS ============
+    restoreDismissedEvent: (eventId: string) => {
+      setState(produce((s) => {
+        s.dismissedEventIds = s.dismissedEventIds.filter(id => id !== eventId)
+      }))
+    },
 
-export const selectActiveEvents = (state: EventStore) => state.activeEvents
-export const selectUpcomingEvents = (state: EventStore) => state.upcomingEvents
-export const selectPastEvents = (state: EventStore) => state.pastEvents
-export const selectIsLoadingEvents = (state: EventStore) => state.isLoading
-export const selectDismissedEventIds = (state: EventStore) => state.dismissedEventIds
-export const selectExpandedEventId = (state: EventStore) => state.expandedEventId
-export const selectHasActiveEvents = (state: EventStore) => state.hasActiveEvents()
+    setExpandedEvent: (eventId: string | null) => {
+      setState({ expandedEventId: eventId })
+    },
+
+    // ============ HELPERS ============
+
+    getEventById: (eventId: string) => {
+      const { activeEvents, upcomingEvents, pastEvents } = state
+      return [...activeEvents, ...upcomingEvents, ...pastEvents].find(e => e.id === eventId)
+    },
+
+    getActiveMultiplier: (type: EventMultiplier['type']): number => {
+      const { activeEvents } = state
+      for (const event of activeEvents) {
+        const multiplier = event.multipliers.find(m => m.type === type)
+        if (multiplier) {
+          return multiplier.value
+        }
+      }
+      return 1.0
+    },
+
+    getTotalMultiplier: (type: EventMultiplier['type']): number => {
+      const { activeEvents } = state
+      let total = 1.0
+
+      for (const event of activeEvents) {
+        const multiplier = event.multipliers.find(m => m.type === type)
+        if (multiplier) {
+          // Multiplicative stacking
+          total *= multiplier.value
+        }
+      }
+
+      return total
+    },
+
+    getTimeRemaining: (eventId: string): number | null => {
+      const event = actions.getEventById(eventId)
+      if (!event) return null
+
+      const now = Date.now()
+
+      if (event.status === 'upcoming') {
+        // Time until start
+        return Math.max(0, new Date(event.startTime).getTime() - now)
+      }
+
+      if (event.status === 'active') {
+        // Time until end
+        return Math.max(0, new Date(event.endTime).getTime() - now)
+      }
+
+      return 0 // Ended
+    },
+
+    isEventDismissed: (eventId: string): boolean => {
+      return state.dismissedEventIds.includes(eventId)
+    },
+
+    hasActiveEvents: (): boolean => {
+      const { activeEvents, dismissedEventIds } = state
+      return activeEvents.some(event => !dismissedEventIds.includes(event.id))
+    },
+  }
+
+  return { state, actions, setState }
+}
+
+// Create a singleton store instance using createRoot for proper disposal
+export const eventStore = createRoot(() => createEventStore())
+
+// Export the store parts
+export const eventState = eventStore.state
+export const eventActions = eventStore.actions
+export const setEventState = eventStore.setState
+
+// ============ GETTERS (replacing selectors) ============
+
+export const getActiveEvents = () => eventState.activeEvents
+export const getUpcomingEvents = () => eventState.upcomingEvents
+export const getPastEvents = () => eventState.pastEvents
+export const getIsLoadingEvents = () => eventState.isLoading
+export const getDismissedEventIds = () => eventState.dismissedEventIds
+export const getExpandedEventId = () => eventState.expandedEventId
+export const getHasActiveEvents = () => eventActions.hasActiveEvents()
 
 // ============ HELPER FUNCTIONS ============
 

@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
-import { useShipStore } from '@/stores/shipStore'
-import { useUserStore } from '@/stores/userStore'
+import { onMount, onCleanup, createEffect } from 'solid-js'
+import { shipStore } from '@/stores/shipStore'
+import { userStore } from '@/stores/userStore'
 
 /**
  * useWebSocketConnection - Manages WebSocket connection lifecycle
@@ -10,25 +10,27 @@ import { useUserStore } from '@/stores/userStore'
  * and disconnects on unmount.
  */
 export function useWebSocketConnection() {
-  const { connect, disconnect, fetchWorldState, fetchUserShips, isConnected } = useShipStore()
-  const { userId } = useUserStore()
-
-  useEffect(() => {
-    connect()
-    fetchWorldState()
-  }, [connect, fetchWorldState])
+  // Connect on mount and fetch initial world state
+  onMount(() => {
+    shipStore.connect()
+    shipStore.fetchWorldState()
+  })
 
   // Fetch user ships when userId is available
-  useEffect(() => {
+  createEffect(() => {
+    const userId = userStore.userId
     if (userId) {
-      fetchUserShips()
+      shipStore.fetchUserShips()
     }
-  }, [userId, fetchUserShips])
+  })
 
   // Cleanup on unmount
-  useEffect(() => {
-    return () => disconnect()
-  }, [disconnect])
+  onCleanup(() => {
+    shipStore.disconnect()
+  })
 
-  return { isConnected }
+  // Return accessor function to preserve reactivity when destructured
+  return {
+    isConnected: () => shipStore.isConnected
+  }
 }

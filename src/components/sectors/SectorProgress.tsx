@@ -1,5 +1,4 @@
-import { useEffect } from 'react'
-import { motion } from 'framer-motion'
+import { createEffect, Show, For, type JSX } from 'solid-js'
 import {
   Brain,
   Target,
@@ -8,9 +7,9 @@ import {
   Sparkles,
   TrendingUp,
   Clock,
-} from 'lucide-react'
+} from 'lucide-solid'
 import {
-  useSectorStore,
+  sectorStore,
   type Sector,
   type SectorReward,
   formatSectorReward,
@@ -24,134 +23,127 @@ interface SectorProgressProps {
   variant?: 'card' | 'inline' | 'compact'
   showRewards?: boolean
   showStats?: boolean
-  className?: string
+  class?: string
 }
 
 /**
  * SectorProgress - Displays progress for current sector
  * Shows synapses discovered, reward pool, and completion status
  */
-export function SectorProgress({
-  sectorId,
-  variant = 'card',
-  showRewards = true,
-  showStats = true,
-  className,
-}: SectorProgressProps) {
-  const {
-    activeSector,
-    sectorProgress,
-    isLoadingProgress,
-    fetchSectorProgress,
-    getSectorById,
-  } = useSectorStore()
+export function SectorProgress(props: SectorProgressProps) {
+  const variant = () => props.variant ?? 'card'
+  const showRewards = () => props.showRewards ?? true
+  const showStats = () => props.showStats ?? true
 
   // Use provided sectorId or fall back to active sector
-  const sector = sectorId ? getSectorById(sectorId) : activeSector
+  const sector = () => props.sectorId ? sectorStore.getSectorById(props.sectorId) : sectorStore.activeSector
 
-  useEffect(() => {
-    if (sector && !sectorProgress[sector.id]) {
-      fetchSectorProgress(sector.id)
+  createEffect(() => {
+    const s = sector()
+    if (s && !sectorStore.sectorProgress[s.id]) {
+      sectorStore.fetchSectorProgress(s.id)
     }
-  }, [sector, sectorProgress, fetchSectorProgress])
-
-  if (!sector) {
-    return (
-      <div className={cn('p-4 text-center text-[var(--text-muted)]', className)}>
-        No sector selected
-      </div>
-    )
-  }
-
-  if (isLoadingProgress) {
-    return (
-      <div className={cn('p-4', className)}>
-        <div className="animate-pulse space-y-4">
-          <div className="h-8 rounded bg-[var(--background-tertiary)]/50 w-3/4" />
-          <div className="h-4 rounded bg-[var(--background-tertiary)]/50" />
-          <div className="h-20 rounded bg-[var(--background-tertiary)]/50" />
-        </div>
-      </div>
-    )
-  }
-
-  if (variant === 'compact') {
-    return <CompactProgress sector={sector} className={className} />
-  }
-
-  if (variant === 'inline') {
-    return <InlineProgress sector={sector} className={className} />
-  }
+  })
 
   return (
-    <Card className={cn('overflow-hidden', className)}>
-      <CardHeader spacing="compact">
-        <div className="flex items-center justify-between">
-          <CardTitle size="default" className="flex items-center gap-2">
-            <Target className="h-5 w-5" style={{ color: sector.color }} />
-            {sector.name} Progress
-          </CardTitle>
-          <CompletionBadge percent={sector.progressPercent} color={sector.color} />
+    <Show
+      when={sector()}
+      fallback={
+        <div class={cn('p-4 text-center text-[var(--text-muted)]', props.class)}>
+          No sector selected
         </div>
-      </CardHeader>
-
-      <CardContent spacing="default">
-        {/* Main Progress */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between text-sm mb-2">
-            <span className="text-[var(--text-muted)]">Synapses Discovered</span>
-            <span className="font-bold text-[var(--text-primary)]">
-              {sector.discoveredSynapses.toLocaleString()} / {sector.totalSynapses.toLocaleString()}
-            </span>
+      }
+    >
+      <Show
+        when={!sectorStore.isLoadingProgress}
+        fallback={
+          <div class={cn('p-4', props.class)}>
+            <div class="animate-pulse space-y-4">
+              <div class="h-8 rounded bg-[var(--background-tertiary)]/50 w-3/4" />
+              <div class="h-4 rounded bg-[var(--background-tertiary)]/50" />
+              <div class="h-20 rounded bg-[var(--background-tertiary)]/50" />
+            </div>
           </div>
-          <Progress
-            value={sector.progressPercent}
-            size="lg"
-            variant="default"
-            showGlow={sector.status === 'active'}
-            animated={sector.status === 'active'}
-          />
-          <div className="flex items-center justify-between mt-2 text-xs text-[var(--text-muted)]">
-            <span>{sector.progressPercent.toFixed(1)}% Complete</span>
-            {sector.endDate && (
-              <span className="flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                Ends {new Date(sector.endDate).toLocaleDateString()}
-              </span>
-            )}
-          </div>
-        </div>
+        }
+      >
+        <Show when={variant() === 'compact'}>
+          <CompactProgress sector={sector()!} class={props.class} />
+        </Show>
+        <Show when={variant() === 'inline'}>
+          <InlineProgress sector={sector()!} class={props.class} />
+        </Show>
+        <Show when={variant() === 'card'}>
+          <Card class={cn('overflow-hidden', props.class)}>
+            <CardHeader spacing="compact">
+              <div class="flex items-center justify-between">
+                <CardTitle size="default" class="flex items-center gap-2">
+                  <Target class="h-5 w-5" style={{ color: sector()!.color }} />
+                  {sector()!.name} Progress
+                </CardTitle>
+                <CompletionBadge percent={sector()!.progressPercent} color={sector()!.color} />
+              </div>
+            </CardHeader>
 
-        {/* Stats */}
-        {showStats && (
-          <div className="grid grid-cols-3 gap-3 mb-6">
-            <StatBox
-              icon={<Brain className="h-4 w-4" />}
-              label="Total"
-              value={sector.totalSynapses.toLocaleString()}
-              color={sector.color}
-            />
-            <StatBox
-              icon={<Sparkles className="h-4 w-4" />}
-              label="Found"
-              value={sector.discoveredSynapses.toLocaleString()}
-              color="#10B981"
-            />
-            <StatBox
-              icon={<Target className="h-4 w-4" />}
-              label="Remaining"
-              value={(sector.totalSynapses - sector.discoveredSynapses).toLocaleString()}
-              color="#F59E0B"
-            />
-          </div>
-        )}
+            <CardContent spacing="default">
+              {/* Main Progress */}
+              <div class="mb-6">
+                <div class="flex items-center justify-between text-sm mb-2">
+                  <span class="text-[var(--text-muted)]">Synapses Discovered</span>
+                  <span class="font-bold text-[var(--text-primary)]">
+                    {sector()!.discoveredSynapses.toLocaleString()} / {sector()!.totalSynapses.toLocaleString()}
+                  </span>
+                </div>
+                <Progress
+                  value={sector()!.progressPercent}
+                  size="lg"
+                  variant="default"
+                  showGlow={sector()!.status === 'active'}
+                  animated={sector()!.status === 'active'}
+                />
+                <div class="flex items-center justify-between mt-2 text-xs text-[var(--text-muted)]">
+                  <span>{sector()!.progressPercent.toFixed(1)}% Complete</span>
+                  <Show when={sector()!.endDate}>
+                    <span class="flex items-center gap-1">
+                      <Clock class="h-3 w-3" />
+                      Ends {new Date(sector()!.endDate!).toLocaleDateString()}
+                    </span>
+                  </Show>
+                </div>
+              </div>
 
-        {/* Rewards */}
-        {showRewards && sector.rewardPool.length > 0 && (
-          <RewardPool rewards={sector.rewardPool} bonus={sector.completionBonus} />
-        )}
-      </CardContent>
-    </Card>
+              {/* Stats */}
+              <Show when={showStats()}>
+                <div class="grid grid-cols-3 gap-3 mb-6">
+                  <StatBox
+                    icon={<Brain class="h-4 w-4" />}
+                    label="Total"
+                    value={sector()!.totalSynapses.toLocaleString()}
+                    color={sector()!.color}
+                  />
+                  <StatBox
+                    icon={<Sparkles class="h-4 w-4" />}
+                    label="Found"
+                    value={sector()!.discoveredSynapses.toLocaleString()}
+                    color="#10B981"
+                  />
+                  <StatBox
+                    icon={<Target class="h-4 w-4" />}
+                    label="Remaining"
+                    value={(sector()!.totalSynapses - sector()!.discoveredSynapses).toLocaleString()}
+                    color="#F59E0B"
+                  />
+                </div>
+              </Show>
+
+              {/* Rewards */}
+              <Show when={showRewards() && sector()!.rewardPool.length > 0}>
+                <RewardPool rewards={sector()!.rewardPool} bonus={sector()!.completionBonus} />
+              </Show>
+            </CardContent>
+          </Card>
+        </Show>
+      </Show>
+    </Show>
   )
 }
 
@@ -159,53 +151,51 @@ export function SectorProgress({
 
 interface InlineProgressProps {
   sector: Sector
-  className?: string
+  class?: string
 }
 
-function InlineProgress({ sector, className }: InlineProgressProps) {
+function InlineProgress(props: InlineProgressProps) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={cn(
-        'flex items-center gap-4 p-4 rounded-xl border',
+    <div
+      class={cn(
+        'flex items-center gap-4 p-4 rounded-xl border transition-all duration-300',
         'bg-[var(--background-secondary)] border-[var(--card-border)]',
-        className
+        props.class
       )}
     >
       <CircularProgress
-        value={sector.progressPercent}
+        value={props.sector.progressPercent}
         size="lg"
         showValue
       />
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <h4 className="font-bold text-[var(--text-primary)] truncate">
-            {sector.name}
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-1">
+          <h4 class="font-bold text-[var(--text-primary)] truncate">
+            {props.sector.name}
           </h4>
           <span
-            className="px-2 py-0.5 rounded-full text-xs font-medium"
+            class="px-2 py-0.5 rounded-full text-xs font-medium"
             style={{
-              backgroundColor: `${sector.color}20`,
-              color: sector.color,
+              "background-color": `${props.sector.color}20`,
+              color: props.sector.color,
             }}
           >
-            {sector.status}
+            {props.sector.status}
           </span>
         </div>
-        <p className="text-sm text-[var(--text-muted)]">
-          {sector.discoveredSynapses.toLocaleString()} of {sector.totalSynapses.toLocaleString()} synapses
+        <p class="text-sm text-[var(--text-muted)]">
+          {props.sector.discoveredSynapses.toLocaleString()} of {props.sector.totalSynapses.toLocaleString()} synapses
         </p>
       </div>
 
-      <div className="flex flex-col items-end">
-        <span className="text-lg font-bold" style={{ color: sector.color }}>
-          {sector.progressPercent.toFixed(1)}%
+      <div class="flex flex-col items-end">
+        <span class="text-lg font-bold" style={{ color: props.sector.color }}>
+          {props.sector.progressPercent.toFixed(1)}%
         </span>
-        <span className="text-xs text-[var(--text-muted)]">Complete</span>
+        <span class="text-xs text-[var(--text-muted)]">Complete</span>
       </div>
-    </motion.div>
+    </div>
   )
 }
 
@@ -213,35 +203,31 @@ function InlineProgress({ sector, className }: InlineProgressProps) {
 
 interface CompactProgressProps {
   sector: Sector
-  className?: string
+  class?: string
 }
 
-function CompactProgress({ sector, className }: CompactProgressProps) {
+function CompactProgress(props: CompactProgressProps) {
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className={cn('flex items-center gap-3', className)}
-    >
+    <div class={cn('flex items-center gap-3 transition-all duration-300', props.class)}>
       <div
-        className="p-2 rounded-lg"
-        style={{ backgroundColor: `${sector.color}20` }}
+        class="p-2 rounded-lg"
+        style={{ "background-color": `${props.sector.color}20` }}
       >
-        <Target className="h-4 w-4" style={{ color: sector.color }} />
+        <Target class="h-4 w-4" style={{ color: props.sector.color }} />
       </div>
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-sm font-medium text-[var(--text-primary)] truncate">
-            {sector.name}
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-sm font-medium text-[var(--text-primary)] truncate">
+            {props.sector.name}
           </span>
-          <span className="text-xs font-bold" style={{ color: sector.color }}>
-            {sector.progressPercent.toFixed(0)}%
+          <span class="text-xs font-bold" style={{ color: props.sector.color }}>
+            {props.sector.progressPercent.toFixed(0)}%
           </span>
         </div>
-        <Progress value={sector.progressPercent} size="sm" showGlow />
+        <Progress value={props.sector.progressPercent} size="sm" showGlow />
       </div>
-    </motion.div>
+    </div>
   )
 }
 
@@ -252,15 +238,15 @@ interface CompletionBadgeProps {
   color: string
 }
 
-function CompletionBadge({ percent, color }: CompletionBadgeProps) {
+function CompletionBadge(props: CompletionBadgeProps) {
   return (
     <div
-      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg"
-      style={{ backgroundColor: `${color}20` }}
+      class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg"
+      style={{ "background-color": `${props.color}20` }}
     >
-      <TrendingUp className="h-4 w-4" style={{ color }} />
-      <span className="text-sm font-bold" style={{ color }}>
-        {percent.toFixed(1)}%
+      <TrendingUp class="h-4 w-4" style={{ color: props.color }} />
+      <span class="text-sm font-bold" style={{ color: props.color }}>
+        {props.percent.toFixed(1)}%
       </span>
     </div>
   )
@@ -269,22 +255,22 @@ function CompletionBadge({ percent, color }: CompletionBadgeProps) {
 // ============ STAT BOX ============
 
 interface StatBoxProps {
-  icon: React.ReactNode
+  icon: JSX.Element
   label: string
   value: string
   color: string
 }
 
-function StatBox({ icon, label, value, color }: StatBoxProps) {
+function StatBox(props: StatBoxProps) {
   return (
-    <div className="p-3 rounded-lg bg-[var(--background-primary)]/50 border border-[var(--card-border)]/30">
-      <div className="flex items-center gap-2 mb-1">
-        <div style={{ color }} className="opacity-80">
-          {icon}
+    <div class="p-3 rounded-lg bg-[var(--background-primary)]/50 border border-[var(--card-border)]/30">
+      <div class="flex items-center gap-2 mb-1">
+        <div style={{ color: props.color }} class="opacity-80">
+          {props.icon}
         </div>
-        <span className="text-xs text-[var(--text-muted)]">{label}</span>
+        <span class="text-xs text-[var(--text-muted)]">{props.label}</span>
       </div>
-      <p className="text-lg font-bold text-[var(--text-primary)]">{value}</p>
+      <p class="text-lg font-bold text-[var(--text-primary)]">{props.value}</p>
     </div>
   )
 }
@@ -296,55 +282,50 @@ interface RewardPoolProps {
   bonus: SectorReward | null
 }
 
-function RewardPool({ rewards, bonus }: RewardPoolProps) {
+function RewardPool(props: RewardPoolProps) {
   return (
     <div>
-      <div className="flex items-center gap-2 mb-3">
-        <Trophy className="h-4 w-4 text-[var(--text-muted)]" />
-        <span className="text-sm font-medium text-[var(--text-primary)]">
+      <div class="flex items-center gap-2 mb-3">
+        <Trophy class="h-4 w-4 text-[var(--text-muted)]" />
+        <span class="text-sm font-medium text-[var(--text-primary)]">
           Reward Pool
         </span>
       </div>
 
-      <div className="space-y-2">
-        {rewards.map((reward, index) => (
-          <motion.div
-            key={index}
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: index * 0.05 }}
-            className="flex items-center justify-between p-3 rounded-lg bg-[var(--background-primary)]/50 border border-[var(--card-border)]/20"
-          >
-            <div className="flex items-center gap-2">
-              <RewardIcon type={reward.type} />
-              <span className="text-sm text-[var(--text-secondary)]">
-                {reward.label}
+      <div class="space-y-2">
+        <For each={props.rewards}>
+          {(reward) => (
+            <div
+              class="flex items-center justify-between p-3 rounded-lg bg-[var(--background-primary)]/50 border border-[var(--card-border)]/20 transition-all duration-200"
+            >
+              <div class="flex items-center gap-2">
+                <RewardIcon type={reward.type} />
+                <span class="text-sm text-[var(--text-secondary)]">
+                  {reward.label}
+                </span>
+              </div>
+              <span class="text-sm font-bold text-[var(--text-primary)]">
+                {formatSectorReward(reward)}
               </span>
             </div>
-            <span className="text-sm font-bold text-[var(--text-primary)]">
-              {formatSectorReward(reward)}
-            </span>
-          </motion.div>
-        ))}
+          )}
+        </For>
 
-        {bonus && (
-          <motion.div
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: rewards.length * 0.05 }}
-            className="flex items-center justify-between p-3 rounded-lg bg-gradient-to-r from-[hsl(var(--accent))]/10 to-transparent border border-[hsl(var(--accent))]/30"
+        <Show when={props.bonus}>
+          <div
+            class="flex items-center justify-between p-3 rounded-lg bg-gradient-to-r from-[hsl(var(--accent))]/10 to-transparent border border-[hsl(var(--accent))]/30 transition-all duration-200"
           >
-            <div className="flex items-center gap-2">
-              <Gift className="h-4 w-4 text-[hsl(var(--accent))]" />
-              <span className="text-sm font-medium text-[hsl(var(--accent))]">
+            <div class="flex items-center gap-2">
+              <Gift class="h-4 w-4 text-[hsl(var(--accent))]" />
+              <span class="text-sm font-medium text-[hsl(var(--accent))]">
                 Completion Bonus
               </span>
             </div>
-            <span className="text-sm font-bold text-[hsl(var(--accent))]">
-              {bonus.label}
+            <span class="text-sm font-bold text-[hsl(var(--accent))]">
+              {props.bonus!.label}
             </span>
-          </motion.div>
-        )}
+          </div>
+        </Show>
       </div>
     </div>
   )
@@ -356,55 +337,60 @@ interface RewardIconProps {
   type: string
 }
 
-function RewardIcon({ type }: RewardIconProps) {
+function RewardIcon(props: RewardIconProps) {
   const iconClass = 'h-4 w-4'
 
-  switch (type) {
-    case 'agi':
-      return <Sparkles className={cn(iconClass, 'text-[#10B981]')} />
-    case 'teneo':
-      return <Sparkles className={cn(iconClass, 'text-[#8B5CF6]')} />
-    case 'nft':
-      return <Gift className={cn(iconClass, 'text-[#F59E0B]')} />
-    case 'lottery_tickets':
-      return <Trophy className={cn(iconClass, 'text-[#EC4899]')} />
-    case 'agentic':
-      return <Sparkles className={cn(iconClass, 'text-[#3B82F6]')} />
-    default:
-      return <Gift className={cn(iconClass, 'text-[var(--text-muted)]')} />
-  }
+  return (
+    <>
+      <Show when={props.type === 'agi'}>
+        <Sparkles class={cn(iconClass, 'text-[#10B981]')} />
+      </Show>
+      <Show when={props.type === 'teneo'}>
+        <Sparkles class={cn(iconClass, 'text-[#8B5CF6]')} />
+      </Show>
+      <Show when={props.type === 'nft'}>
+        <Gift class={cn(iconClass, 'text-[#F59E0B]')} />
+      </Show>
+      <Show when={props.type === 'lottery_tickets'}>
+        <Trophy class={cn(iconClass, 'text-[#EC4899]')} />
+      </Show>
+      <Show when={props.type === 'agentic'}>
+        <Sparkles class={cn(iconClass, 'text-[#3B82F6]')} />
+      </Show>
+      <Show when={!['agi', 'teneo', 'nft', 'lottery_tickets', 'agentic'].includes(props.type)}>
+        <Gift class={cn(iconClass, 'text-[var(--text-muted)]')} />
+      </Show>
+    </>
+  )
 }
 
 // ============ SECTOR PROGRESS MINI ============
 
 interface SectorProgressMiniProps {
-  className?: string
+  class?: string
 }
 
 /**
  * SectorProgressMini - Minimal progress indicator for headers
  */
-export function SectorProgressMini({ className }: SectorProgressMiniProps) {
-  const { activeSector } = useSectorStore()
-
-  if (!activeSector) {
-    return null
-  }
-
+export function SectorProgressMini(props: SectorProgressMiniProps) {
   return (
-    <div className={cn('flex items-center gap-2', className)}>
-      <Target className="h-4 w-4" style={{ color: activeSector.color }} />
-      <span className="text-sm font-medium text-[var(--text-primary)]">
-        {activeSector.progressPercent.toFixed(0)}%
-      </span>
-      <div className="w-16 h-1.5 rounded-full bg-[var(--background-tertiary)] overflow-hidden">
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${activeSector.progressPercent}%` }}
-          className="h-full rounded-full"
-          style={{ backgroundColor: activeSector.color }}
-        />
+    <Show when={sectorStore.activeSector}>
+      <div class={cn('flex items-center gap-2', props.class)}>
+        <Target class="h-4 w-4" style={{ color: sectorStore.activeSector!.color }} />
+        <span class="text-sm font-medium text-[var(--text-primary)]">
+          {sectorStore.activeSector!.progressPercent.toFixed(0)}%
+        </span>
+        <div class="w-16 h-1.5 rounded-full bg-[var(--background-tertiary)] overflow-hidden">
+          <div
+            class="h-full rounded-full transition-all duration-500"
+            style={{
+              "background-color": sectorStore.activeSector!.color,
+              width: `${sectorStore.activeSector!.progressPercent}%`,
+            }}
+          />
+        </div>
       </div>
-    </div>
+    </Show>
   )
 }

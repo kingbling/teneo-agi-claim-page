@@ -1,7 +1,8 @@
+import { Button as KobalteButton } from '@kobalte/core/button'
 import { cva, type VariantProps } from 'class-variance-authority'
-import { Slot } from '@radix-ui/react-slot'
-import type * as React from 'react'
 import { cn } from '@/lib/utils'
+import type { JSX, ParentComponent } from 'solid-js'
+import { Show, splitProps } from 'solid-js'
 
 const buttonVariants = cva(
   'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl font-semibold text-base outline-none transition-all duration-200 select-none active:scale-[0.97] focus-visible:ring-2 focus-visible:ring-[var(--brand-teal-1)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background-primary)] disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0',
@@ -57,131 +58,140 @@ const buttonVariants = cva(
 )
 
 export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
+  extends JSX.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
-  asChild?: boolean
   loading?: boolean
   loadingText?: string
-  leftIcon?: React.ReactNode
-  rightIcon?: React.ReactNode
+  leftIcon?: JSX.Element
+  rightIcon?: JSX.Element
 }
 
-function Button({
-  className,
-  variant,
-  size,
-  asChild = false,
-  loading,
-  loadingText,
-  leftIcon,
-  rightIcon,
-  children,
-  disabled,
-  ...props
-}: ButtonProps) {
-  const Comp = asChild ? Slot : 'button'
+const Button: ParentComponent<ButtonProps> = (props) => {
+  const [local, others] = splitProps(props, [
+    'class',
+    'variant',
+    'size',
+    'loading',
+    'loadingText',
+    'leftIcon',
+    'rightIcon',
+    'children',
+    'disabled',
+  ])
 
   return (
-    <Comp
-      className={cn(
-        buttonVariants({ variant, size }),
-        loading && 'cursor-wait',
-        className
+    <KobalteButton
+      class={cn(
+        buttonVariants({ variant: local.variant, size: local.size }),
+        local.loading && 'cursor-wait',
+        local.class
       )}
-      disabled={disabled || loading}
-      {...props}
+      disabled={local.disabled || local.loading}
+      {...others}
     >
-      {loading ? (
-        <>
-          <svg
-            className="animate-spin size-4"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
-            <circle
-              className="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth="4"
-            />
-            <path
-              className="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-            />
-          </svg>
-          {loadingText && <span>{loadingText}</span>}
-        </>
-      ) : (
-        <>
-          {leftIcon && <span className="shrink-0">{leftIcon}</span>}
-          {children}
-          {rightIcon && <span className="shrink-0">{rightIcon}</span>}
-        </>
-      )}
-    </Comp>
+      <Show
+        when={local.loading}
+        fallback={
+          <>
+            <Show when={local.leftIcon}>
+              <span class="shrink-0">{local.leftIcon}</span>
+            </Show>
+            {local.children}
+            <Show when={local.rightIcon}>
+              <span class="shrink-0">{local.rightIcon}</span>
+            </Show>
+          </>
+        }
+      >
+        <svg
+          class="animate-spin size-4"
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+        >
+          <circle
+            class="opacity-25"
+            cx="12"
+            cy="12"
+            r="10"
+            stroke="currentColor"
+            stroke-width="4"
+          />
+          <path
+            class="opacity-75"
+            fill="currentColor"
+            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+          />
+        </svg>
+        <Show when={local.loadingText}>
+          <span>{local.loadingText}</span>
+        </Show>
+      </Show>
+    </KobalteButton>
   )
 }
 
 // Icon button helper for common actions
 interface IconButtonProps extends Omit<ButtonProps, 'children'> {
-  icon: React.ReactNode
+  icon: JSX.Element
   'aria-label': string
 }
 
-function IconButton({ icon, className, size = 'icon', ...props }: IconButtonProps) {
+const IconButton: ParentComponent<IconButtonProps> = (props) => {
+  const [local, others] = splitProps(props, ['icon', 'class', 'size'])
+
   return (
     <Button
-      size={size}
-      className={cn('p-0', className)}
-      {...props}
+      size={local.size ?? 'icon'}
+      class={cn('p-0', local.class)}
+      {...others}
     >
-      {icon}
+      {local.icon}
     </Button>
   )
 }
 
 // Button group for related actions
 interface ButtonGroupProps {
-  children: React.ReactNode
-  className?: string
+  class?: string
   orientation?: 'horizontal' | 'vertical'
   spacing?: 'none' | 'sm' | 'default'
 }
 
-function ButtonGroup({
-  children,
-  className,
-  orientation = 'horizontal',
-  spacing = 'default',
-}: ButtonGroupProps) {
+const ButtonGroup: ParentComponent<ButtonGroupProps> = (props) => {
+  const [local, others] = splitProps(props, ['class', 'orientation', 'spacing', 'children'])
+
+  const orientation = () => local.orientation ?? 'horizontal'
+  const spacing = () => local.spacing ?? 'default'
+
   const spacingClasses = {
     none: 'gap-0',
     sm: 'gap-1',
     default: 'gap-2',
   }
 
-  // For connected buttons (spacing: none), adjust border radius
-  const connectedClasses = spacing === 'none' && orientation === 'horizontal'
-    ? '[&>*:first-child]:rounded-r-none [&>*:last-child]:rounded-l-none [&>*:not(:first-child):not(:last-child)]:rounded-none [&>*:not(:first-child)]:border-l-0'
-    : spacing === 'none' && orientation === 'vertical'
-    ? '[&>*:first-child]:rounded-b-none [&>*:last-child]:rounded-t-none [&>*:not(:first-child):not(:last-child)]:rounded-none [&>*:not(:first-child)]:border-t-0'
-    : ''
+  const connectedClasses = () => {
+    if (spacing() === 'none' && orientation() === 'horizontal') {
+      return '[&>*:first-child]:rounded-r-none [&>*:last-child]:rounded-l-none [&>*:not(:first-child):not(:last-child)]:rounded-none [&>*:not(:first-child)]:border-l-0'
+    }
+    if (spacing() === 'none' && orientation() === 'vertical') {
+      return '[&>*:first-child]:rounded-b-none [&>*:last-child]:rounded-t-none [&>*:not(:first-child):not(:last-child)]:rounded-none [&>*:not(:first-child)]:border-t-0'
+    }
+    return ''
+  }
 
   return (
     <div
-      className={cn(
+      class={cn(
         'inline-flex',
-        orientation === 'vertical' ? 'flex-col' : 'flex-row',
-        spacingClasses[spacing],
-        connectedClasses,
-        className
+        orientation() === 'vertical' ? 'flex-col' : 'flex-row',
+        spacingClasses[spacing()],
+        connectedClasses(),
+        local.class
       )}
+      {...others}
     >
-      {children}
+      {local.children}
     </div>
   )
 }

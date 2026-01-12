@@ -1,4 +1,5 @@
-import { create } from 'zustand'
+import { createRoot } from 'solid-js'
+import { createStore } from 'solid-js/store'
 import {
   type SynapseType,
   SYNAPSE_CONFIG,
@@ -6,8 +7,8 @@ import {
   formatETA,
   getSynapseTypeLabel,
 } from '@/types/game'
-import { useUserStore } from './userStore'
-import { useShipStore } from './shipStore'
+import { userStore } from './userStore'
+import { shipStore } from './shipStore'
 
 // API Configuration
 const API_URL = import.meta.env.VITE_API_URL
@@ -99,43 +100,6 @@ export interface ExplorationState {
   showSynapseBrowser: boolean
 }
 
-export interface ExplorationActions {
-  // Active Exploration
-  setActiveSynapse: (synapse: ExplorableSynapse | null) => void
-  refreshActiveSynapse: () => Promise<void>
-  refreshCollaborators: () => Promise<void>
-
-  // Exploration Dialog
-  openExplorationDialog: (synapse: ExplorableSynapse) => void
-  closeExplorationDialog: () => void
-  setDialogShip: (shipId: string | null) => void
-  setDialogSpendingRate: (rate: number) => void
-  confirmStartExploration: () => Promise<boolean>
-
-  // Nearby Synapses
-  fetchNearbySynapses: (x: number, y: number, z: number, radius?: number) => Promise<void>
-  filterSynapsesByType: (types: SynapseType[]) => ExplorableSynapse[]
-
-  // Spending Rate
-  updateSpendingRate: (newRate: number) => Promise<boolean>
-  addRecentSpendingRate: (rate: number) => void
-
-  // Leave Exploration
-  leaveCurrentExploration: () => Promise<boolean>
-
-  // UI
-  setShowExplorationPanel: (show: boolean) => void
-  setShowSynapseBrowser: (show: boolean) => void
-
-  // Helpers
-  getEstimatedReward: () => { agi: number; brainXp: number; isLottery: boolean }
-  getMyContributionPercent: () => number
-  getSynapseProgress: () => number
-  canExplore: (synapse: ExplorableSynapse) => { canExplore: boolean; reason: string | null }
-}
-
-export type ExplorationStore = ExplorationState & ExplorationActions
-
 const initialDialogState: ExplorationDialogState = {
   isOpen: false,
   synapse: null,
@@ -161,49 +125,47 @@ const initialState: ExplorationState = {
   showSynapseBrowser: false,
 }
 
-export const useExplorationStore = create<ExplorationStore>((set, get) => ({
-  ...initialState,
+function createExplorationStore() {
+  const [state, setState] = createStore<ExplorationState>({ ...initialState })
 
   // ============ ACTIVE EXPLORATION ============
 
-  setActiveSynapse: (synapse: ExplorableSynapse | null) => {
-    set({ activeSynapse: synapse })
+  const setActiveSynapse = (synapse: ExplorableSynapse | null) => {
+    setState({ activeSynapse: synapse })
     if (synapse) {
-      get().refreshCollaborators()
+      refreshCollaborators()
     } else {
-      set({ collaborators: [] })
+      setState({ collaborators: [] })
     }
-  },
+  }
 
-  refreshActiveSynapse: async () => {
-    const { activeSynapse } = get()
-    if (!activeSynapse) return
+  const refreshActiveSynapse = async () => {
+    if (!state.activeSynapse) return
 
     try {
-      const response = await fetch(`${API_URL}/api/synapses/${activeSynapse.id}`)
+      const response = await fetch(`${API_URL}/api/synapses/${state.activeSynapse.id}`)
       if (!response.ok) return
 
       const synapse = await response.json()
-      set({ activeSynapse: synapse })
+      setState({ activeSynapse: synapse })
     } catch (error) {
       console.error('Failed to refresh active synapse:', error)
     }
-  },
+  }
 
-  refreshCollaborators: async () => {
-    const { activeSynapse } = get()
-    if (!activeSynapse) return
+  const refreshCollaborators = async () => {
+    if (!state.activeSynapse) return
 
-    set({ isLoadingCollaborators: true })
+    setState({ isLoadingCollaborators: true })
     try {
-      const response = await fetch(`${API_URL}/api/synapses/${activeSynapse.id}/explorers`)
+      const response = await fetch(`${API_URL}/api/synapses/${state.activeSynapse.id}/explorers`)
       if (!response.ok) {
-        set({ isLoadingCollaborators: false })
+        setState({ isLoadingCollaborators: false })
         return
       }
 
       const explorers = await response.json()
-      const userId = useUserStore.getState().userId
+      const userId = userStore.userId
 
       // Calculate contribution percentages
       const totalPoints = explorers.reduce((sum: number, e: Collaborator) => sum + e.pointsContributed, 0)
@@ -214,20 +176,20 @@ export const useExplorationStore = create<ExplorationStore>((set, get) => ({
         isCurrentUser: e.userId === userId,
       }))
 
-      set({ collaborators, isLoadingCollaborators: false })
+      setState({ collaborators, isLoadingCollaborators: false })
     } catch (error) {
       console.error('Failed to fetch collaborators:', error)
-      set({ isLoadingCollaborators: false })
+      setState({ isLoadingCollaborators: false })
     }
-  },
+  }
 
   // ============ EXPLORATION DIALOG ============
 
-  openExplorationDialog: (synapse: ExplorableSynapse) => {
-    const idleShips = useShipStore.getState().userShips.filter(s => s.state === 'idle')
+  const openExplorationDialog = (synapse: ExplorableSynapse) => {
+    const idleShips = shipStore.userShips.filter(s => s.state === 'idle')
     const config = SYNAPSE_CONFIG[synapse.synapseType]
 
-    set({
+    setState({
       explorationDialog: {
         isOpen: true,
         synapse,
@@ -237,178 +199,160 @@ export const useExplorationStore = create<ExplorationStore>((set, get) => ({
         error: null,
       },
     })
-  },
+  }
 
-  closeExplorationDialog: () => {
-    set({ explorationDialog: initialDialogState })
-  },
+  const closeExplorationDialog = () => {
+    setState({ explorationDialog: initialDialogState })
+  }
 
-  setDialogShip: (shipId: string | null) => {
-    set((state) => ({
-      explorationDialog: { ...state.explorationDialog, selectedShipId: shipId },
-    }))
-  },
+  const setDialogShip = (shipId: string | null) => {
+    setState('explorationDialog', { ...state.explorationDialog, selectedShipId: shipId })
+  }
 
-  setDialogSpendingRate: (rate: number) => {
-    const { explorationDialog } = get()
-    if (!explorationDialog.synapse) return
+  const setDialogSpendingRate = (rate: number) => {
+    if (!state.explorationDialog.synapse) return
 
-    const config = SYNAPSE_CONFIG[explorationDialog.synapse.synapseType]
+    const config = SYNAPSE_CONFIG[state.explorationDialog.synapse.synapseType]
     const clampedRate = Math.max(10, Math.min(rate, config.maxPerMin))
 
-    set((state) => ({
-      explorationDialog: { ...state.explorationDialog, spendingRate: clampedRate },
-    }))
-  },
+    setState('explorationDialog', { ...state.explorationDialog, spendingRate: clampedRate })
+  }
 
-  confirmStartExploration: async (): Promise<boolean> => {
-    const { explorationDialog } = get()
-    if (!explorationDialog.synapse || !explorationDialog.selectedShipId) {
-      set((state) => ({
-        explorationDialog: { ...state.explorationDialog, error: 'Please select a ship' },
-      }))
+  const confirmStartExploration = async (): Promise<boolean> => {
+    if (!state.explorationDialog.synapse || !state.explorationDialog.selectedShipId) {
+      setState('explorationDialog', { ...state.explorationDialog, error: 'Please select a ship' })
       return false
     }
 
-    set((state) => ({
-      explorationDialog: { ...state.explorationDialog, isStarting: true, error: null },
-    }))
+    setState('explorationDialog', { ...state.explorationDialog, isStarting: true, error: null })
 
-    const success = await useShipStore.getState().startExploration(
-      explorationDialog.selectedShipId,
-      explorationDialog.synapse.id,
-      explorationDialog.spendingRate
+    const success = await shipStore.startExploration(
+      state.explorationDialog.selectedShipId,
+      state.explorationDialog.synapse.id,
+      state.explorationDialog.spendingRate
     )
 
     if (success) {
       // Add to recent spending rates
-      get().addRecentSpendingRate(explorationDialog.spendingRate)
+      addRecentSpendingRate(state.explorationDialog.spendingRate)
 
       // Set this as the active synapse
-      set({ activeSynapse: explorationDialog.synapse })
+      setState({ activeSynapse: state.explorationDialog.synapse })
 
       // Close dialog
-      get().closeExplorationDialog()
+      closeExplorationDialog()
 
       // Refresh collaborators
-      get().refreshCollaborators()
+      refreshCollaborators()
 
       return true
     } else {
-      set((state) => ({
-        explorationDialog: {
-          ...state.explorationDialog,
-          isStarting: false,
-          error: 'Failed to start exploration',
-        },
-      }))
+      setState('explorationDialog', {
+        ...state.explorationDialog,
+        isStarting: false,
+        error: 'Failed to start exploration',
+      })
       return false
     }
-  },
+  }
 
   // ============ NEARBY SYNAPSES ============
 
-  fetchNearbySynapses: async (x: number, y: number, z: number, radius: number = 50) => {
-    set({ isLoadingNearbySynapses: true })
+  const fetchNearbySynapses = async (x: number, y: number, z: number, radius: number = 50) => {
+    setState({ isLoadingNearbySynapses: true })
     try {
       const response = await fetch(
         `${API_URL}/api/synapses/nearby?x=${x}&y=${y}&z=${z}&radius=${radius}`
       )
       if (!response.ok) {
-        set({ isLoadingNearbySynapses: false })
+        setState({ isLoadingNearbySynapses: false })
         return
       }
 
       const synapses = await response.json()
-      set({ nearbySynapses: synapses, isLoadingNearbySynapses: false })
+      setState({ nearbySynapses: synapses, isLoadingNearbySynapses: false })
     } catch (error) {
       console.error('Failed to fetch nearby synapses:', error)
-      set({ isLoadingNearbySynapses: false })
+      setState({ isLoadingNearbySynapses: false })
     }
-  },
+  }
 
-  filterSynapsesByType: (types: SynapseType[]): ExplorableSynapse[] => {
-    const { nearbySynapses } = get()
-    if (types.length === 0) return nearbySynapses
-    return nearbySynapses.filter(s => types.includes(s.synapseType))
-  },
+  const filterSynapsesByType = (types: SynapseType[]): ExplorableSynapse[] => {
+    if (types.length === 0) return state.nearbySynapses
+    return state.nearbySynapses.filter(s => types.includes(s.synapseType))
+  }
 
   // ============ SPENDING RATE ============
 
-  updateSpendingRate: async (newRate: number): Promise<boolean> => {
-    const { activeSynapse } = get()
-    if (!activeSynapse) return false
+  const updateSpendingRate = async (newRate: number): Promise<boolean> => {
+    if (!state.activeSynapse) return false
 
     // Find user's ship exploring this synapse
-    const userShips = useShipStore.getState().userShips
+    const userShips = shipStore.userShips
     const exploringShip = userShips.find(
-      s => s.state === 'exploring' && s.currentSynapseId === activeSynapse.id
+      s => s.state === 'exploring' && s.currentSynapseId === state.activeSynapse?.id
     )
 
     if (!exploringShip) return false
 
-    const config = SYNAPSE_CONFIG[activeSynapse.synapseType]
+    const config = SYNAPSE_CONFIG[state.activeSynapse.synapseType]
     const clampedRate = Math.max(10, Math.min(newRate, config.maxPerMin))
 
-    const success = await useShipStore.getState().updateSpendingRate(exploringShip.id, clampedRate)
+    const success = await shipStore.updateSpendingRate(exploringShip.id, clampedRate)
 
     if (success) {
-      get().addRecentSpendingRate(clampedRate)
-      get().refreshActiveSynapse()
+      addRecentSpendingRate(clampedRate)
+      refreshActiveSynapse()
     }
 
     return success
-  },
+  }
 
-  addRecentSpendingRate: (rate: number) => {
-    set((state) => {
-      const rates = state.recentSpendingRates.filter(r => r !== rate)
-      return {
-        recentSpendingRates: [rate, ...rates].slice(0, 6),  // Keep last 6 rates
-      }
+  const addRecentSpendingRate = (rate: number) => {
+    const rates = state.recentSpendingRates.filter(r => r !== rate)
+    setState({
+      recentSpendingRates: [rate, ...rates].slice(0, 6),  // Keep last 6 rates
     })
-  },
+  }
 
   // ============ LEAVE EXPLORATION ============
 
-  leaveCurrentExploration: async (): Promise<boolean> => {
-    const { activeSynapse } = get()
-    if (!activeSynapse) return false
+  const leaveCurrentExploration = async (): Promise<boolean> => {
+    if (!state.activeSynapse) return false
 
     // Find user's ship exploring this synapse
-    const userShips = useShipStore.getState().userShips
+    const userShips = shipStore.userShips
     const exploringShip = userShips.find(
-      s => s.state === 'exploring' && s.currentSynapseId === activeSynapse.id
+      s => s.state === 'exploring' && s.currentSynapseId === state.activeSynapse?.id
     )
 
     if (!exploringShip) return false
 
-    const success = await useShipStore.getState().leaveExploration(exploringShip.id)
+    const success = await shipStore.leaveExploration(exploringShip.id)
 
     if (success) {
-      set({ activeSynapse: null, collaborators: [] })
+      setState({ activeSynapse: null, collaborators: [] })
     }
 
     return success
-  },
+  }
 
   // ============ UI ============
 
-  setShowExplorationPanel: (show: boolean) => set({ showExplorationPanel: show }),
-  setShowSynapseBrowser: (show: boolean) => set({ showSynapseBrowser: show }),
+  const setShowExplorationPanel = (show: boolean) => setState({ showExplorationPanel: show })
+  const setShowSynapseBrowser = (show: boolean) => setState({ showSynapseBrowser: show })
 
   // ============ HELPERS ============
 
-  getEstimatedReward: () => {
-    const { activeSynapse, collaborators } = get()
-    if (!activeSynapse) return { agi: 0, brainXp: 0, isLottery: false }
+  const getEstimatedReward = () => {
+    if (!state.activeSynapse) return { agi: 0, brainXp: 0, isLottery: false }
 
-    const config = SYNAPSE_CONFIG[activeSynapse.synapseType]
+    const config = SYNAPSE_CONFIG[state.activeSynapse.synapseType]
     const isLottery = config.distribution === 'lottery'
 
     // Find user's contribution
-    const userId = useUserStore.getState().userId
-    const myContrib = collaborators.find(c => c.userId === userId)
+    const userId = userStore.userId
+    const myContrib = state.collaborators.find(c => c.userId === userId)
 
     if (isLottery) {
       // Lottery: Full reward if win, consolation ticket if lose
@@ -426,24 +370,23 @@ export const useExplorationStore = create<ExplorationStore>((set, get) => ({
         isLottery: false,
       }
     }
-  },
+  }
 
-  getMyContributionPercent: (): number => {
-    const { collaborators } = get()
-    const userId = useUserStore.getState().userId
-    const myContrib = collaborators.find(c => c.userId === userId)
+  const getMyContributionPercent = (): number => {
+    const userId = userStore.userId
+    const myContrib = state.collaborators.find(c => c.userId === userId)
     return myContrib ? myContrib.contributionPercent : 0
-  },
+  }
 
-  getSynapseProgress: (): number => {
-    const { activeSynapse } = get()
-    if (!activeSynapse || activeSynapse.pointsRequired === 0) return 0
-    return Math.min(100, (activeSynapse.pointsAccumulated / activeSynapse.pointsRequired) * 100)
-  },
+  const getSynapseProgress = (): number => {
+    if (!state.activeSynapse || state.activeSynapse.pointsRequired === 0) return 0
+    return Math.min(100, (state.activeSynapse.pointsAccumulated / state.activeSynapse.pointsRequired) * 100)
+  }
 
-  canExplore: (synapse: ExplorableSynapse): { canExplore: boolean; reason: string | null } => {
+  const canExplore = (synapse: ExplorableSynapse): { canExplore: boolean; reason: string | null } => {
     // Check brain level requirement
-    const { brainLevel, unlockedSynapseTypes } = useUserStore.getState()
+    const brainLevel = userStore.brainLevel
+    const unlockedSynapseTypes = userStore.unlockedSynapseTypes
     const config = SYNAPSE_CONFIG[synapse.synapseType]
 
     if (!unlockedSynapseTypes.includes(synapse.synapseType)) {
@@ -470,7 +413,7 @@ export const useExplorationStore = create<ExplorationStore>((set, get) => ({
     }
 
     // Check if user has idle ships
-    const idleShips = useShipStore.getState().userShips.filter(s => s.state === 'idle')
+    const idleShips = shipStore.userShips.filter(s => s.state === 'idle')
     if (idleShips.length === 0) {
       return {
         canExplore: false,
@@ -479,16 +422,77 @@ export const useExplorationStore = create<ExplorationStore>((set, get) => ({
     }
 
     return { canExplore: true, reason: null }
-  },
-}))
+  }
 
-// ============ SELECTORS ============
+  return {
+    // ============ REACTIVE GETTERS ============
+    // Current Exploration
+    get activeSynapse() { return state.activeSynapse },
+    get collaborators() { return state.collaborators },
+    get isLoadingCollaborators() { return state.isLoadingCollaborators },
 
-export const selectActiveSynapse = (state: ExplorationStore) => state.activeSynapse
-export const selectCollaborators = (state: ExplorationStore) => state.collaborators
-export const selectExplorationDialog = (state: ExplorationStore) => state.explorationDialog
-export const selectNearbySynapses = (state: ExplorationStore) => state.nearbySynapses
-export const selectIsExploring = (state: ExplorationStore) => state.activeSynapse !== null
+    // Exploration Dialog
+    get explorationDialog() { return state.explorationDialog },
+
+    // Available Synapses
+    get nearbySynapses() { return state.nearbySynapses },
+    get isLoadingNearbySynapses() { return state.isLoadingNearbySynapses },
+
+    // Spending Rate History
+    get recentSpendingRates() { return state.recentSpendingRates },
+
+    // UI State
+    get showExplorationPanel() { return state.showExplorationPanel },
+    get showSynapseBrowser() { return state.showSynapseBrowser },
+
+    // ============ COMPUTED SELECTORS ============
+    get isExploring() { return state.activeSynapse !== null },
+
+    // ============ ACTIONS ============
+    // Active Exploration
+    setActiveSynapse,
+    refreshActiveSynapse,
+    refreshCollaborators,
+
+    // Exploration Dialog
+    openExplorationDialog,
+    closeExplorationDialog,
+    setDialogShip,
+    setDialogSpendingRate,
+    confirmStartExploration,
+
+    // Nearby Synapses
+    fetchNearbySynapses,
+    filterSynapsesByType,
+
+    // Spending Rate
+    updateSpendingRate,
+    addRecentSpendingRate,
+
+    // Leave Exploration
+    leaveCurrentExploration,
+
+    // UI
+    setShowExplorationPanel,
+    setShowSynapseBrowser,
+
+    // Helpers
+    getEstimatedReward,
+    getMyContributionPercent,
+    getSynapseProgress,
+    canExplore,
+  }
+}
+
+export const explorationStore = createRoot(createExplorationStore)
+
+// ============ SELECTOR FUNCTIONS (for compatibility) ============
+
+export const selectActiveSynapse = () => explorationStore.activeSynapse
+export const selectCollaborators = () => explorationStore.collaborators
+export const selectExplorationDialog = () => explorationStore.explorationDialog
+export const selectNearbySynapses = () => explorationStore.nearbySynapses
+export const selectIsExploring = () => explorationStore.isExploring
 
 // ============ HELPER FUNCTIONS ============
 
@@ -507,9 +511,9 @@ export function getSynapseRewardText(synapse: ExplorableSynapse): string {
   const isLottery = config.distribution === 'lottery'
 
   if (isLottery) {
-    return `🎰 Lottery: ${agiFormatted} AGI + ${xpFormatted} XP`
+    return `Lottery: ${agiFormatted} AGI + ${xpFormatted} XP`
   } else {
-    return `💰 Fair Share: Up to ${agiFormatted} AGI + ${xpFormatted} XP`
+    return `Fair Share: Up to ${agiFormatted} AGI + ${xpFormatted} XP`
   }
 }
 

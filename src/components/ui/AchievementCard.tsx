@@ -1,5 +1,7 @@
 import { cn } from '@/lib/utils'
-import { Trophy, Star, Lock } from 'lucide-react'
+import { Trophy, Star, Lock } from 'lucide-solid'
+import { Show, type Component } from 'solid-js'
+import type { JSX } from 'solid-js'
 
 interface AchievementCardProps {
   id: string
@@ -10,92 +12,88 @@ interface AchievementCardProps {
   total: number
   unlocked: boolean
   reward: number
-  className?: string
+  class?: string
 }
 
-export function AchievementCard({
-  title,
-  description,
-  icon,
-  progress,
-  total,
-  unlocked,
-  reward,
-  className,
-}: AchievementCardProps) {
-  const progressPercent = Math.min(100, Math.round((progress / total) * 100))
+export const AchievementCard: Component<AchievementCardProps> = (props) => {
+  const progressPercent = () => Math.min(100, Math.round((props.progress / props.total) * 100))
 
   return (
     <div
-      className={cn(
+      class={cn(
         'relative rounded-xl border-2 p-4 transition-all',
-        unlocked
+        props.unlocked
           ? 'bg-gradient-to-br from-[hsl(var(--accent))]/10 to-[hsl(var(--state-solving))]/10 border-[hsl(var(--accent))]/30'
           : 'bg-muted/30 border-border/50 opacity-75',
-        className
+        props.class
       )}
     >
       {/* Header */}
-      <div className="flex items-start gap-3 mb-3">
+      <div class="flex items-start gap-3 mb-3">
         {/* Icon */}
         <div
-          className={cn(
+          class={cn(
             'w-12 h-12 rounded-xl flex items-center justify-center text-2xl',
-            unlocked
+            props.unlocked
               ? 'bg-gradient-to-br from-[hsl(var(--accent))] to-[hsl(var(--state-solving))] shadow-lg shadow-[hsl(var(--accent))]/25'
               : 'bg-muted'
           )}
         >
-          {unlocked ? icon : <Lock className="w-6 h-6 text-muted-foreground" />}
+          <Show
+            when={props.unlocked}
+            fallback={<Lock class="w-6 h-6 text-muted-foreground" />}
+          >
+            {props.icon}
+          </Show>
         </div>
 
         {/* Content */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2">
-            <h4 className={cn(
+        <div class="flex-1 min-w-0">
+          <div class="flex items-start justify-between gap-2">
+            <h4 class={cn(
               'font-bold text-sm leading-tight',
-              unlocked ? 'text-[hsl(var(--accent))]' : 'text-muted-foreground'
+              props.unlocked ? 'text-[hsl(var(--accent))]' : 'text-muted-foreground'
             )}>
-              {title}
+              {props.title}
             </h4>
-            {unlocked && (
-              <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-[hsl(var(--accent))]/20 border border-[hsl(var(--accent))]/30">
-                <Star className="w-3 h-3 text-[hsl(var(--accent))] fill-current" />
-                <span className="text-xs font-bold text-[hsl(var(--accent))]">+{reward}</span>
+            <Show when={props.unlocked}>
+              <div class="flex items-center gap-1 px-2 py-0.5 rounded-full bg-[hsl(var(--accent))]/20 border border-[hsl(var(--accent))]/30">
+                <Star class="w-3 h-3 text-[hsl(var(--accent))] fill-current" />
+                <span class="text-xs font-bold text-[hsl(var(--accent))]">+{props.reward}</span>
               </div>
-            )}
+            </Show>
           </div>
-          <p className="text-xs text-muted-foreground mt-1">{description}</p>
+          <p class="text-xs text-muted-foreground mt-1">{props.description}</p>
         </div>
       </div>
 
       {/* Progress Bar */}
-      {!unlocked && (
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Progress</span>
-            <span className="font-semibold tabular-nums">
-              {progress} / {total}
+      <Show when={!props.unlocked}>
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-muted-foreground">Progress</span>
+            <span class="font-semibold tabular-nums">
+              {props.progress} / {props.total}
             </span>
           </div>
-          <div className="h-2 rounded-full bg-muted overflow-hidden">
+          <div class="h-2 rounded-full bg-muted overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-[hsl(var(--accent))] to-[hsl(var(--state-solving))] rounded-full transition-all duration-500"
-              style={{ width: `${progressPercent}%` }}
+              class="h-full bg-gradient-to-r from-[hsl(var(--accent))] to-[hsl(var(--state-solving))] rounded-full transition-all duration-500"
+              style={{ width: `${progressPercent()}%` }}
             />
           </div>
         </div>
-      )}
+      </Show>
 
       {/* Unlocked Badge */}
-      {unlocked && (
-        <div className="mt-3 pt-3 border-t border-[hsl(var(--accent))]/20">
-          <div className="flex items-center gap-2 text-xs">
-            <Trophy className="w-4 h-4 text-[hsl(var(--accent))]" />
-            <span className="font-semibold text-[hsl(var(--accent))]">Achievement Unlocked!</span>
+      <Show when={props.unlocked}>
+        <div class="mt-3 pt-3 border-t border-[hsl(var(--accent))]/20">
+          <div class="flex items-center gap-2 text-xs">
+            <Trophy class="w-4 h-4 text-[hsl(var(--accent))]" />
+            <span class="font-semibold text-[hsl(var(--accent))]">Achievement Unlocked!</span>
           </div>
         </div>
-      )}
+      </Show>
     </div>
   )
 }

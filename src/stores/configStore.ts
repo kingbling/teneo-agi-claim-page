@@ -1,11 +1,12 @@
 /**
- * Game Configuration Store
+ * Game Configuration Store - SolidJS Version
  *
  * Fetches game configuration from server and provides helper methods
  * for client-side calculations and predictions.
  */
 
-import { create } from 'zustand'
+import { createRoot } from 'solid-js'
+import { createStore } from 'solid-js/store'
 
 const API_URL = import.meta.env.VITE_API_URL
 
@@ -71,52 +72,41 @@ export interface AgentTrait {
 
 // ============ STORE ============
 
-interface ConfigStore {
-  // State
+interface ConfigState {
   gameConfig: GameConfig | null
   isLoaded: boolean
   error: string | null
-
-  // Actions
-  fetchConfig: () => Promise<void>
-
-  // Helper methods
-  calculateAgentCost: (traits: AgentTrait[]) => number
-  calculateRepairCost: (creationCost: number) => number
-  calculateBurnRate: (efficientLevel: number) => number
-  calculateTravelTime: (distance: number, swiftLevel: number) => number
-  calculateTravelFuelCost: (distance: number, swiftLevel: number, efficientLevel: number) => number
-  calculateSearchSpeed: (swiftLevel: number) => number
-  getTraitMultiplier: (traitType: string, property: keyof TraitEffect) => number
-  getAgentLimit: (tier: string, stakedAmount: number) => number
-  isPositionInBounds: (x: number, y: number, z: number) => boolean
 }
 
-export const useConfigStore = create<ConfigStore>((set, get) => ({
-  // Initial state
-  gameConfig: null,
-  isLoaded: false,
-  error: null,
+function createConfigStore() {
+  const [state, setState] = createStore<ConfigState>({
+    gameConfig: null,
+    isLoaded: false,
+    error: null,
+  })
 
   // Fetch config from server
-  fetchConfig: async () => {
+  const fetchConfig = async () => {
     try {
       const response = await fetch(`${API_URL}/api/config`)
       if (!response.ok) {
         throw new Error(`Failed to fetch config: ${response.statusText}`)
       }
       const config: GameConfig = await response.json()
-      set({ gameConfig: config, isLoaded: true, error: null })
+      setState({ gameConfig: config, isLoaded: true, error: null })
       console.log('Game config loaded:', config.version)
     } catch (error) {
       console.error('Failed to fetch game config:', error)
-      set({ error: error instanceof Error ? error.message : 'Unknown error', isLoaded: false })
+      setState({
+        error: error instanceof Error ? error.message : 'Unknown error',
+        isLoaded: false
+      })
     }
-  },
+  }
 
   // Calculate agent creation cost
-  calculateAgentCost: (traits: AgentTrait[]) => {
-    const config = get().gameConfig
+  const calculateAgentCost = (traits: AgentTrait[]): number => {
+    const config = state.gameConfig
     if (!config) throw new Error('Game config not loaded')
 
     const traitCost = traits.reduce(
@@ -124,19 +114,19 @@ export const useConfigStore = create<ConfigStore>((set, get) => ({
       0
     )
     return config.costs.AGENT_BASE_COST + traitCost
-  },
+  }
 
   // Calculate repair cost (50% of creation cost)
-  calculateRepairCost: (creationCost: number) => {
-    const config = get().gameConfig
+  const calculateRepairCost = (creationCost: number): number => {
+    const config = state.gameConfig
     if (!config) throw new Error('Game config not loaded')
 
     return Math.ceil(creationCost * config.costs.REPAIR_COST_MULTIPLIER)
-  },
+  }
 
   // Calculate effective burn rate with efficient trait
-  calculateBurnRate: (efficientLevel: number) => {
-    const config = get().gameConfig
+  const calculateBurnRate = (efficientLevel: number): number => {
+    const config = state.gameConfig
     if (!config) throw new Error('Game config not loaded')
 
     const efficientTrait = config.traits.efficient
@@ -145,11 +135,11 @@ export const useConfigStore = create<ConfigStore>((set, get) => ({
     const reduction = efficientLevel * efficientTrait.burnReduction
     const maxReduction = 0.75 // Max 75% reduction
     return config.rates.BASE_BURN_RATE * (1 - Math.min(reduction, maxReduction))
-  },
+  }
 
   // Calculate travel time based on distance and swift trait
-  calculateTravelTime: (distance: number, swiftLevel: number) => {
-    const config = get().gameConfig
+  const calculateTravelTime = (distance: number, swiftLevel: number): number => {
+    const config = state.gameConfig
     if (!config) throw new Error('Game config not loaded')
 
     const swiftTrait = config.traits.swift
@@ -158,18 +148,22 @@ export const useConfigStore = create<ConfigStore>((set, get) => ({
       : 1
 
     return (distance / config.rates.BASE_SPEED) * 1000 / speedBonus // Returns milliseconds
-  },
+  }
 
   // Calculate fuel cost for travel
-  calculateTravelFuelCost: (distance: number, swiftLevel: number, efficientLevel: number) => {
-    const travelTime = get().calculateTravelTime(distance, swiftLevel)
-    const burnRate = get().calculateBurnRate(efficientLevel)
+  const calculateTravelFuelCost = (
+    distance: number,
+    swiftLevel: number,
+    efficientLevel: number
+  ): number => {
+    const travelTime = calculateTravelTime(distance, swiftLevel)
+    const burnRate = calculateBurnRate(efficientLevel)
     return Math.ceil((travelTime / 1000) * burnRate)
-  },
+  }
 
   // Calculate search speed with swift trait
-  calculateSearchSpeed: (swiftLevel: number) => {
-    const config = get().gameConfig
+  const calculateSearchSpeed = (swiftLevel: number): number => {
+    const config = state.gameConfig
     if (!config) throw new Error('Game config not loaded')
 
     const swiftTrait = config.traits.swift
@@ -178,11 +172,11 @@ export const useConfigStore = create<ConfigStore>((set, get) => ({
       : 1
 
     return config.rates.BASE_SEARCH_SPEED * speedBonus
-  },
+  }
 
   // Get trait multiplier value
-  getTraitMultiplier: (traitType: string, property: keyof TraitEffect) => {
-    const config = get().gameConfig
+  const getTraitMultiplier = (traitType: string, property: keyof TraitEffect): number => {
+    const config = state.gameConfig
     if (!config) throw new Error('Game config not loaded')
 
     const trait = config.traits[traitType]
@@ -190,11 +184,11 @@ export const useConfigStore = create<ConfigStore>((set, get) => ({
 
     const value = trait[property] as number | undefined
     return value ?? 0
-  },
+  }
 
   // Get agent limit based on tier and staking
-  getAgentLimit: (tier: string, stakedAmount: number) => {
-    const config = get().gameConfig
+  const getAgentLimit = (tier: string, stakedAmount: number): number => {
+    const config = state.gameConfig
     if (!config) throw new Error('Game config not loaded')
 
     const baseLimit = config.tiers.limits[tier] ?? config.tiers.limits.free
@@ -211,11 +205,11 @@ export const useConfigStore = create<ConfigStore>((set, get) => ({
     }
 
     return baseLimit
-  },
+  }
 
   // Check if position is within brain bounds
-  isPositionInBounds: (x: number, y: number, z: number) => {
-    const config = get().gameConfig
+  const isPositionInBounds = (x: number, y: number, z: number): boolean => {
+    const config = state.gameConfig
     if (!config) throw new Error('Game config not loaded')
 
     const { BRAIN_BOUNDS_MIN, BRAIN_BOUNDS_MAX } = config.world
@@ -227,8 +221,33 @@ export const useConfigStore = create<ConfigStore>((set, get) => ({
       z >= BRAIN_BOUNDS_MIN &&
       z <= BRAIN_BOUNDS_MAX
     )
-  },
-}))
+  }
 
-// Export for convenient access
-export default useConfigStore
+  return {
+    // State accessors (reactive getters)
+    get gameConfig() { return state.gameConfig },
+    get isLoaded() { return state.isLoaded },
+    get error() { return state.error },
+
+    // Actions
+    fetchConfig,
+
+    // Helper methods
+    calculateAgentCost,
+    calculateRepairCost,
+    calculateBurnRate,
+    calculateTravelTime,
+    calculateTravelFuelCost,
+    calculateSearchSpeed,
+    getTraitMultiplier,
+    getAgentLimit,
+    isPositionInBounds,
+  }
+}
+
+// Create singleton store outside component tree
+export const configStore = createRoot(createConfigStore)
+
+// Legacy export for compatibility
+export const useConfigStore = () => configStore
+export default configStore

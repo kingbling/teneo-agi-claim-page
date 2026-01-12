@@ -1,6 +1,6 @@
-import { useMemo } from 'react'
-import { useShipStore } from '@/stores/shipStore'
-import { useUserStore } from '@/stores/userStore'
+import { createMemo } from 'solid-js'
+import { shipStore } from '@/stores/shipStore'
+import { userStore } from '@/stores/userStore'
 
 /**
  * useDashboardStats - Computes dashboard statistics from stores
@@ -10,12 +10,10 @@ import { useUserStore } from '@/stores/userStore'
  * recalculating on every render. Used by DashboardHeader and other components.
  */
 export function useDashboardStats() {
-  const { userShips, discoveryProgress } = useShipStore()
-  const { userPoints, totalAgiEarned } = useUserStore()
-
-  return useMemo(() => {
+  const stats = createMemo(() => {
     // Safeguard: ensure userShips is always an array
-    const ships = Array.isArray(userShips) ? userShips : []
+    const ships = Array.isArray(shipStore.userShips) ? shipStore.userShips : []
+    const discoveryProgress = shipStore.discoveryProgress
 
     const discoveryPercent = discoveryProgress.total > 0
       ? ((discoveryProgress.discovered / discoveryProgress.total) * 100).toFixed(2)
@@ -32,12 +30,14 @@ export function useDashboardStats() {
       totalShips,
       totalLoot,
       hasIdleShips,
-      userPoints,
-      totalAgiEarned,
+      userPoints: userStore.userPoints,
+      totalAgiEarned: userStore.totalAgiEarned,
       // Backwards compatibility aliases
       activeAgents: activeShips,
       totalAgents: totalShips,
       hasIdleAgents: hasIdleShips,
     }
-  }, [userShips, discoveryProgress, userPoints, totalAgiEarned])
+  })
+
+  return stats
 }

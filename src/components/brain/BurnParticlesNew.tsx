@@ -1,9 +1,8 @@
-import { useRef, useMemo } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { onMount, onCleanup, createEffect, createMemo } from 'solid-js'
 import * as THREE from 'three'
+import { useThree, useFrame } from '@/three/hooks'
 import type { Agent } from '@/types/agent'
-import { BRAIN_SCALE } from './core/brainConstants'
-import { useScaledTime } from './core/useBrainTime'
+import { BRAIN_SCALE, TRANCE_CONFIG } from './core/brainConstants'
 
 interface BurnParticlesProps {
   userAgents: Agent[]
@@ -69,24 +68,36 @@ const BURN_FRAGMENT_SHADER = `
 
 const PARTICLES_PER_AGENT = 30
 
-export function BurnParticlesNew({ userAgents }: BurnParticlesProps) {
-  const pointsRef = useRef<THREE.Points>(null)
-  const materialRef = useRef<THREE.ShaderMaterial>(null)
+export function BurnParticlesNew(props: BurnParticlesProps) {
+  const { scene } = useThree()
+
+  // Three.js objects (imperative)
+  let points: THREE.Points | null = null
+  let geometry: THREE.BufferGeometry | null = null
+  let material: THREE.ShaderMaterial | null = null
+
+  // Time tracking for scaled time (trance mode)
+  let scaledTime = 0
+  let lastRealTime = 0
 
   // Filter to only solving/deploying agents (active burn effect)
-  const activeAgents = useMemo(() => {
-    return userAgents.filter(a => a.state === 'solving' || a.state === 'deploying')
-  }, [userAgents])
+  const activeAgents = createMemo(() => {
+    return props.userAgents.filter(a => a.state === 'solving' || a.state === 'deploying')
+  })
 
   // Build geometry data for burn particles around active agents
-  const { positions, sizes, lives, velocities } = useMemo(() => {
-    const count = activeAgents.length * PARTICLES_PER_AGENT
+  const geometryData = createMemo(() => {
+    const agents = activeAgents()
+    const count = agents.length * PARTICLES_PER_AGENT
+
+    if (count === 0) return null
+
     const positions = new Float32Array(count * 3)
     const sizes = new Float32Array(count)
     const lives = new Float32Array(count)
     const velocities = new Float32Array(count * 3)
 
-    activeAgents.forEach((agent, agentIndex) => {
+    agents.forEach((agent, agentIndex) => {
       const baseX = agent.positionX * BRAIN_SCALE.x
       const baseY = agent.positionY * BRAIN_SCALE.y
       const baseZ = agent.positionZ * BRAIN_SCALE.z
@@ -115,37 +126,76 @@ export function BurnParticlesNew({ userAgents }: BurnParticlesProps) {
     })
 
     return { positions, sizes, lives, velocities }
-  }, [activeAgents])
+  })
 
-  // Time for animations
-  const scaledTime = useScaledTime()
+  onMount(() => {
+    const sceneObj = scene()
+    if (!sceneObj) {
+      console.warn('BurnParticlesNew: Scene not available')
+      return
+    }
 
-  // Update shader uniforms
-  useFrame(() => {
-    if (materialRef.current) {
-      materialRef.current.uniforms.uTime.value = scaledTime
+    // Create geometry
+    geometry = new THREE.BufferGeometry()
+
+    // Create shader material
+    material = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 } },
+      vertexShader: BURN_VERTEX_SHADER,
+      fragmentShader: BURN_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+
+    // Create points
+    points = new THREE.Points(geometry, material)
+    points.frustumCulled = false
+    sceneObj.add(points)
+
+    onCleanup(() => {
+      if (points && sceneObj) {
+        sceneObj.remove(points)
+      }
+      geometry?.dispose()
+      material?.dispose()
+    })
+  })
+
+  // Update geometry when active agents change
+  createEffect(() => {
+    const data = geometryData()
+    if (!geometry) return
+
+    if (!data) {
+      // No active agents - clear geometry
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3))
+      geometry.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(0), 1))
+      geometry.setAttribute('aLife', new THREE.BufferAttribute(new Float32Array(0), 1))
+      geometry.setAttribute('aVelocity', new THREE.BufferAttribute(new Float32Array(0), 3))
+      return
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
+    geometry.setAttribute('aLife', new THREE.BufferAttribute(data.lives, 1))
+    geometry.setAttribute('aVelocity', new THREE.BufferAttribute(data.velocities, 3))
+  })
+
+  // Update shader uniforms with scaled time
+  useFrame(({ clock }) => {
+    // Update scaled time (trance mode support deprecated - always normal scale)
+    const timeScale = TRANCE_CONFIG.normalScale
+
+    const realTime = clock.getElapsedTime()
+    const delta = realTime - lastRealTime
+    lastRealTime = realTime
+    scaledTime += delta * timeScale
+
+    if (material) {
+      material.uniforms.uTime.value = scaledTime
     }
   })
 
-  if (activeAgents.length === 0) return null
-
-  return (
-    <points ref={pointsRef} frustumCulled={false}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-        <bufferAttribute attach="attributes-aSize" args={[sizes, 1]} />
-        <bufferAttribute attach="attributes-aLife" args={[lives, 1]} />
-        <bufferAttribute attach="attributes-aVelocity" args={[velocities, 3]} />
-      </bufferGeometry>
-      <shaderMaterial
-        ref={materialRef}
-        uniforms={{ uTime: { value: 0 } }}
-        vertexShader={BURN_VERTEX_SHADER}
-        fragmentShader={BURN_FRAGMENT_SHADER}
-        transparent
-        depthWrite={false}
-        blending={THREE.AdditiveBlending}
-      />
-    </points>
-  )
+  return null
 }

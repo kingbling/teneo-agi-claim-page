@@ -1,6 +1,6 @@
-import { useRef, useMemo, useEffect, memo } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { onMount, onCleanup, createEffect, createMemo } from 'solid-js'
 import * as THREE from 'three'
+import { useThree, useFrame } from '@/three/hooks'
 import { BRAIN_REGION_VERTEX_SHADER, BRAIN_REGION_FRAGMENT_SHADER } from './core/shaderUtils'
 import { LOD_PARTICLE_COUNTS } from './core/brainConstants'
 import { FUNCTIONAL_BRAIN_REGIONS } from '@/constants/brainRegions'
@@ -164,22 +164,22 @@ function generateBrainSynapses(count: number) {
     colors[i * 3 + 1] = Math.min(1.0, cg * 1.3)
     colors[i * 3 + 2] = Math.min(1.0, cb * 1.3)
 
-    // Sizes - with noise-based variation for organic feel
+    // Phase 4.2: Increased particle sizes by ~50% for better visibility
     const sizeRoll = Math.random()
     const depthVariation = Math.abs(noise3D(x * 0.5, y * 0.5, z * 0.5))
 
     if (sizeRoll > 0.995) {
-      // Rare large "hub" synapses (0.5%)
-      sizes[i] = 2.5 + depthVariation * 0.5
+      // Rare large "hub" synapses (0.5%) - very prominent
+      sizes[i] = 12.0 + depthVariation * 3.0
     } else if (sizeRoll > 0.97) {
-      // Medium-large particles (2.5%)
-      sizes[i] = 1.8 + depthVariation * 0.3
+      // Medium-large particles (2.5%) - noticeable
+      sizes[i] = 9.0 + depthVariation * 2.0
     } else if (sizeRoll > 0.85) {
-      // Medium particles (12%)
-      sizes[i] = 1.3 + depthVariation * 0.2
+      // Medium particles (12%) - visible detail
+      sizes[i] = 7.0 + depthVariation * 1.5
     } else {
-      // Base particles with variation (85%)
-      sizes[i] = 0.8 + depthVariation * 0.4
+      // Base particles with variation (85%) - good coverage
+      sizes[i] = 5.0 + depthVariation * 2.0
     }
   }
 
@@ -190,60 +190,81 @@ function generateBrainSynapses(count: number) {
  * SynapseParticlesMinimal - Brain-shaped particle cloud with region coloring
  * Supports LOD-based particle count: more particles when zoomed in, fewer when zoomed out
  */
-export const SynapseParticlesMinimal = memo(function SynapseParticlesMinimal({
-  count,
-  selectedRegionIndex = -1,
-  highlightIntensity = 0,
-  lodLevel = 1,
-}: SynapseParticlesMinimalProps) {
-  const pointsRef = useRef<THREE.Points>(null)
-  const materialRef = useRef<THREE.ShaderMaterial>(null)
+export function SynapseParticlesMinimal(props: SynapseParticlesMinimalProps) {
+  const { scene } = useThree()
+
+  let points: THREE.Points | null = null
+  let geometry: THREE.BufferGeometry | null = null
+  let material: THREE.ShaderMaterial | null = null
 
   // Calculate particle count based on LOD level or use provided count
-  const particleCount = count ?? (
-    lodLevel === 0 ? LOD_PARTICLE_COUNTS.lod0 :
-    lodLevel === 2 ? LOD_PARTICLE_COUNTS.lod2 :
-    LOD_PARTICLE_COUNTS.lod1
-  )
+  const particleCount = createMemo(() => {
+    if (props.count !== undefined) return props.count
+    const lodLevel = props.lodLevel ?? 1
+    return lodLevel === 0 ? LOD_PARTICLE_COUNTS.lod0 :
+           lodLevel === 2 ? LOD_PARTICLE_COUNTS.lod2 :
+           LOD_PARTICLE_COUNTS.lod1
+  })
 
-  const { positions, colors, sizes, regionIds } = useMemo(() => {
-    return generateBrainSynapses(particleCount)
-  }, [particleCount])
+  onMount(() => {
+    const sceneObj = scene()
+    if (!sceneObj) {
+      console.warn('SynapseParticlesMinimal: Scene not available')
+      return
+    }
+
+    // Generate brain synapse data
+    const count = particleCount()
+    const { positions, colors, sizes, regionIds } = generateBrainSynapses(count)
+
+    // Create geometry
+    geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    geometry.setAttribute('aColor', new THREE.BufferAttribute(colors, 3))
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1))
+    geometry.setAttribute('aRegionId', new THREE.BufferAttribute(regionIds, 1))
+
+    // Create shader material with normal blending to prevent dense area blowout
+    material = new THREE.ShaderMaterial({
+      uniforms: {
+        uSelectedRegion: { value: props.selectedRegionIndex ?? -1 },
+        uHighlightIntensity: { value: props.highlightIntensity ?? 0 },
+      },
+      vertexShader: BRAIN_REGION_VERTEX_SHADER,
+      fragmentShader: BRAIN_REGION_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending,  // Changed from Additive to prevent bloom blowout
+    })
+
+    // Create points and add to scene
+    points = new THREE.Points(geometry, material)
+    points.frustumCulled = false
+    sceneObj.add(points)
+
+    onCleanup(() => {
+      if (points && sceneObj) {
+        sceneObj.remove(points)
+      }
+      geometry?.dispose()
+      material?.dispose()
+    })
+  })
 
   // Update uniforms when region selection changes
-  useEffect(() => {
-    if (materialRef.current) {
-      materialRef.current.uniforms.uSelectedRegion.value = selectedRegionIndex
-      materialRef.current.uniforms.uHighlightIntensity.value = highlightIntensity
-    }
-  }, [selectedRegionIndex, highlightIntensity])
-
-  // Update highlight intensity each frame for smooth animation
-  useFrame(() => {
-    if (materialRef.current) {
-      materialRef.current.uniforms.uHighlightIntensity.value = highlightIntensity
+  createEffect(() => {
+    if (material) {
+      material.uniforms.uSelectedRegion.value = props.selectedRegionIndex ?? -1
+      material.uniforms.uHighlightIntensity.value = props.highlightIntensity ?? 0
     }
   })
 
-  return (
-    <points ref={pointsRef} frustumCulled={false}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-        <bufferAttribute attach="attributes-aColor" args={[colors, 3]} />
-        <bufferAttribute attach="attributes-aSize" args={[sizes, 1]} />
-        <bufferAttribute attach="attributes-aRegionId" args={[regionIds, 1]} />
-      </bufferGeometry>
-      <shaderMaterial
-        ref={materialRef}
-        uniforms={{
-          uSelectedRegion: { value: selectedRegionIndex },
-          uHighlightIntensity: { value: highlightIntensity },
-        }}
-        vertexShader={BRAIN_REGION_VERTEX_SHADER}
-        fragmentShader={BRAIN_REGION_FRAGMENT_SHADER}
-        transparent
-        depthWrite={false}
-      />
-    </points>
-  )
-})
+  // Update highlight intensity each frame for smooth animation
+  useFrame(() => {
+    if (material) {
+      material.uniforms.uHighlightIntensity.value = props.highlightIntensity ?? 0
+    }
+  })
+
+  return null
+}

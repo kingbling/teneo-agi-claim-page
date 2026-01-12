@@ -1,10 +1,11 @@
-import { create } from 'zustand'
+import { createRoot } from 'solid-js'
+import { createStore } from 'solid-js/store'
 import {
   type ItemType,
   type ItemDefinition,
   ITEM_DEFINITIONS,
 } from '@/types/game'
-import { useUserStore } from './userStore'
+import { userStore } from './userStore'
 
 // API Configuration
 const API_URL = import.meta.env.VITE_API_URL
@@ -76,40 +77,6 @@ export interface ShopState {
   }
 }
 
-export interface ShopActions {
-  // Shop Items
-  fetchShopItems: () => Promise<void>
-  getShopItemsByCategory: (category: ItemCategory) => ShopItem[]
-
-  // User Items
-  fetchUserItems: () => Promise<void>
-  getActiveItems: () => UserItem[]
-  getOwnedItemByType: (itemType: ItemType) => UserItem | undefined
-
-  // Purchase Flow
-  openPurchaseConfirmation: (itemType: ItemType) => void
-  closePurchaseConfirmation: () => void
-  confirmPurchase: () => Promise<boolean>
-  purchaseItem: (itemType: ItemType) => Promise<PurchaseResult>
-
-  // Item Activation
-  activateItem: (itemId: string) => Promise<boolean>
-  deactivateItem: (itemId: string) => Promise<boolean>
-
-  // Effect Calculations
-  calculateActiveEffects: () => void
-  getSpeedMultiplier: () => number
-  getLuckBonus: () => number
-  getXpMultiplier: () => number
-  isRadarActive: () => boolean
-  isCloakActive: () => boolean
-
-  // Cleanup
-  checkExpiredItems: () => void
-}
-
-export type ShopStore = ShopState & ShopActions
-
 // Item categories for filtering
 export type ItemCategory = 'speed' | 'luck' | 'xp' | 'radar' | 'cloak' | 'all'
 
@@ -147,291 +114,22 @@ const initialState: ShopState = {
   },
 }
 
-export const useShopStore = create<ShopStore>((set, get) => ({
-  ...initialState,
+function createShopStore() {
+  const [state, setState] = createStore<ShopState>({ ...initialState })
 
-  // ============ SHOP ITEMS ============
+  // ============ HELPER: GET ACTIVE ITEMS ============
 
-  fetchShopItems: async () => {
-    set({ isLoadingShopItems: true })
-
-    try {
-      // Fetch user's owned items first
-      await get().fetchUserItems()
-
-      const { userItems } = get()
-      const agenticBalance = useUserStore.getState().agenticBalance
-
-      // Build shop items from definitions with user state
-      const shopItems: ShopItem[] = Object.values(ITEM_DEFINITIONS).map((def) => {
-        const ownedItem = userItems.find(
-          (ui) => ui.itemType === def.id && (ui.expiresAt === null || ui.expiresAt > Date.now())
-        )
-        const canAfford = agenticBalance >= def.cost
-
-        return {
-          ...def,
-          isOwned: !!ownedItem,
-          ownedItem,
-          canPurchase: canAfford && !ownedItem,
-          purchaseError: !canAfford
-            ? `Need ${def.cost - agenticBalance} more $AGENTIC`
-            : ownedItem
-            ? 'Already owned'
-            : undefined,
-        }
-      })
-
-      set({ shopItems, isLoadingShopItems: false })
-    } catch (error) {
-      console.error('Failed to fetch shop items:', error)
-      set({ isLoadingShopItems: false })
-    }
-  },
-
-  getShopItemsByCategory: (category: ItemCategory): ShopItem[] => {
-    const { shopItems } = get()
-    if (category === 'all') return shopItems
-    return shopItems.filter((item) => ITEM_CATEGORIES[item.id] === category)
-  },
-
-  // ============ USER ITEMS ============
-
-  fetchUserItems: async () => {
-    const userId = useUserStore.getState().userId
-    if (!userId) return
-
-    set({ isLoadingUserItems: true })
-
-    try {
-      const response = await fetch(`${API_URL}/api/users/${userId}/items`)
-      if (!response.ok) {
-        throw new Error('Failed to fetch user items')
-      }
-
-      const items: UserItem[] = await response.json()
-
-      // Filter out expired items
-      const validItems = items.filter(
-        (item) => item.expiresAt === null || item.expiresAt > Date.now()
-      )
-
-      set({ userItems: validItems, isLoadingUserItems: false })
-
-      // Recalculate active effects
-      get().calculateActiveEffects()
-    } catch (error) {
-      console.error('Failed to fetch user items:', error)
-      set({ isLoadingUserItems: false })
-    }
-  },
-
-  getActiveItems: (): UserItem[] => {
-    const { userItems } = get()
+  const getActiveItems = (): UserItem[] => {
     const now = Date.now()
-    return userItems.filter(
+    return state.userItems.filter(
       (item) => item.isActive && (item.expiresAt === null || item.expiresAt > now)
     )
-  },
-
-  getOwnedItemByType: (itemType: ItemType): UserItem | undefined => {
-    const { userItems } = get()
-    const now = Date.now()
-    return userItems.find(
-      (item) =>
-        item.itemType === itemType &&
-        (item.expiresAt === null || item.expiresAt > now)
-    )
-  },
-
-  // ============ PURCHASE FLOW ============
-
-  openPurchaseConfirmation: (itemType: ItemType) => {
-    const item = ITEM_DEFINITIONS[itemType]
-    if (!item) return
-
-    set({
-      confirmationDialog: {
-        isOpen: true,
-        item,
-        isPurchasing: false,
-        error: null,
-      },
-    })
-  },
-
-  closePurchaseConfirmation: () => {
-    set({
-      confirmationDialog: {
-        isOpen: false,
-        item: null,
-        isPurchasing: false,
-        error: null,
-      },
-    })
-  },
-
-  confirmPurchase: async (): Promise<boolean> => {
-    const { confirmationDialog } = get()
-    if (!confirmationDialog.item) return false
-
-    set({
-      confirmationDialog: {
-        ...confirmationDialog,
-        isPurchasing: true,
-        error: null,
-      },
-    })
-
-    const result = await get().purchaseItem(confirmationDialog.item.id)
-
-    if (result.success) {
-      get().closePurchaseConfirmation()
-      // Refresh shop items to update state
-      await get().fetchShopItems()
-      return true
-    } else {
-      set({
-        confirmationDialog: {
-          ...get().confirmationDialog,
-          isPurchasing: false,
-          error: result.error || 'Purchase failed',
-        },
-      })
-      return false
-    }
-  },
-
-  purchaseItem: async (itemType: ItemType): Promise<PurchaseResult> => {
-    const userId = useUserStore.getState().userId
-    if (!userId) {
-      return { success: false, error: 'Not logged in' }
-    }
-
-    const item = ITEM_DEFINITIONS[itemType]
-    if (!item) {
-      return { success: false, error: 'Invalid item' }
-    }
-
-    const agenticBalance = useUserStore.getState().agenticBalance
-    if (agenticBalance < item.cost) {
-      return { success: false, error: 'Insufficient $AGENTIC balance' }
-    }
-
-    set({ purchasingItemId: itemType, purchaseError: null })
-
-    try {
-      const response = await fetch(`${API_URL}/api/shop/purchase`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          itemType,
-        }),
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || 'Purchase failed')
-      }
-
-      const result = await response.json()
-
-      // Update user's agentic balance
-      useUserStore.getState().spendAgentic(item.cost)
-
-      // Add item to user's inventory
-      const newItem: UserItem = {
-        id: result.itemId || `${itemType}-${Date.now()}`,
-        itemType,
-        purchasedAt: Date.now(),
-        expiresAt: item.duration ? Date.now() + item.duration * 60 * 1000 : null,
-        isActive: true,
-        usesRemaining: item.duration === null ? 1 : null,
-      }
-
-      set((state) => ({
-        userItems: [...state.userItems, newItem],
-        purchasingItemId: null,
-      }))
-
-      // Recalculate effects
-      get().calculateActiveEffects()
-
-      return {
-        success: true,
-        item: newItem,
-        newBalance: agenticBalance - item.cost,
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Purchase failed'
-      set({ purchasingItemId: null, purchaseError: errorMessage })
-      return { success: false, error: errorMessage }
-    }
-  },
-
-  // ============ ITEM ACTIVATION ============
-
-  activateItem: async (itemId: string): Promise<boolean> => {
-    const { userItems } = get()
-    const item = userItems.find((i) => i.id === itemId)
-    if (!item) return false
-
-    try {
-      const response = await fetch(`${API_URL}/api/items/${itemId}/activate`, {
-        method: 'POST',
-      })
-
-      if (!response.ok) {
-        return false
-      }
-
-      set((state) => ({
-        userItems: state.userItems.map((i) =>
-          i.id === itemId ? { ...i, isActive: true } : i
-        ),
-      }))
-
-      get().calculateActiveEffects()
-      return true
-    } catch (error) {
-      console.error('Failed to activate item:', error)
-      return false
-    }
-  },
-
-  deactivateItem: async (itemId: string): Promise<boolean> => {
-    const { userItems } = get()
-    const item = userItems.find((i) => i.id === itemId)
-    if (!item) return false
-
-    try {
-      const response = await fetch(`${API_URL}/api/items/${itemId}/deactivate`, {
-        method: 'POST',
-      })
-
-      if (!response.ok) {
-        return false
-      }
-
-      set((state) => ({
-        userItems: state.userItems.map((i) =>
-          i.id === itemId ? { ...i, isActive: false } : i
-        ),
-      }))
-
-      get().calculateActiveEffects()
-      return true
-    } catch (error) {
-      console.error('Failed to deactivate item:', error)
-      return false
-    }
-  },
+  }
 
   // ============ EFFECT CALCULATIONS ============
 
-  calculateActiveEffects: () => {
-    const activeItems = get().getActiveItems()
+  const calculateActiveEffects = () => {
+    const activeItems = getActiveItems()
 
     const effects = {
       speedBoost: 1.0,
@@ -464,54 +162,344 @@ export const useShopStore = create<ShopStore>((set, get) => ({
       }
     })
 
-    set({ activeEffects: effects })
-  },
+    setState({ activeEffects: effects })
+  }
 
-  getSpeedMultiplier: (): number => {
-    return get().activeEffects.speedBoost
-  },
+  // ============ USER ITEMS ============
 
-  getLuckBonus: (): number => {
-    return get().activeEffects.luckBonus
-  },
+  const fetchUserItems = async () => {
+    const userId = userStore.userId
+    if (!userId) return
 
-  getXpMultiplier: (): number => {
-    return get().activeEffects.xpAmplifier
-  },
+    setState({ isLoadingUserItems: true })
 
-  isRadarActive: (): boolean => {
-    return get().activeEffects.radarActive
-  },
+    try {
+      const response = await fetch(`${API_URL}/api/users/${userId}/items`)
+      if (!response.ok) {
+        throw new Error('Failed to fetch user items')
+      }
 
-  isCloakActive: (): boolean => {
-    return get().activeEffects.cloakActive
-  },
+      const items: UserItem[] = await response.json()
+
+      // Filter out expired items
+      const validItems = items.filter(
+        (item) => item.expiresAt === null || item.expiresAt > Date.now()
+      )
+
+      setState({ userItems: validItems, isLoadingUserItems: false })
+
+      // Recalculate active effects
+      calculateActiveEffects()
+    } catch (error) {
+      console.error('Failed to fetch user items:', error)
+      setState({ isLoadingUserItems: false })
+    }
+  }
+
+  // ============ SHOP ITEMS ============
+
+  const fetchShopItems = async () => {
+    setState({ isLoadingShopItems: true })
+
+    try {
+      // Fetch user's owned items first
+      await fetchUserItems()
+
+      const agenticBalance = userStore.agenticBalance
+
+      // Build shop items from definitions with user state
+      const shopItems: ShopItem[] = Object.values(ITEM_DEFINITIONS).map((def) => {
+        const ownedItem = state.userItems.find(
+          (ui) => ui.itemType === def.id && (ui.expiresAt === null || ui.expiresAt > Date.now())
+        )
+        const canAfford = agenticBalance >= def.cost
+
+        return {
+          ...def,
+          isOwned: !!ownedItem,
+          ownedItem,
+          canPurchase: canAfford && !ownedItem,
+          purchaseError: !canAfford
+            ? `Need ${def.cost - agenticBalance} more $AGENTIC`
+            : ownedItem
+            ? 'Already owned'
+            : undefined,
+        }
+      })
+
+      setState({ shopItems, isLoadingShopItems: false })
+    } catch (error) {
+      console.error('Failed to fetch shop items:', error)
+      setState({ isLoadingShopItems: false })
+    }
+  }
+
+  const getShopItemsByCategory = (category: ItemCategory): ShopItem[] => {
+    if (category === 'all') return state.shopItems
+    return state.shopItems.filter((item) => ITEM_CATEGORIES[item.id] === category)
+  }
+
+  const getOwnedItemByType = (itemType: ItemType): UserItem | undefined => {
+    const now = Date.now()
+    return state.userItems.find(
+      (item) =>
+        item.itemType === itemType &&
+        (item.expiresAt === null || item.expiresAt > now)
+    )
+  }
+
+  // ============ PURCHASE FLOW ============
+
+  const openPurchaseConfirmation = (itemType: ItemType) => {
+    const item = ITEM_DEFINITIONS[itemType]
+    if (!item) return
+
+    setState({
+      confirmationDialog: {
+        isOpen: true,
+        item,
+        isPurchasing: false,
+        error: null,
+      },
+    })
+  }
+
+  const closePurchaseConfirmation = () => {
+    setState({
+      confirmationDialog: {
+        isOpen: false,
+        item: null,
+        isPurchasing: false,
+        error: null,
+      },
+    })
+  }
+
+  const purchaseItem = async (itemType: ItemType): Promise<PurchaseResult> => {
+    const userId = userStore.userId
+    if (!userId) {
+      return { success: false, error: 'Not logged in' }
+    }
+
+    const item = ITEM_DEFINITIONS[itemType]
+    if (!item) {
+      return { success: false, error: 'Invalid item' }
+    }
+
+    const agenticBalance = userStore.agenticBalance
+    if (agenticBalance < item.cost) {
+      return { success: false, error: 'Insufficient $AGENTIC balance' }
+    }
+
+    setState({ purchasingItemId: itemType, purchaseError: null })
+
+    try {
+      const response = await fetch(`${API_URL}/api/shop/purchase`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          itemType,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Purchase failed')
+      }
+
+      const result = await response.json()
+
+      // Update user's agentic balance
+      userStore.spendAgentic(item.cost)
+
+      // Add item to user's inventory
+      const newItem: UserItem = {
+        id: result.itemId || `${itemType}-${Date.now()}`,
+        itemType,
+        purchasedAt: Date.now(),
+        expiresAt: item.duration ? Date.now() + item.duration * 60 * 1000 : null,
+        isActive: true,
+        usesRemaining: item.duration === null ? 1 : null,
+      }
+
+      setState({
+        userItems: [...state.userItems, newItem],
+        purchasingItemId: null,
+      })
+
+      // Recalculate effects
+      calculateActiveEffects()
+
+      return {
+        success: true,
+        item: newItem,
+        newBalance: agenticBalance - item.cost,
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Purchase failed'
+      setState({ purchasingItemId: null, purchaseError: errorMessage })
+      return { success: false, error: errorMessage }
+    }
+  }
+
+  const confirmPurchase = async (): Promise<boolean> => {
+    if (!state.confirmationDialog.item) return false
+
+    setState({
+      confirmationDialog: {
+        ...state.confirmationDialog,
+        isPurchasing: true,
+        error: null,
+      },
+    })
+
+    const result = await purchaseItem(state.confirmationDialog.item.id)
+
+    if (result.success) {
+      closePurchaseConfirmation()
+      // Refresh shop items to update state
+      await fetchShopItems()
+      return true
+    } else {
+      setState({
+        confirmationDialog: {
+          ...state.confirmationDialog,
+          isPurchasing: false,
+          error: result.error || 'Purchase failed',
+        },
+      })
+      return false
+    }
+  }
+
+  // ============ ITEM ACTIVATION ============
+
+  const activateItem = async (itemId: string): Promise<boolean> => {
+    const item = state.userItems.find((i) => i.id === itemId)
+    if (!item) return false
+
+    try {
+      const response = await fetch(`${API_URL}/api/items/${itemId}/activate`, {
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        return false
+      }
+
+      setState({
+        userItems: state.userItems.map((i) =>
+          i.id === itemId ? { ...i, isActive: true } : i
+        ),
+      })
+
+      calculateActiveEffects()
+      return true
+    } catch (error) {
+      console.error('Failed to activate item:', error)
+      return false
+    }
+  }
+
+  const deactivateItem = async (itemId: string): Promise<boolean> => {
+    const item = state.userItems.find((i) => i.id === itemId)
+    if (!item) return false
+
+    try {
+      const response = await fetch(`${API_URL}/api/items/${itemId}/deactivate`, {
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        return false
+      }
+
+      setState({
+        userItems: state.userItems.map((i) =>
+          i.id === itemId ? { ...i, isActive: false } : i
+        ),
+      })
+
+      calculateActiveEffects()
+      return true
+    } catch (error) {
+      console.error('Failed to deactivate item:', error)
+      return false
+    }
+  }
 
   // ============ CLEANUP ============
 
-  checkExpiredItems: () => {
+  const checkExpiredItems = () => {
     const now = Date.now()
-    const { userItems } = get()
 
-    const validItems = userItems.filter(
+    const validItems = state.userItems.filter(
       (item) => item.expiresAt === null || item.expiresAt > now
     )
 
-    if (validItems.length !== userItems.length) {
-      set({ userItems: validItems })
-      get().calculateActiveEffects()
+    if (validItems.length !== state.userItems.length) {
+      setState({ userItems: validItems })
+      calculateActiveEffects()
     }
-  },
-}))
+  }
 
-// ============ SELECTORS ============
+  return {
+    // ============ REACTIVE GETTERS ============
+    // Shop Items
+    get shopItems() { return state.shopItems },
+    get isLoadingShopItems() { return state.isLoadingShopItems },
 
-export const selectShopItems = (state: ShopStore) => state.shopItems
-export const selectUserItems = (state: ShopStore) => state.userItems
-export const selectActiveEffects = (state: ShopStore) => state.activeEffects
-export const selectConfirmationDialog = (state: ShopStore) => state.confirmationDialog
-export const selectIsLoadingShop = (state: ShopStore) => state.isLoadingShopItems
-export const selectPurchasingItemId = (state: ShopStore) => state.purchasingItemId
+    // User Items
+    get userItems() { return state.userItems },
+    get isLoadingUserItems() { return state.isLoadingUserItems },
+
+    // Purchase State
+    get purchasingItemId() { return state.purchasingItemId },
+    get purchaseError() { return state.purchaseError },
+
+    // Confirmation Dialog
+    get confirmationDialog() { return state.confirmationDialog },
+
+    // Active Effects
+    get activeEffects() { return state.activeEffects },
+
+    // ============ COMPUTED GETTERS ============
+    get speedMultiplier() { return state.activeEffects.speedBoost },
+    get luckBonus() { return state.activeEffects.luckBonus },
+    get xpMultiplier() { return state.activeEffects.xpAmplifier },
+    get isRadarActive() { return state.activeEffects.radarActive },
+    get isCloakActive() { return state.activeEffects.cloakActive },
+
+    // ============ ACTIONS ============
+    // Shop Items
+    fetchShopItems,
+    getShopItemsByCategory,
+
+    // User Items
+    fetchUserItems,
+    getActiveItems,
+    getOwnedItemByType,
+
+    // Purchase Flow
+    openPurchaseConfirmation,
+    closePurchaseConfirmation,
+    confirmPurchase,
+    purchaseItem,
+
+    // Item Activation
+    activateItem,
+    deactivateItem,
+
+    // Effect Calculations
+    calculateActiveEffects,
+
+    // Cleanup
+    checkExpiredItems,
+  }
+}
+
+export const shopStore = createRoot(createShopStore)
 
 // ============ HELPER FUNCTIONS ============
 

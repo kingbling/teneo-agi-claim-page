@@ -1,6 +1,6 @@
-import { useRef, useMemo, useEffect, useState } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { onMount, onCleanup, createEffect, createMemo, createSignal } from 'solid-js'
 import * as THREE from 'three'
+import { useThree, useFrame } from '@/three/hooks'
 import type { SpaceDiscoveryEvent, SpaceCluster } from '@/types/agent'
 import { BRAIN_SCALE } from './core/brainConstants'
 
@@ -64,7 +64,7 @@ const ELECTRON_FRAGMENT_SHADER = `
   }
 `
 
-const PARTICLES_PER_FLOW = 20
+const PARTICLES_PER_FLOW = 150
 const FLOW_DURATION = 2.0 // seconds in scaled time
 
 // Find the nearest neighbor cluster to a position
@@ -118,34 +118,75 @@ function cubicBezier(
   return result
 }
 
-export function ElectronFlowNew({ recentDiscoveries, spaceClusters, maxFlows = 5 }: ElectronFlowProps) {
-  const pointsRef = useRef<THREE.Points>(null)
-  const materialRef = useRef<THREE.ShaderMaterial>(null)
-  const [activeFlows, setActiveFlows] = useState<ElectronFlow[]>([])
+export function ElectronFlowNew(props: ElectronFlowProps) {
+  const { scene } = useThree()
+
+  // Three.js objects (imperative)
+  let points: THREE.Points | null = null
+  let geometry: THREE.BufferGeometry | null = null
+  let material: THREE.ShaderMaterial | null = null
 
   // Track processed discoveries to avoid duplicates
-  const processedIds = useRef(new Set<string>())
+  let processedIds = new Set<string>()
 
   // Track scaled time for consistent flow lifecycle
-  const scaledTimeRef = useRef(0)
-  const lastTimeRef = useRef(0)
+  let scaledTimeRef = 0
+  let lastTimeRef = 0
 
   // Masterplan 2026: No trance mode, use normal time scale
   const timeScale = 1.0
 
+  // Active flows signal
+  const [activeFlows, setActiveFlows] = createSignal<ElectronFlow[]>([])
+
+  // Max flows from props
+  const maxFlows = () => props.maxFlows ?? 5
+
+  // Build geometry for all active flows
+  const geometryData = createMemo(() => {
+    const flows = activeFlows()
+    const count = flows.length * PARTICLES_PER_FLOW
+
+    if (count === 0) return null
+
+    const positions = new Float32Array(count * 3)
+    const sizes = new Float32Array(count)
+    const progresses = new Float32Array(count)
+
+    flows.forEach((flow, flowIndex) => {
+      for (let p = 0; p < PARTICLES_PER_FLOW; p++) {
+        const i = flowIndex * PARTICLES_PER_FLOW + p
+        const t = p / (PARTICLES_PER_FLOW - 1)
+
+        const pos = cubicBezier(t, flow.startPoint, flow.controlPoint1, flow.controlPoint2, flow.endPoint)
+        positions[i * 3] = pos.x
+        positions[i * 3 + 1] = pos.y
+        positions[i * 3 + 2] = pos.z
+
+        sizes[i] = 4.0 + Math.sin(t * Math.PI) * 3.0
+        progresses[i] = t
+      }
+    })
+
+    return { positions, sizes, progresses }
+  })
+
   // Create new flows when discoveries happen
-  useEffect(() => {
+  createEffect(() => {
+    const recentDiscoveries = props.recentDiscoveries
+    const spaceClusters = props.spaceClusters
+
     if (recentDiscoveries.length === 0) return
 
     const latestDiscovery = recentDiscoveries[0]
-    if (processedIds.current.has(latestDiscovery.spaceId)) return
+    if (processedIds.has(latestDiscovery.spaceId)) return
 
-    processedIds.current.add(latestDiscovery.spaceId)
+    processedIds.add(latestDiscovery.spaceId)
 
     // Only keep last 100 processed IDs
-    if (processedIds.current.size > 100) {
-      const ids = Array.from(processedIds.current)
-      processedIds.current = new Set(ids.slice(-50))
+    if (processedIds.size > 100) {
+      const ids = Array.from(processedIds)
+      processedIds = new Set(ids.slice(-50))
     }
 
     // Create flow to discovery position
@@ -178,71 +219,101 @@ export function ElectronFlowNew({ recentDiscoveries, spaceClusters, maxFlows = 5
         endPoint,
         controlPoint1,
         controlPoint2,
-        startTime: scaledTimeRef.current,
+        startTime: scaledTimeRef,
         duration: FLOW_DURATION,
       }
 
-      setActiveFlows(prev => [...prev.slice(-maxFlows + 1), newFlow])
+      setActiveFlows(prev => [...prev.slice(-maxFlows() + 1), newFlow])
     }
-  }, [recentDiscoveries, spaceClusters, maxFlows])
+  })
 
-  // Remove expired flows using scaled time
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const currentTime = scaledTimeRef.current
-      setActiveFlows(prev => prev.filter(f => currentTime - f.startTime < f.duration))
-    }, 500)
-    return () => clearInterval(interval)
-  }, [])
+  onMount(() => {
+    const sceneObj = scene()
+    if (!sceneObj) {
+      console.warn('ElectronFlowNew: Scene not available')
+      return
+    }
 
-  // Build geometry for all active flows
-  const { positions, sizes, progresses } = useMemo(() => {
-    const count = activeFlows.length * PARTICLES_PER_FLOW
-    const positions = new Float32Array(count * 3)
-    const sizes = new Float32Array(count)
-    const progresses = new Float32Array(count)
+    // Create geometry
+    geometry = new THREE.BufferGeometry()
 
-    activeFlows.forEach((flow, flowIndex) => {
-      for (let p = 0; p < PARTICLES_PER_FLOW; p++) {
-        const i = flowIndex * PARTICLES_PER_FLOW + p
-        const t = p / (PARTICLES_PER_FLOW - 1)
-
-        const pos = cubicBezier(t, flow.startPoint, flow.controlPoint1, flow.controlPoint2, flow.endPoint)
-        positions[i * 3] = pos.x
-        positions[i * 3 + 1] = pos.y
-        positions[i * 3 + 2] = pos.z
-
-        sizes[i] = 4.0 + Math.sin(t * Math.PI) * 3.0
-        progresses[i] = t
-      }
+    // Create shader material
+    material = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 } },
+      vertexShader: ELECTRON_VERTEX_SHADER,
+      fragmentShader: ELECTRON_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
     })
 
-    return { positions, sizes, progresses }
-  }, [activeFlows])
+    // Create points
+    points = new THREE.Points(geometry, material)
+    points.frustumCulled = false
+    sceneObj.add(points)
+
+    // Remove expired flows periodically
+    const interval = setInterval(() => {
+      const currentTime = scaledTimeRef
+      setActiveFlows(prev => prev.filter(f => currentTime - f.startTime < f.duration))
+    }, 500)
+
+    onCleanup(() => {
+      clearInterval(interval)
+      if (points && sceneObj) {
+        sceneObj.remove(points)
+      }
+      geometry?.dispose()
+      material?.dispose()
+    })
+  })
+
+  // Update geometry when active flows change
+  createEffect(() => {
+    const data = geometryData()
+    if (!geometry) return
+
+    if (!data) {
+      // No active flows - clear geometry
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3))
+      geometry.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(0), 1))
+      geometry.setAttribute('aProgress', new THREE.BufferAttribute(new Float32Array(0), 1))
+      return
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
+    geometry.setAttribute('aProgress', new THREE.BufferAttribute(data.progresses, 1))
+  })
 
   // Update scaled time and animate along curves
   useFrame(({ clock }) => {
     // Update scaled time reference
     const realTime = clock.getElapsedTime()
-    const delta = realTime - lastTimeRef.current
-    lastTimeRef.current = realTime
-    scaledTimeRef.current += delta * timeScale
+    const delta = realTime - lastTimeRef
+    lastTimeRef = realTime
+    scaledTimeRef += delta * timeScale
 
-    if (materialRef.current) {
-      materialRef.current.uniforms.uTime.value = scaledTimeRef.current
+    if (material) {
+      material.uniforms.uTime.value = scaledTimeRef
     }
 
     // Animate particles along curves
-    if (pointsRef.current && activeFlows.length > 0) {
-      const posAttr = pointsRef.current.geometry.attributes.position as THREE.BufferAttribute
-      const currentTime = scaledTimeRef.current
+    const flows = activeFlows()
+    if (points && geometry && flows.length > 0) {
+      const posAttr = geometry.attributes.position as THREE.BufferAttribute
+      if (!posAttr || posAttr.count === 0) return
 
-      activeFlows.forEach((flow, flowIndex) => {
+      const currentTime = scaledTimeRef
+
+      flows.forEach((flow, flowIndex) => {
         const elapsed = currentTime - flow.startTime
         const flowProgress = Math.min(elapsed / flow.duration, 1)
 
         for (let p = 0; p < PARTICLES_PER_FLOW; p++) {
           const i = flowIndex * PARTICLES_PER_FLOW + p
+          if (i >= posAttr.count) continue
+
           // Stagger particles along the flow
           const particleT = Math.max(0, Math.min(1, flowProgress * 1.5 - (p / PARTICLES_PER_FLOW) * 0.5))
 
@@ -255,24 +326,5 @@ export function ElectronFlowNew({ recentDiscoveries, spaceClusters, maxFlows = 5
     }
   })
 
-  if (activeFlows.length === 0) return null
-
-  return (
-    <points ref={pointsRef} frustumCulled={false}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-        <bufferAttribute attach="attributes-aSize" args={[sizes, 1]} />
-        <bufferAttribute attach="attributes-aProgress" args={[progresses, 1]} />
-      </bufferGeometry>
-      <shaderMaterial
-        ref={materialRef}
-        uniforms={{ uTime: { value: 0 } }}
-        vertexShader={ELECTRON_VERTEX_SHADER}
-        fragmentShader={ELECTRON_FRAGMENT_SHADER}
-        transparent
-        depthWrite={false}
-        blending={THREE.AdditiveBlending}
-      />
-    </points>
-  )
+  return null
 }

@@ -1,4 +1,5 @@
-import { create } from 'zustand'
+import { createRoot } from 'solid-js'
+import { createStore } from 'solid-js/store'
 import {
   type UserLevel,
   type SynapseType,
@@ -94,43 +95,6 @@ export interface UserState {
   error: string | null
 }
 
-export interface UserActions {
-  // Authentication
-  loginUser: (wallet: string) => Promise<boolean>
-  logout: () => void
-  initFromStorage: () => Promise<boolean>
-
-  // USDC Spending (upgrades user level)
-  recordUSDCSpent: (amount: number) => Promise<boolean>
-
-  // Brain XP (from synapse completions)
-  addBrainXP: (xp: number) => void
-
-  // Token Management
-  addAgentic: (amount: number) => void
-  spendAgentic: (amount: number) => boolean
-  addAgi: (amount: number) => void
-  addTeneo: (amount: number) => void
-
-  // Lottery
-  addLotteryTickets: (count: number) => void
-  spendLotteryTicket: () => boolean
-
-  // NFTs
-  addNFT: () => void
-
-  // Ships
-  setCurrentShipCount: (count: number) => void
-  canCreateShip: () => boolean
-
-  // Utility
-  refreshUserState: () => Promise<void>
-  getUserLevelLabel: () => string
-  getBrainLevelLabel: () => string
-}
-
-export type UserStore = UserState & UserActions
-
 const initialState: UserState = {
   // Identity
   userId: null,
@@ -173,13 +137,13 @@ const initialState: UserState = {
   error: null,
 }
 
-export const useUserStore = create<UserStore>((set, get) => ({
-  ...initialState,
+function createUserStore() {
+  const [state, setState] = createStore<UserState>({ ...initialState })
 
   // ============ AUTHENTICATION ============
 
-  loginUser: async (wallet: string) => {
-    set({ isLoading: true, error: null })
+  const loginUser = async (wallet: string): Promise<boolean> => {
+    setState({ isLoading: true, error: null })
 
     try {
       const response = await fetch(`${API_URL}/api/users`, {
@@ -208,7 +172,7 @@ export const useUserStore = create<UserStore>((set, get) => ({
       // Save wallet to localStorage for persistence
       saveWalletToStorage(wallet)
 
-      set({
+      setState({
         userId: user.id,
         userWallet: user.wallet,
         userPoints: user.points || 0,
@@ -248,33 +212,32 @@ export const useUserStore = create<UserStore>((set, get) => ({
       return true
     } catch (error) {
       console.error('Login failed:', error)
-      set({ isLoading: false, error: 'Failed to login' })
+      setState({ isLoading: false, error: 'Failed to login' })
       return false
     }
-  },
+  }
 
-  logout: () => {
+  const logout = () => {
     clearWalletFromStorage()
-    set(initialState)
-  },
+    setState({ ...initialState })
+  }
 
   // Auto-login from stored wallet
-  initFromStorage: async () => {
+  const initFromStorage = async (): Promise<boolean> => {
     const storedWallet = loadWalletFromStorage()
     if (storedWallet) {
-      return get().loginUser(storedWallet)
+      return loginUser(storedWallet)
     }
     return false
-  },
+  }
 
   // ============ USDC SPENDING ============
 
-  recordUSDCSpent: async (amount: number) => {
-    const { userId, usdcSpent } = get()
-    if (!userId) return false
+  const recordUSDCSpent = async (amount: number): Promise<boolean> => {
+    if (!state.userId) return false
 
     try {
-      const response = await fetch(`${API_URL}/api/users/${userId}/usdc-spent`, {
+      const response = await fetch(`${API_URL}/api/users/${state.userId}/usdc-spent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount }),
@@ -284,15 +247,15 @@ export const useUserStore = create<UserStore>((set, get) => ({
         throw new Error('Failed to record USDC spent')
       }
 
-      const newTotal = usdcSpent + amount
+      const newTotal = state.usdcSpent + amount
       const newLevel = calculateUserLevel(newTotal)
       const levelConfig = getUserLevelConfig(newLevel)
 
-      set({
+      setState({
         usdcSpent: newTotal,
         userLevel: newLevel,
         rewardMultiplier: levelConfig.multiplier,
-        maxShips: Math.max(levelConfig.maxShips, getMaxShipsForBrainLevel(get().brainLevel)),
+        maxShips: Math.max(levelConfig.maxShips, getMaxShipsForBrainLevel(state.brainLevel)),
       })
 
       return true
@@ -300,14 +263,12 @@ export const useUserStore = create<UserStore>((set, get) => ({
       console.error('Failed to record USDC spent:', error)
       return false
     }
-  },
+  }
 
   // ============ BRAIN XP ============
 
-  addBrainXP: (xp: number) => {
-    const { brainLevel, totalBrainXP, userLevel } = get()
-
-    const newTotalXP = totalBrainXP + xp
+  const addBrainXP = (xp: number) => {
+    const newTotalXP = state.totalBrainXP + xp
     const newBrainLevel = getLevelFromTotalXP(newTotalXP)
     const xpToNextLevel = getXPForLevel(newBrainLevel)
     const xpAtCurrentLevel = getTotalXPForLevel(newBrainLevel)
@@ -315,9 +276,10 @@ export const useUserStore = create<UserStore>((set, get) => ({
       ? Math.min(100, ((newTotalXP - xpAtCurrentLevel) / xpToNextLevel) * 100)
       : 100
 
-    const levelConfig = getUserLevelConfig(userLevel)
+    const levelConfig = getUserLevelConfig(state.userLevel)
+    const previousBrainLevel = state.brainLevel
 
-    set({
+    setState({
       brainXP: newTotalXP - xpAtCurrentLevel,
       totalBrainXP: newTotalXP,
       brainLevel: newBrainLevel,
@@ -328,107 +290,158 @@ export const useUserStore = create<UserStore>((set, get) => ({
     })
 
     // Check for level up
-    if (newBrainLevel > brainLevel) {
-      console.log(`Brain Level Up! ${brainLevel} -> ${newBrainLevel}`)
+    if (newBrainLevel > previousBrainLevel) {
+      console.log(`Brain Level Up! ${previousBrainLevel} -> ${newBrainLevel}`)
       // Could emit event here for UI notification
     }
-  },
+  }
 
   // ============ TOKEN MANAGEMENT ============
 
-  addAgentic: (amount: number) => {
-    set((state) => ({
-      agenticBalance: state.agenticBalance + amount,
-    }))
-  },
+  const addAgentic = (amount: number) => {
+    setState('agenticBalance', (balance) => balance + amount)
+  }
 
-  spendAgentic: (amount: number) => {
-    const { agenticBalance } = get()
-    if (agenticBalance < amount) return false
-
-    set({ agenticBalance: agenticBalance - amount })
+  const spendAgentic = (amount: number): boolean => {
+    if (state.agenticBalance < amount) return false
+    setState('agenticBalance', state.agenticBalance - amount)
     return true
-  },
+  }
 
-  addAgi: (amount: number) => {
-    set((state) => ({
-      totalAgiEarned: state.totalAgiEarned + amount,
-    }))
-  },
+  const addAgi = (amount: number) => {
+    setState('totalAgiEarned', (total) => total + amount)
+  }
 
-  addTeneo: (amount: number) => {
-    set((state) => ({
-      totalTeneoEarned: state.totalTeneoEarned + amount,
-    }))
-  },
+  const addTeneo = (amount: number) => {
+    setState('totalTeneoEarned', (total) => total + amount)
+  }
 
   // ============ LOTTERY ============
 
-  addLotteryTickets: (count: number) => {
-    set((state) => ({
-      lotteryTickets: state.lotteryTickets + count,
-    }))
-  },
+  const addLotteryTickets = (count: number) => {
+    setState('lotteryTickets', (tickets) => tickets + count)
+  }
 
-  spendLotteryTicket: () => {
-    const { lotteryTickets } = get()
-    if (lotteryTickets < 1) return false
-
-    set({ lotteryTickets: lotteryTickets - 1 })
+  const spendLotteryTicket = (): boolean => {
+    if (state.lotteryTickets < 1) return false
+    setState('lotteryTickets', state.lotteryTickets - 1)
     return true
-  },
+  }
 
   // ============ NFTs ============
 
-  addNFT: () => {
-    set((state) => ({
-      nftCount: state.nftCount + 1,
-    }))
-  },
+  const addNFT = () => {
+    setState('nftCount', (count) => count + 1)
+  }
 
   // ============ SHIPS ============
 
-  setCurrentShipCount: (count: number) => {
-    set({ currentShipCount: count })
-  },
+  const setCurrentShipCount = (count: number) => {
+    setState('currentShipCount', count)
+  }
 
-  canCreateShip: () => {
-    const { currentShipCount, maxShips } = get()
-    return currentShipCount < maxShips
-  },
+  const canCreateShip = (): boolean => {
+    return state.currentShipCount < state.maxShips
+  }
 
   // ============ UTILITY ============
 
-  refreshUserState: async () => {
-    const { userId, userWallet } = get()
-    if (!userId || !userWallet) return
+  const refreshUserState = async (): Promise<void> => {
+    if (!state.userId || !state.userWallet) return
+    await loginUser(state.userWallet)
+  }
 
-    await get().loginUser(userWallet)
-  },
+  const getUserLevelLabel = (): string => {
+    const config = getUserLevelConfig(state.userLevel)
+    return `L${state.userLevel} ${config.label}`
+  }
 
-  getUserLevelLabel: () => {
-    const { userLevel } = get()
-    const config = getUserLevelConfig(userLevel)
-    return `L${userLevel} ${config.label}`
-  },
-
-  getBrainLevelLabel: () => {
-    const { brainLevel } = get()
-    if (brainLevel >= BRAIN_LEVEL_CONFIG.maxLevel) {
+  const getBrainLevelLabel = (): string => {
+    if (state.brainLevel >= BRAIN_LEVEL_CONFIG.maxLevel) {
       return `Brain Level MAX (${BRAIN_LEVEL_CONFIG.maxLevel})`
     }
-    return `Brain Level ${brainLevel}`
-  },
-}))
+    return `Brain Level ${state.brainLevel}`
+  }
 
-// ============ SELECTORS ============
+  return {
+    // ============ REACTIVE GETTERS ============
+    // Identity
+    get userId() { return state.userId },
+    get userWallet() { return state.userWallet },
 
-export const selectIsLoggedIn = (state: UserStore) => state.userId !== null
-export const selectUserLevel = (state: UserStore) => state.userLevel
-export const selectBrainLevel = (state: UserStore) => state.brainLevel
-export const selectAgenticBalance = (state: UserStore) => state.agenticBalance
-export const selectTotalAgiEarned = (state: UserStore) => state.totalAgiEarned
-export const selectLotteryTickets = (state: UserStore) => state.lotteryTickets
-export const selectMaxShips = (state: UserStore) => state.maxShips
-export const selectUnlockedSynapseTypes = (state: UserStore) => state.unlockedSynapseTypes
-export const selectXpProgress = (state: UserStore) => state.xpProgress
+    // Legacy
+    get userPoints() { return state.userPoints },
+    get userTier() { return state.userTier },
+
+    // User Level
+    get userLevel() { return state.userLevel },
+    get usdcSpent() { return state.usdcSpent },
+    get rewardMultiplier() { return state.rewardMultiplier },
+
+    // Brain Level
+    get brainLevel() { return state.brainLevel },
+    get brainXP() { return state.brainXP },
+    get totalBrainXP() { return state.totalBrainXP },
+    get xpToNextLevel() { return state.xpToNextLevel },
+    get xpProgress() { return state.xpProgress },
+
+    // Tokens
+    get agenticBalance() { return state.agenticBalance },
+    get totalAgiEarned() { return state.totalAgiEarned },
+    get totalTeneoEarned() { return state.totalTeneoEarned },
+
+    // Lottery & NFTs
+    get lotteryTickets() { return state.lotteryTickets },
+    get nftCount() { return state.nftCount },
+
+    // Ships
+    get maxShips() { return state.maxShips },
+    get currentShipCount() { return state.currentShipCount },
+
+    // Unlocks
+    get unlockedSynapseTypes() { return state.unlockedSynapseTypes },
+
+    // Loading State
+    get isLoading() { return state.isLoading },
+    get error() { return state.error },
+
+    // ============ COMPUTED SELECTORS ============
+    get isLoggedIn() { return state.userId !== null },
+
+    // ============ ACTIONS ============
+    // Authentication
+    loginUser,
+    logout,
+    initFromStorage,
+
+    // USDC Spending
+    recordUSDCSpent,
+
+    // Brain XP
+    addBrainXP,
+
+    // Token Management
+    addAgentic,
+    spendAgentic,
+    addAgi,
+    addTeneo,
+
+    // Lottery
+    addLotteryTickets,
+    spendLotteryTicket,
+
+    // NFTs
+    addNFT,
+
+    // Ships
+    setCurrentShipCount,
+    canCreateShip,
+
+    // Utility
+    refreshUserState,
+    getUserLevelLabel,
+    getBrainLevelLabel,
+  }
+}
+
+export const userStore = createRoot(createUserStore)

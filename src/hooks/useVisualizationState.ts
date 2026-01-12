@@ -1,6 +1,6 @@
-import { useState, useMemo } from 'react'
+import { createSignal, createMemo } from 'solid-js'
 import * as THREE from 'three'
-import { useShipStore } from '@/stores/shipStore'
+import { shipStore } from '@/stores/shipStore'
 import type { ViewMode } from '@/types/agent'
 
 /**
@@ -11,30 +11,28 @@ import type { ViewMode } from '@/types/agent'
  * LOD (level of detail) cluster selection based on camera distance.
  */
 export function useVisualizationState() {
-  const [viewMode, setViewMode] = useState<ViewMode>('3d')
-  const [zoomInfo, setZoomInfo] = useState({ distance: 5, lod: 0 })
-  const [zoomTarget, setZoomTarget] = useState<THREE.Vector3 | null>(null)
-
-  const {
-    synapseClustersLod0,
-    synapseClustersLod1,
-    synapseClustersLod2,
-    shipClustersLod0,
-  } = useShipStore()
+  const [viewMode, setViewMode] = createSignal<ViewMode>('3d')
+  const [zoomInfo, setZoomInfo] = createSignal({ distance: 5, lod: 0 })
+  const [zoomTarget, setZoomTarget] = createSignal<THREE.Vector3 | null>(null)
 
   // Select appropriate LOD clusters based on zoom level
   // Falls back to LOD0 if requested LOD has no data (server may not send all LOD levels)
-  const currentSpaceClusters = useMemo(() => {
-    switch (zoomInfo.lod) {
-      case 0: return synapseClustersLod0
-      case 1: return synapseClustersLod1?.length > 0 ? synapseClustersLod1 : synapseClustersLod0
-      case 2: return synapseClustersLod2?.length > 0 ? synapseClustersLod2 : synapseClustersLod0
-      default: return synapseClustersLod0
+  const currentSpaceClusters = createMemo(() => {
+    const lod = zoomInfo().lod
+    const lod0 = shipStore.synapseClustersLod0
+    const lod1 = shipStore.synapseClustersLod1
+    const lod2 = shipStore.synapseClustersLod2
+
+    switch (lod) {
+      case 0: return lod0
+      case 1: return lod1?.length > 0 ? lod1 : lod0
+      case 2: return lod2?.length > 0 ? lod2 : lod0
+      default: return lod0
     }
-  }, [zoomInfo.lod, synapseClustersLod0, synapseClustersLod1, synapseClustersLod2])
+  })
 
   // Maps ship clusters to the old agentClusters format for compatibility
-  const agentClustersLod0 = shipClustersLod0
+  const agentClustersLod0 = createMemo(() => shipStore.shipClustersLod0)
 
   return {
     viewMode,

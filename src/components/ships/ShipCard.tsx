@@ -1,5 +1,5 @@
-import { motion } from 'framer-motion'
-import { Compass, Sparkles, TrendingUp, Zap, ToggleLeft, ToggleRight, Brain } from 'lucide-react'
+import { Show, createMemo } from 'solid-js'
+import { Compass, Sparkles, TrendingUp, Zap, ToggleLeft, ToggleRight, Brain } from 'lucide-solid'
 import { StatusBadge, StatusDot } from '@/components/ui/StatusBadge'
 import type { Ship } from '@/stores/shipStore'
 import { type SynapseType, formatPoints } from '@/types/game'
@@ -24,6 +24,17 @@ const SYNAPSE_TYPE_COLORS: Record<SynapseType, string> = {
   unique: 'text-amber-300',
 }
 
+// Synapse type progress bar colors
+const SYNAPSE_PROGRESS_COLORS: Record<SynapseType, string> = {
+  minor: 'bg-blue-500',
+  complex: 'bg-purple-500',
+  deep: 'bg-teal-500',
+  core: 'bg-yellow-500',
+  rare: 'bg-red-500',
+  legendary: 'bg-pink-500',
+  unique: 'bg-amber-400',
+}
+
 export interface ShipCardProps {
   ship: Ship
   isSelected: boolean
@@ -39,167 +50,146 @@ export interface ShipCardProps {
  * ShipCard - Displays a ship with its stats and exploration status
  * Masterplan 2026: No fuel/traits, shows autopilot and exploration progress
  */
-export function ShipCard({
-  ship,
-  isSelected,
-  currentSynapseType,
-  explorationProgress = 0,
-  onSelect,
-  onToggleAutopilot,
-  onStartExploration,
-  onFocus,
-}: ShipCardProps) {
-  const isActive = ship.state !== 'idle'
-  const isExploring = ship.state === 'exploring'
-  const accentColor = STATE_ACCENT_COLORS[ship.state] || STATE_ACCENT_COLORS.idle
+export function ShipCard(props: ShipCardProps) {
+  const isActive = createMemo(() => props.ship.state !== 'idle')
+  const isExploring = createMemo(() => props.ship.state === 'exploring')
+  const accentColor = createMemo(() => STATE_ACCENT_COLORS[props.ship.state] || STATE_ACCENT_COLORS.idle)
 
   // Map ship state to status badge state
-  const statusState = ship.state === 'exploring' ? 'solving' : ship.state
+  const statusState = createMemo(() => props.ship.state === 'exploring' ? 'solving' : props.ship.state)
+
+  const explorationProgress = createMemo(() => props.explorationProgress ?? 0)
 
   return (
-    <motion.div
-      onClick={onSelect}
-      onDoubleClick={() => onFocus?.()}
-      layout
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={cn(
+    <div
+      onClick={props.onSelect}
+      onDblClick={() => props.onFocus?.()}
+      class={cn(
         'relative rounded-2xl border-2 cursor-pointer transition-all duration-300',
-        isSelected
+        props.isSelected
           ? 'border-[var(--brand-teal-1)] bg-gradient-to-br from-[var(--brand-teal-1)]/10 to-[var(--brand-teal-1)]/5 shadow-lg shadow-[var(--brand-teal-1)]/20'
-          : `${accentColor} bg-gradient-to-br from-[var(--background-secondary)] to-[var(--background-primary)]/50 hover:from-[var(--background-secondary)]/90 hover:to-[var(--background-primary)]/40 hover:-translate-y-1 hover:shadow-xl hover:shadow-black/20`
+          : `${accentColor()} bg-gradient-to-br from-[var(--background-secondary)] to-[var(--background-primary)]/50 hover:from-[var(--background-secondary)]/90 hover:to-[var(--background-primary)]/40 hover:-translate-y-1 hover:shadow-xl hover:shadow-black/20`
       )}
     >
       {/* Active state glow effect */}
-      {isActive && (
-        <div className={cn(
+      <Show when={isActive()}>
+        <div class={cn(
           'absolute -inset-0.5 rounded-2xl opacity-30 blur-sm',
-          isExploring ? 'bg-[hsl(var(--state-solving))]/30' : 'bg-[hsl(var(--state-deploying))]/30'
+          isExploring() ? 'bg-[hsl(var(--state-solving))]/30' : 'bg-[hsl(var(--state-deploying))]/30'
         )} />
-      )}
+      </Show>
 
-      <div className="relative p-4">
+      <div class="relative p-4">
         {/* Header: Name + State Badge */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-3">
             {/* Status indicator with pulse */}
-            <StatusDot status={statusState as any} showPulse={isActive} />
-            <span className="font-bold text-xl text-[var(--text-primary)] tracking-tight">{ship.name}</span>
+            <StatusDot status={statusState() as any} showPulse={isActive()} />
+            <span class="font-bold text-xl text-[var(--text-primary)] tracking-tight">{props.ship.name}</span>
           </div>
-          <StatusBadge status={statusState as any} size="md" />
+          <StatusBadge status={statusState() as any} size="md" />
         </div>
 
         {/* Exploration Progress (when exploring) */}
-        {isExploring && currentSynapseType && (
-          <div className="mb-4">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <Brain className={cn('h-4 w-4', SYNAPSE_TYPE_COLORS[currentSynapseType])} />
-                <span className={cn('text-sm font-semibold capitalize', SYNAPSE_TYPE_COLORS[currentSynapseType])}>
-                  {currentSynapseType} Synapse
+        <Show when={isExploring() && props.currentSynapseType}>
+          <div class="mb-4">
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-2">
+                <Brain class={cn('h-4 w-4', SYNAPSE_TYPE_COLORS[props.currentSynapseType!])} />
+                <span class={cn('text-sm font-semibold capitalize', SYNAPSE_TYPE_COLORS[props.currentSynapseType!])}>
+                  {props.currentSynapseType} Synapse
                 </span>
               </div>
-              <span className="text-sm text-[var(--text-muted)]">
-                {explorationProgress.toFixed(1)}%
+              <span class="text-sm text-[var(--text-muted)]">
+                {explorationProgress().toFixed(1)}%
               </span>
             </div>
-            <div className="h-2 rounded-full bg-[var(--background-primary)] overflow-hidden">
-              <motion.div
-                initial={{ width: 0 }}
-                animate={{ width: `${explorationProgress}%` }}
-                transition={{ duration: 0.5 }}
-                className={cn(
-                  'h-full rounded-full',
-                  currentSynapseType === 'minor' ? 'bg-blue-500' :
-                  currentSynapseType === 'complex' ? 'bg-purple-500' :
-                  currentSynapseType === 'deep' ? 'bg-teal-500' :
-                  currentSynapseType === 'core' ? 'bg-yellow-500' :
-                  currentSynapseType === 'rare' ? 'bg-red-500' :
-                  currentSynapseType === 'legendary' ? 'bg-pink-500' :
-                  'bg-amber-400'
+            <div class="h-2 rounded-full bg-[var(--background-primary)] overflow-hidden">
+              <div
+                class={cn(
+                  'h-full rounded-full transition-all duration-500',
+                  SYNAPSE_PROGRESS_COLORS[props.currentSynapseType!]
                 )}
+                style={{ width: `${explorationProgress()}%` }}
               />
             </div>
           </div>
-        )}
+        </Show>
 
         {/* Spending Rate (when exploring) */}
-        {isExploring && (
-          <div className="flex items-center justify-between mb-4 px-3 py-2 rounded-lg bg-[var(--background-primary)]/50 border border-[var(--card-border)]/20">
-            <div className="flex items-center gap-2">
-              <Zap className="h-4 w-4 text-[hsl(var(--accent))]" />
-              <span className="text-sm text-[var(--text-muted)]">Spending</span>
+        <Show when={isExploring()}>
+          <div class="flex items-center justify-between mb-4 px-3 py-2 rounded-lg bg-[var(--background-primary)]/50 border border-[var(--card-border)]/20">
+            <div class="flex items-center gap-2">
+              <Zap class="h-4 w-4 text-[hsl(var(--accent))]" />
+              <span class="text-sm text-[var(--text-muted)]">Spending</span>
             </div>
-            <span className="text-sm font-bold text-[hsl(var(--accent))]">
-              {ship.currentPointsPerMin} pts/min
+            <span class="text-sm font-bold text-[hsl(var(--accent))]">
+              {props.ship.currentPointsPerMin} pts/min
             </span>
           </div>
-        )}
+        </Show>
 
         {/* Autopilot Toggle */}
-        <div className="flex items-center justify-between mb-4 px-3 py-2 rounded-lg bg-[var(--background-primary)]/50 border border-[var(--card-border)]/20">
-          <div className="flex items-center gap-2">
-            <Compass className="h-4 w-4 text-[var(--text-muted)]" />
-            <span className="text-sm text-[var(--text-muted)]">Autopilot</span>
+        <div class="flex items-center justify-between mb-4 px-3 py-2 rounded-lg bg-[var(--background-primary)]/50 border border-[var(--card-border)]/20">
+          <div class="flex items-center gap-2">
+            <Compass class="h-4 w-4 text-[var(--text-muted)]" />
+            <span class="text-sm text-[var(--text-muted)]">Autopilot</span>
           </div>
           <button
-            onClick={(e) => { e.stopPropagation(); onToggleAutopilot?.() }}
+            onClick={(e) => { e.stopPropagation(); props.onToggleAutopilot?.() }}
             role="switch"
-            aria-checked={ship.autopilotEnabled}
-            aria-label={ship.autopilotEnabled ? 'Disable autopilot' : 'Enable autopilot'}
-            className="flex items-center gap-1"
+            aria-checked={props.ship.autopilotEnabled}
+            aria-label={props.ship.autopilotEnabled ? 'Disable autopilot' : 'Enable autopilot'}
+            class="flex items-center gap-1"
           >
-            {ship.autopilotEnabled ? (
-              <ToggleRight className="h-6 w-6 text-[var(--brand-teal-1)]" />
-            ) : (
-              <ToggleLeft className="h-6 w-6 text-[var(--text-muted)]" />
-            )}
+            <Show
+              when={props.ship.autopilotEnabled}
+              fallback={<ToggleLeft class="h-6 w-6 text-[var(--text-muted)]" />}
+            >
+              <ToggleRight class="h-6 w-6 text-[var(--brand-teal-1)]" />
+            </Show>
           </button>
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-2 gap-3">
-          <motion.div
-            whileHover={{ scale: 1.02 }}
-            className="group relative p-4 rounded-xl bg-gradient-to-br from-[hsl(var(--accent))]/10 to-[hsl(var(--accent))]/5 border border-[hsl(var(--accent))]/20 hover:border-[hsl(var(--accent))]/40 transition-all"
+        <div class="grid grid-cols-2 gap-3">
+          <div
+            class="group relative p-4 rounded-xl bg-gradient-to-br from-[hsl(var(--accent))]/10 to-[hsl(var(--accent))]/5 border border-[hsl(var(--accent))]/20 hover:border-[hsl(var(--accent))]/40 hover:scale-[1.02] transition-all"
           >
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-[hsl(var(--accent))]" />
-                <span className="text-xs text-[var(--text-muted)] font-semibold uppercase tracking-wide">Found</span>
+            <div class="flex flex-col gap-2">
+              <div class="flex items-center gap-2">
+                <Sparkles class="h-4 w-4 text-[hsl(var(--accent))]" />
+                <span class="text-xs text-[var(--text-muted)] font-semibold uppercase tracking-wide">Found</span>
               </div>
-              <span className="text-xl font-bold tabular-nums text-[hsl(var(--accent))]">{ship.spacesDiscovered}</span>
+              <span class="text-xl font-bold tabular-nums text-[hsl(var(--accent))]">{props.ship.spacesDiscovered}</span>
             </div>
-          </motion.div>
-          <motion.div
-            whileHover={{ scale: 1.02 }}
-            className="group relative p-4 rounded-xl bg-gradient-to-br from-[var(--brand-teal-1)]/10 to-[var(--brand-teal-1)]/5 border border-[var(--brand-teal-1)]/20 hover:border-[var(--brand-teal-1)]/40 transition-all"
+          </div>
+          <div
+            class="group relative p-4 rounded-xl bg-gradient-to-br from-[var(--brand-teal-1)]/10 to-[var(--brand-teal-1)]/5 border border-[var(--brand-teal-1)]/20 hover:border-[var(--brand-teal-1)]/40 hover:scale-[1.02] transition-all"
           >
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-[var(--brand-teal-1)]" />
-                <span className="text-xs text-[var(--text-muted)] font-semibold uppercase tracking-wide">AGI</span>
+            <div class="flex flex-col gap-2">
+              <div class="flex items-center gap-2">
+                <TrendingUp class="h-4 w-4 text-[var(--brand-teal-1)]" />
+                <span class="text-xs text-[var(--text-muted)] font-semibold uppercase tracking-wide">AGI</span>
               </div>
-              <span className="text-xl font-bold tabular-nums text-[var(--brand-teal-1)]">
-                {formatPoints(ship.totalAgiEarned)}
+              <span class="text-xl font-bold tabular-nums text-[var(--brand-teal-1)]">
+                {formatPoints(props.ship.totalAgiEarned)}
               </span>
             </div>
-          </motion.div>
+          </div>
         </div>
 
         {/* Explore Button (when idle) */}
-        {ship.state === 'idle' && (
-          <motion.button
-            onClick={(e) => { e.stopPropagation(); onStartExploration?.() }}
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className="w-full mt-4 px-4 py-3 rounded-xl bg-gradient-to-r from-[var(--brand-teal-1)]/20 to-[hsl(var(--accent))]/20 border border-[var(--brand-teal-1)]/40 text-[var(--brand-teal-1)] font-bold text-sm hover:from-[var(--brand-teal-1)]/30 hover:to-[hsl(var(--accent))]/30 transition-all flex items-center justify-center gap-3 shadow-lg shadow-[var(--brand-teal-1)]/10"
+        <Show when={props.ship.state === 'idle'}>
+          <button
+            onClick={(e) => { e.stopPropagation(); props.onStartExploration?.() }}
+            class="w-full mt-4 px-4 py-3 rounded-xl bg-gradient-to-r from-[var(--brand-teal-1)]/20 to-[hsl(var(--accent))]/20 border border-[var(--brand-teal-1)]/40 text-[var(--brand-teal-1)] font-bold text-sm hover:from-[var(--brand-teal-1)]/30 hover:to-[hsl(var(--accent))]/30 transition-all flex items-center justify-center gap-3 shadow-lg shadow-[var(--brand-teal-1)]/10 hover:scale-[1.02] active:scale-[0.98]"
           >
-            <Brain className="h-4 w-4" />
+            <Brain class="h-4 w-4" />
             <span>Start Exploration</span>
-          </motion.button>
-        )}
+          </button>
+        </Show>
       </div>
-    </motion.div>
+    </div>
   )
 }

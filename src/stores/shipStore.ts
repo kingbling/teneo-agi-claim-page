@@ -1,6 +1,7 @@
-import { create } from 'zustand'
+import { createRoot } from 'solid-js'
+import { createStore, produce } from 'solid-js/store'
 import type { SynapseType } from '@/types/game'
-import { useUserStore } from './userStore'
+import { userStore } from './userStore'
 
 // API Configuration
 const API_URL = import.meta.env.VITE_API_URL
@@ -135,22 +136,75 @@ export interface ShipCluster {
   updatedAt: number
 }
 
+// Generate mock typeCounts for visual variety when server returns empty data
+// Uses cluster ID hash to deterministically assign type variety
+function generateMockTypeCounts(clusterId: string, totalCount: number): Record<SynapseType, number> {
+  const result: Record<SynapseType, number> = {
+    minor: 0,
+    complex: 0,
+    deep: 0,
+    core: 0,
+    rare: 0,
+    legendary: 0,
+    unique: 0,
+  }
+
+  if (totalCount === 0) return result
+
+  // Simple hash from cluster ID for deterministic but varied distribution
+  let hash = 0
+  for (let i = 0; i < clusterId.length; i++) {
+    hash = ((hash << 5) - hash + clusterId.charCodeAt(i)) | 0
+  }
+  const seed = Math.abs(hash)
+
+  // Weighted distribution - rarer types less common
+  const weights = [0.35, 0.25, 0.18, 0.12, 0.06, 0.03, 0.01]
+  const types: SynapseType[] = ['minor', 'complex', 'deep', 'core', 'rare', 'legendary', 'unique']
+
+  // Use seed to pick a "dominant" type for variety
+  const dominantIndex = seed % 5  // First 5 types can be dominant
+  const shiftedWeights = [...weights]
+
+  // Boost the dominant type
+  shiftedWeights[dominantIndex] += 0.2
+  const total = shiftedWeights.reduce((a, b) => a + b, 0)
+  const normalizedWeights = shiftedWeights.map(w => w / total)
+
+  let remaining = totalCount
+  for (let i = 0; i < types.length - 1; i++) {
+    const count = Math.floor(totalCount * normalizedWeights[i])
+    result[types[i]] = count
+    remaining -= count
+  }
+  result.unique = Math.max(0, remaining)
+
+  return result
+}
+
 // Map server SpaceCluster properties to client SynapseCluster properties
 // Server uses: spaceCount, beingSolvedCount
 // Client uses: synapseCount, beingExploredCount
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapServerClusterToClient(cluster: any): SynapseCluster {
+  const synapseCount = cluster.spaceCount ?? cluster.synapseCount ?? 0
+
+  // Use server typeCounts if populated, otherwise generate mock data for visual variety
+  const serverTypeCounts = cluster.typeCounts
+  const hasValidTypeCounts = serverTypeCounts && Object.keys(serverTypeCounts).length > 0 &&
+    Object.values(serverTypeCounts).some((v: any) => v > 0)
+
   return {
     id: cluster.id,
     lodLevel: cluster.lodLevel,
     positionX: cluster.positionX,
     positionY: cluster.positionY,
     positionZ: cluster.positionZ,
-    synapseCount: cluster.spaceCount ?? cluster.synapseCount ?? 0,
+    synapseCount,
     discoveredCount: cluster.discoveredCount ?? 0,
     beingExploredCount: cluster.beingSolvedCount ?? cluster.beingExploredCount ?? 0,
     avgLootPool: cluster.avgLootPool ?? 0,
-    typeCounts: cluster.typeCounts ?? {},
+    typeCounts: hasValidTypeCounts ? serverTypeCounts : generateMockTypeCounts(cluster.id, synapseCount),
     updatedAt: cluster.updatedAt ?? Date.now(),
   }
 }
@@ -258,53 +312,6 @@ export interface ShipStoreState {
   deployingShipIds: Set<string>
 }
 
-export interface ShipActions {
-  // Connection
-  connect: () => void
-  disconnect: () => void
-
-  // Ship Actions
-  createShip: (name: string) => Promise<Ship | null>
-  selectShip: (shipId: string | null) => void
-
-  // Exploration Actions
-  startExploration: (shipId: string, synapseId: string, pointsPerMin: number) => Promise<boolean>
-  leaveExploration: (shipId: string) => Promise<boolean>
-  updateSpendingRate: (shipId: string, pointsPerMin: number) => Promise<boolean>
-
-  // Autopilot
-  toggleAutopilot: (shipId: string, enabled: boolean) => Promise<boolean>
-  setAutopilotPreferences: (shipId: string, prefs: AutopilotPreferences) => Promise<boolean>
-
-  // Items
-  equipItem: (shipId: string, itemId: string, slotIndex: number) => Promise<boolean>
-  unequipItem: (shipId: string, slotIndex: number) => Promise<boolean>
-
-  // Deploy (navigate to synapse position)
-  deployShip: (shipId: string, targetX: number, targetY: number, targetZ: number) => Promise<boolean>
-  deployToSynapse: (shipId: string, synapseId: string) => Promise<boolean>
-  recallShip: (shipId: string) => Promise<void>
-
-  // API Actions
-  fetchUserShips: () => Promise<void>
-  fetchWorldState: () => Promise<void>
-  fetchSynapseDetails: (synapseId: string) => Promise<Synapse | null>
-  fetchSynapseExplorers: (synapseId: string) => Promise<ExplorerInfo[]>
-
-  // UI Actions
-  setViewMode: (mode: '3d' | '2d-top') => void
-  setShowShipPaths: (show: boolean) => void
-  setShowDiscoveredOnly: (show: boolean) => void
-  setLodLevel: (level: number) => void
-
-  // Utility
-  getSynapseClustersForLod: () => SynapseCluster[]
-  getShipClustersForLod: () => ShipCluster[]
-  canCreateShip: () => boolean
-}
-
-export type ShipStore = ShipStoreState & ShipActions
-
 const initialState: ShipStoreState = {
   // Connection
   isConnected: false,
@@ -347,26 +354,126 @@ const initialState: ShipStoreState = {
   deployingShipIds: new Set(),
 }
 
-export const useShipStore = create<ShipStore>((set, get) => ({
-  ...initialState,
+function createShipStore() {
+  const [state, setState] = createStore<ShipStoreState>({ ...initialState })
+
+  // ============ SERVER MESSAGE HANDLER ============
+
+  function handleServerMessage(message: ServerMessage) {
+    switch (message.type) {
+      case 'state:sync': {
+        const world = message.data
+
+        // Map server clusters to client format and separate by LOD level
+        const rawClusters = world.synapseClusters || []
+        const mappedClusters = rawClusters.map(mapServerClusterToClient)
+
+        const synapseClustersLod0 = mappedClusters.filter(c => c.lodLevel === 0)
+        const synapseClustersLod1 = mappedClusters.filter(c => c.lodLevel === 1)
+        const synapseClustersLod2 = mappedClusters.filter(c => c.lodLevel === 2)
+
+        const shipClustersLod0 = (world.shipClusters || []).filter(c => c.lodLevel === 0)
+        const shipClustersLod1 = (world.shipClusters || []).filter(c => c.lodLevel === 1)
+        const shipClustersLod2 = (world.shipClusters || []).filter(c => c.lodLevel === 2)
+
+        setState({
+          synapseClusters: mappedClusters,
+          synapseClustersLod0,
+          synapseClustersLod1,
+          synapseClustersLod2,
+          shipClusters: world.shipClusters || [],
+          shipClustersLod0,
+          shipClustersLod1,
+          shipClustersLod2,
+          discoveryProgress: world.discoveryProgress,
+        })
+        break
+      }
+
+      case 'synapse:completed': {
+        const event = message.data
+        setState(produce((s) => {
+          s.recentDiscoveries = [event, ...s.recentDiscoveries].slice(0, 50)
+        }))
+        break
+      }
+
+      case 'loot:distributed': {
+        const event = message.data
+        setState(produce((s) => {
+          s.recentLoot = [event, ...s.recentLoot].slice(0, 50)
+        }))
+
+        // Update user's AGI and brain XP
+        const userId = userStore.userId
+        if (event.userId === userId) {
+          userStore.addAgi(event.agiAmount)
+          userStore.addBrainXP(event.brainXp)
+          if (event.lotteryTicketsAwarded > 0) {
+            userStore.addLotteryTickets(event.lotteryTicketsAwarded)
+          }
+        }
+        break
+      }
+
+      case 'ships:update': {
+        const updatedShips = message.data
+        setState(produce((s) => {
+          // Update user's ships if any of them are in the update
+          s.userShips = s.userShips.map((ship) => {
+            const updated = updatedShips.find(u => u.id === ship.id)
+            if (updated) {
+              console.log(`Ship ${ship.name} updated:`, updated.state, `pos: (${updated.positionX.toFixed(2)}, ${updated.positionY.toFixed(2)}, ${updated.positionZ.toFixed(2)})`)
+              return updated
+            }
+            return ship
+          })
+        }))
+        break
+      }
+
+      case 'exploration:progress': {
+        const { synapseId, pointsAccumulated, eta } = message.data
+        if (state.currentExplorationSynapse?.id === synapseId) {
+          setState('currentExplorationSynapse', {
+            ...state.currentExplorationSynapse,
+            pointsAccumulated,
+            currentEtaMinutes: eta,
+          })
+        }
+        break
+      }
+
+      case 'lottery:winner': {
+        const { synapseId, winnerId, winnerShipId, reward } = message.data
+        console.log(`Lottery winner for synapse ${synapseId}: ${winnerId} (ship ${winnerShipId}) won ${reward} AGI!`)
+        // Could trigger a notification UI here
+        break
+      }
+
+      case 'error': {
+        console.error('Server error:', message.data.message)
+        break
+      }
+    }
+  }
 
   // ============ CONNECTION ============
 
-  connect: () => {
-    const { ws } = get()
-    if (ws) return
+  const connect = () => {
+    if (state.ws) return
 
     const socket = new WebSocket(WS_URL)
 
     socket.onopen = () => {
       console.log('WebSocket connected to server')
-      set({ isConnected: true, ws: socket })
+      setState({ isConnected: true, ws: socket })
     }
 
     socket.onmessage = (event) => {
       try {
         const message: ServerMessage = JSON.parse(event.data)
-        handleServerMessage(message, set, get)
+        handleServerMessage(message)
       } catch (error) {
         console.error('Failed to parse server message:', error)
       }
@@ -374,13 +481,12 @@ export const useShipStore = create<ShipStore>((set, get) => ({
 
     socket.onclose = () => {
       console.log('WebSocket disconnected')
-      set({ isConnected: false, ws: null })
+      setState({ isConnected: false, ws: null })
 
       // Auto-reconnect after 3 seconds
       setTimeout(() => {
-        const { ws: currentWs } = get()
-        if (!currentWs) {
-          get().connect()
+        if (!state.ws) {
+          connect()
         }
       }, 3000)
     }
@@ -389,21 +495,20 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       console.error('WebSocket error:', error)
     }
 
-    set({ ws: socket })
-  },
+    setState({ ws: socket })
+  }
 
-  disconnect: () => {
-    const { ws } = get()
-    if (ws) {
-      ws.close()
-      set({ ws: null, isConnected: false })
+  const disconnect = () => {
+    if (state.ws) {
+      state.ws.close()
+      setState({ ws: null, isConnected: false })
     }
-  },
+  }
 
   // ============ SHIP ACTIONS ============
 
-  createShip: async (name: string): Promise<Ship | null> => {
-    const userId = useUserStore.getState().userId
+  const createShip = async (name: string): Promise<Ship | null> => {
+    const userId = userStore.userId
     if (!userId) {
       throw new Error('Please login first')
     }
@@ -426,37 +531,37 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       const result = await response.json()
       const ship = result.ship
 
-      set((state) => ({
-        userShips: [...state.userShips, ship],
+      setState(produce((s) => {
+        s.userShips = [...s.userShips, ship]
       }))
 
       // Update ship count in userStore
-      useUserStore.getState().setCurrentShipCount(get().userShips.length)
+      userStore.setCurrentShipCount(state.userShips.length)
 
       return ship
     } catch (err) {
       // Re-throw to let caller handle the error
       throw err
     }
-  },
+  }
 
-  selectShip: (shipId: string | null) => {
-    set({ selectedShipId: shipId })
+  const selectShip = (shipId: string | null) => {
+    setState({ selectedShipId: shipId })
 
     // If selecting a ship that's exploring, fetch synapse details
     if (shipId) {
-      const ship = get().userShips.find(s => s.id === shipId)
+      const ship = state.userShips.find(s => s.id === shipId)
       if (ship?.currentSynapseId) {
-        get().fetchSynapseDetails(ship.currentSynapseId)
-        get().fetchSynapseExplorers(ship.currentSynapseId)
+        fetchSynapseDetails(ship.currentSynapseId)
+        fetchSynapseExplorers(ship.currentSynapseId)
       }
     }
-  },
+  }
 
   // ============ EXPLORATION ACTIONS ============
 
-  startExploration: async (shipId: string, synapseId: string, pointsPerMin: number): Promise<boolean> => {
-    const ship = get().userShips.find(s => s.id === shipId)
+  const startExploration = async (shipId: string, synapseId: string, pointsPerMin: number): Promise<boolean> => {
+    const ship = state.userShips.find(s => s.id === shipId)
     if (!ship) {
       console.error('Ship not found:', shipId)
       return false
@@ -466,7 +571,7 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       return false
     }
 
-    const userId = useUserStore.getState().userId
+    const userId = userStore.userId
     if (!userId) return false
 
     try {
@@ -478,9 +583,9 @@ export const useShipStore = create<ShipStore>((set, get) => ({
 
       if (response.ok) {
         const { ship: updatedShip, synapse } = await response.json()
-        set((state) => ({
-          userShips: state.userShips.map(s => s.id === updatedShip.id ? updatedShip : s),
-          currentExplorationSynapse: synapse,
+        setState(produce((s) => {
+          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          s.currentExplorationSynapse = synapse
         }))
         console.log(`Ship ${updatedShip.name} started exploring synapse ${synapseId} at ${pointsPerMin} pts/min`)
         return true
@@ -493,10 +598,10 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       console.error('Failed to start exploration:', error)
       return false
     }
-  },
+  }
 
-  leaveExploration: async (shipId: string): Promise<boolean> => {
-    const ship = get().userShips.find(s => s.id === shipId)
+  const leaveExploration = async (shipId: string): Promise<boolean> => {
+    const ship = state.userShips.find(s => s.id === shipId)
     if (!ship || ship.state !== 'exploring' || !ship.currentSynapseId) {
       console.error('Ship is not exploring:', shipId)
       return false
@@ -511,10 +616,10 @@ export const useShipStore = create<ShipStore>((set, get) => ({
 
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
-        set((state) => ({
-          userShips: state.userShips.map(s => s.id === updatedShip.id ? updatedShip : s),
-          currentExplorationSynapse: null,
-          currentExplorers: [],
+        setState(produce((s) => {
+          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          s.currentExplorationSynapse = null
+          s.currentExplorers = []
         }))
         console.log(`Ship ${updatedShip.name} left exploration`)
         return true
@@ -527,10 +632,10 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       console.error('Failed to leave exploration:', error)
       return false
     }
-  },
+  }
 
-  updateSpendingRate: async (shipId: string, pointsPerMin: number): Promise<boolean> => {
-    const ship = get().userShips.find(s => s.id === shipId)
+  const updateSpendingRate = async (shipId: string, pointsPerMin: number): Promise<boolean> => {
+    const ship = state.userShips.find(s => s.id === shipId)
     if (!ship || ship.state !== 'exploring' || !ship.currentSynapseId) {
       console.error('Ship is not exploring:', shipId)
       return false
@@ -545,8 +650,8 @@ export const useShipStore = create<ShipStore>((set, get) => ({
 
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
-        set((state) => ({
-          userShips: state.userShips.map(s => s.id === updatedShip.id ? updatedShip : s),
+        setState(produce((s) => {
+          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
         }))
         console.log(`Ship ${updatedShip.name} spending rate updated to ${pointsPerMin} pts/min`)
         return true
@@ -557,11 +662,11 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       console.error('Failed to update spending rate:', error)
       return false
     }
-  },
+  }
 
   // ============ AUTOPILOT ============
 
-  toggleAutopilot: async (shipId: string, enabled: boolean): Promise<boolean> => {
+  const toggleAutopilot = async (shipId: string, enabled: boolean): Promise<boolean> => {
     try {
       const response = await fetch(`${API_URL}/api/ships/${shipId}/autopilot`, {
         method: 'POST',
@@ -571,8 +676,8 @@ export const useShipStore = create<ShipStore>((set, get) => ({
 
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
-        set((state) => ({
-          userShips: state.userShips.map(s => s.id === updatedShip.id ? updatedShip : s),
+        setState(produce((s) => {
+          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
         }))
         console.log(`Ship autopilot ${enabled ? 'enabled' : 'disabled'}`)
         return true
@@ -583,9 +688,9 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       console.error('Failed to toggle autopilot:', error)
       return false
     }
-  },
+  }
 
-  setAutopilotPreferences: async (shipId: string, prefs: AutopilotPreferences): Promise<boolean> => {
+  const setAutopilotPreferences = async (shipId: string, prefs: AutopilotPreferences): Promise<boolean> => {
     try {
       const response = await fetch(`${API_URL}/api/ships/${shipId}/autopilot/preferences`, {
         method: 'POST',
@@ -595,8 +700,8 @@ export const useShipStore = create<ShipStore>((set, get) => ({
 
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
-        set((state) => ({
-          userShips: state.userShips.map(s => s.id === updatedShip.id ? updatedShip : s),
+        setState(produce((s) => {
+          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
         }))
         return true
       }
@@ -606,11 +711,11 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       console.error('Failed to set autopilot preferences:', error)
       return false
     }
-  },
+  }
 
   // ============ ITEMS ============
 
-  equipItem: async (shipId: string, itemId: string, slotIndex: number): Promise<boolean> => {
+  const equipItem = async (shipId: string, itemId: string, slotIndex: number): Promise<boolean> => {
     try {
       const response = await fetch(`${API_URL}/api/ships/${shipId}/equip`, {
         method: 'POST',
@@ -620,8 +725,8 @@ export const useShipStore = create<ShipStore>((set, get) => ({
 
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
-        set((state) => ({
-          userShips: state.userShips.map(s => s.id === updatedShip.id ? updatedShip : s),
+        setState(produce((s) => {
+          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
         }))
         return true
       }
@@ -631,9 +736,9 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       console.error('Failed to equip item:', error)
       return false
     }
-  },
+  }
 
-  unequipItem: async (shipId: string, slotIndex: number): Promise<boolean> => {
+  const unequipItem = async (shipId: string, slotIndex: number): Promise<boolean> => {
     try {
       const response = await fetch(`${API_URL}/api/ships/${shipId}/unequip`, {
         method: 'POST',
@@ -643,8 +748,8 @@ export const useShipStore = create<ShipStore>((set, get) => ({
 
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
-        set((state) => ({
-          userShips: state.userShips.map(s => s.id === updatedShip.id ? updatedShip : s),
+        setState(produce((s) => {
+          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
         }))
         return true
       }
@@ -654,12 +759,12 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       console.error('Failed to unequip item:', error)
       return false
     }
-  },
+  }
 
   // ============ DEPLOY/RECALL ============
 
-  deployShip: async (shipId: string, targetX: number, targetY: number, targetZ: number): Promise<boolean> => {
-    const ship = get().userShips.find(s => s.id === shipId)
+  const deployShip = async (shipId: string, targetX: number, targetY: number, targetZ: number): Promise<boolean> => {
+    const ship = state.userShips.find(s => s.id === shipId)
     if (!ship) {
       console.error('Ship not found:', shipId)
       return false
@@ -678,8 +783,8 @@ export const useShipStore = create<ShipStore>((set, get) => ({
 
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
-        set((state) => ({
-          userShips: state.userShips.map(s => s.id === updatedShip.id ? updatedShip : s),
+        setState(produce((s) => {
+          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
         }))
         console.log(`Ship ${updatedShip.name} deploying to (${targetX.toFixed(2)}, ${targetY.toFixed(2)}, ${targetZ.toFixed(2)})`)
         return true
@@ -692,19 +797,19 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       console.error('Failed to deploy ship:', error)
       return false
     }
-  },
+  }
 
-  deployToSynapse: async (shipId: string, synapseId: string): Promise<boolean> => {
-    const synapse = await get().fetchSynapseDetails(synapseId)
+  const deployToSynapse = async (shipId: string, synapseId: string): Promise<boolean> => {
+    const synapse = await fetchSynapseDetails(synapseId)
     if (!synapse) {
       console.error('Synapse not found:', synapseId)
       return false
     }
 
-    return get().deployShip(shipId, synapse.positionX, synapse.positionY, synapse.positionZ)
-  },
+    return deployShip(shipId, synapse.positionX, synapse.positionY, synapse.positionZ)
+  }
 
-  recallShip: async (shipId: string) => {
+  const recallShip = async (shipId: string) => {
     try {
       const response = await fetch(`${API_URL}/api/ships/${shipId}/recall`, {
         method: 'POST',
@@ -713,46 +818,46 @@ export const useShipStore = create<ShipStore>((set, get) => ({
 
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
-        set((state) => ({
-          userShips: state.userShips.map(s => s.id === updatedShip.id ? updatedShip : s),
-          currentExplorationSynapse: null,
-          currentExplorers: [],
+        setState(produce((s) => {
+          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          s.currentExplorationSynapse = null
+          s.currentExplorers = []
         }))
       }
     } catch (error) {
       // Fallback: update locally
-      set((state) => ({
-        userShips: state.userShips.map(s =>
-          s.id === shipId ? { ...s, state: 'idle' as const, currentSynapseId: null } : s
-        ),
+      setState(produce((s) => {
+        s.userShips = s.userShips.map(ss =>
+          ss.id === shipId ? { ...ss, state: 'idle' as const, currentSynapseId: null } : ss
+        )
       }))
     }
-  },
+  }
 
   // ============ API ACTIONS ============
 
-  fetchUserShips: async () => {
-    const userId = useUserStore.getState().userId
+  const fetchUserShips = async () => {
+    const userId = userStore.userId
     if (!userId) return
 
-    set({ isLoadingShips: true })
+    setState({ isLoadingShips: true })
     try {
       const response = await fetch(`${API_URL}/api/users/${userId}/ships`)
       if (!response.ok) throw new Error('Failed to fetch ships')
 
       const ships = await response.json()
-      set({ userShips: ships, isLoadingShips: false })
+      setState({ userShips: ships, isLoadingShips: false })
 
       // Update ship count in userStore
-      useUserStore.getState().setCurrentShipCount(ships.length)
+      userStore.setCurrentShipCount(ships.length)
     } catch (error) {
       console.error('Failed to fetch user ships:', error)
-      set({ isLoadingShips: false })
+      setState({ isLoadingShips: false })
     }
-  },
+  }
 
-  fetchWorldState: async () => {
-    set({ isLoadingWorld: true })
+  const fetchWorldState = async () => {
+    setState({ isLoadingWorld: true })
     try {
       const response = await fetch(`${API_URL}/api/world`)
       if (!response.ok) throw new Error('Failed to fetch world state')
@@ -775,7 +880,7 @@ export const useShipStore = create<ShipStore>((set, get) => ({
 
       console.log(`DEBUG fetchWorldState: ${rawClusters.length} raw clusters, ${synapseClustersLod0.length} LOD0, ${synapseClustersLod1.length} LOD1, ${synapseClustersLod2.length} LOD2`)
 
-      set({
+      setState({
         synapseClusters: mappedClusters,
         synapseClustersLod0,
         synapseClustersLod1,
@@ -789,198 +894,182 @@ export const useShipStore = create<ShipStore>((set, get) => ({
       })
     } catch (error) {
       console.error('Failed to fetch world state:', error)
-      set({ isLoadingWorld: false })
+      setState({ isLoadingWorld: false })
     }
-  },
+  }
 
-  fetchSynapseDetails: async (synapseId: string): Promise<Synapse | null> => {
+  const fetchSynapseDetails = async (synapseId: string): Promise<Synapse | null> => {
     try {
       const response = await fetch(`${API_URL}/api/synapses/${synapseId}`)
       if (!response.ok) return null
 
       const synapse = await response.json()
-      set({ currentExplorationSynapse: synapse })
+      setState({ currentExplorationSynapse: synapse })
       return synapse
     } catch (error) {
       console.error('Failed to fetch synapse details:', error)
       return null
     }
-  },
+  }
 
-  fetchSynapseExplorers: async (synapseId: string): Promise<ExplorerInfo[]> => {
+  const fetchSynapseExplorers = async (synapseId: string): Promise<ExplorerInfo[]> => {
     try {
       const response = await fetch(`${API_URL}/api/synapses/${synapseId}/explorers`)
       if (!response.ok) return []
 
       const explorers = await response.json()
-      set({ currentExplorers: explorers })
+      setState({ currentExplorers: explorers })
       return explorers
     } catch (error) {
       console.error('Failed to fetch synapse explorers:', error)
       return []
     }
-  },
+  }
 
   // ============ UI ACTIONS ============
 
-  setViewMode: (mode) => set({ viewMode: mode }),
-  setShowShipPaths: (show) => set({ showShipPaths: show }),
-  setShowDiscoveredOnly: (show) => set({ showDiscoveredOnly: show }),
-  setLodLevel: (level) => set({ currentLodLevel: Math.max(0, Math.min(2, level)) }),
+  const setViewMode = (mode: '3d' | '2d-top') => setState({ viewMode: mode })
+  const setShowShipPaths = (show: boolean) => setState({ showShipPaths: show })
+  const setShowDiscoveredOnly = (show: boolean) => setState({ showDiscoveredOnly: show })
+  const setLodLevel = (level: number) => setState({ currentLodLevel: Math.max(0, Math.min(2, level)) })
 
   // ============ UTILITY ============
 
-  getSynapseClustersForLod: () => {
-    const { currentLodLevel, synapseClustersLod0, synapseClustersLod1, synapseClustersLod2 } = get()
-    switch (currentLodLevel) {
-      case 0: return synapseClustersLod0
-      case 1: return synapseClustersLod1
-      case 2: return synapseClustersLod2
-      default: return synapseClustersLod0
+  const getSynapseClustersForLod = () => {
+    switch (state.currentLodLevel) {
+      case 0: return state.synapseClustersLod0
+      case 1: return state.synapseClustersLod1
+      case 2: return state.synapseClustersLod2
+      default: return state.synapseClustersLod0
     }
-  },
+  }
 
-  getShipClustersForLod: () => {
-    const { currentLodLevel, shipClustersLod0, shipClustersLod1, shipClustersLod2 } = get()
-    switch (currentLodLevel) {
-      case 0: return shipClustersLod0
-      case 1: return shipClustersLod1
-      case 2: return shipClustersLod2
-      default: return shipClustersLod0
+  const getShipClustersForLod = () => {
+    switch (state.currentLodLevel) {
+      case 0: return state.shipClustersLod0
+      case 1: return state.shipClustersLod1
+      case 2: return state.shipClustersLod2
+      default: return state.shipClustersLod0
     }
-  },
+  }
 
-  canCreateShip: () => {
-    const { userShips } = get()
-    const { maxShips } = useUserStore.getState()
-    return userShips.length < maxShips
-  },
-}))
+  const canCreateShip = () => {
+    return state.userShips.length < userStore.maxShips
+  }
 
-// ============ SERVER MESSAGE HANDLER ============
+  return {
+    // ============ REACTIVE GETTERS ============
+    // Connection State
+    get isConnected() { return state.isConnected },
+    get ws() { return state.ws },
 
-function handleServerMessage(
-  message: ServerMessage,
-  set: (state: Partial<ShipStore> | ((state: ShipStore) => Partial<ShipStore>)) => void,
-  _get: () => ShipStore
-) {
-  switch (message.type) {
-    case 'state:sync': {
-      const world = message.data
+    // Synapse State (LOD clusters)
+    get synapseClusters() { return state.synapseClusters },
+    get synapseClustersLod0() { return state.synapseClustersLod0 },
+    get synapseClustersLod1() { return state.synapseClustersLod1 },
+    get synapseClustersLod2() { return state.synapseClustersLod2 },
 
-      // Map server clusters to client format and separate by LOD level
-      const rawClusters = world.synapseClusters || []
-      const mappedClusters = rawClusters.map(mapServerClusterToClient)
+    // Ship State (LOD clusters + user's ships)
+    get shipClusters() { return state.shipClusters },
+    get shipClustersLod0() { return state.shipClustersLod0 },
+    get shipClustersLod1() { return state.shipClustersLod1 },
+    get shipClustersLod2() { return state.shipClustersLod2 },
+    get userShips() { return state.userShips },
+    get selectedShipId() { return state.selectedShipId },
 
-      const synapseClustersLod0 = mappedClusters.filter(c => c.lodLevel === 0)
-      const synapseClustersLod1 = mappedClusters.filter(c => c.lodLevel === 1)
-      const synapseClustersLod2 = mappedClusters.filter(c => c.lodLevel === 2)
+    // Current Exploration (for selected ship)
+    get currentExplorationSynapse() { return state.currentExplorationSynapse },
+    get currentExplorers() { return state.currentExplorers },
 
-      const shipClustersLod0 = (world.shipClusters || []).filter(c => c.lodLevel === 0)
-      const shipClustersLod1 = (world.shipClusters || []).filter(c => c.lodLevel === 1)
-      const shipClustersLod2 = (world.shipClusters || []).filter(c => c.lodLevel === 2)
+    // Discovery Progress
+    get discoveryProgress() { return state.discoveryProgress },
 
-      set({
-        synapseClusters: mappedClusters,
-        synapseClustersLod0,
-        synapseClustersLod1,
-        synapseClustersLod2,
-        shipClusters: world.shipClusters || [],
-        shipClustersLod0,
-        shipClustersLod1,
-        shipClustersLod2,
-        discoveryProgress: world.discoveryProgress,
-      })
-      break
-    }
+    // Recent Events
+    get recentDiscoveries() { return state.recentDiscoveries },
+    get recentLoot() { return state.recentLoot },
 
-    case 'synapse:completed': {
-      const event = message.data
-      set((state) => ({
-        recentDiscoveries: [event, ...state.recentDiscoveries].slice(0, 50),
-      }))
-      break
-    }
+    // UI State
+    get viewMode() { return state.viewMode },
+    get showShipPaths() { return state.showShipPaths },
+    get showDiscoveredOnly() { return state.showDiscoveredOnly },
+    get currentLodLevel() { return state.currentLodLevel },
 
-    case 'loot:distributed': {
-      const event = message.data
-      set((state) => ({
-        recentLoot: [event, ...state.recentLoot].slice(0, 50),
-      }))
+    // Loading States
+    get isLoadingWorld() { return state.isLoadingWorld },
+    get isLoadingShips() { return state.isLoadingShips },
+    get deployingShipIds() { return state.deployingShipIds },
 
-      // Update user's AGI and brain XP
-      const userId = useUserStore.getState().userId
-      if (event.userId === userId) {
-        useUserStore.getState().addAgi(event.agiAmount)
-        useUserStore.getState().addBrainXP(event.brainXp)
-        if (event.lotteryTicketsAwarded > 0) {
-          useUserStore.getState().addLotteryTickets(event.lotteryTicketsAwarded)
-        }
+    // ============ COMPUTED SELECTORS ============
+    get selectedShip() {
+      return state.userShips.find(s => s.id === state.selectedShipId) || null
+    },
+    get exploringShips() {
+      return state.userShips.filter(s => s.state === 'exploring')
+    },
+    get idleShips() {
+      return state.userShips.filter(s => s.state === 'idle')
+    },
+    get currentExploration() {
+      return {
+        synapse: state.currentExplorationSynapse,
+        explorers: state.currentExplorers,
       }
-      break
-    }
+    },
 
-    case 'ships:update': {
-      const updatedShips = message.data
-      set((state) => {
-        // Update user's ships if any of them are in the update
-        const updatedUserShips = state.userShips.map((ship) => {
-          const updated = updatedShips.find(u => u.id === ship.id)
-          if (updated) {
-            console.log(`Ship ${ship.name} updated:`, updated.state, `pos: (${updated.positionX.toFixed(2)}, ${updated.positionY.toFixed(2)}, ${updated.positionZ.toFixed(2)})`)
-            return updated
-          }
-          return ship
-        })
+    // ============ ACTIONS ============
+    // Connection
+    connect,
+    disconnect,
 
-        return { userShips: updatedUserShips }
-      })
-      break
-    }
+    // Ship Actions
+    createShip,
+    selectShip,
 
-    case 'exploration:progress': {
-      const { synapseId, pointsAccumulated, eta } = message.data
-      set((state) => {
-        if (state.currentExplorationSynapse?.id === synapseId) {
-          return {
-            currentExplorationSynapse: {
-              ...state.currentExplorationSynapse,
-              pointsAccumulated,
-              currentEtaMinutes: eta,
-            },
-          }
-        }
-        return {}
-      })
-      break
-    }
+    // Exploration Actions
+    startExploration,
+    leaveExploration,
+    updateSpendingRate,
 
-    case 'lottery:winner': {
-      const { synapseId, winnerId, winnerShipId, reward } = message.data
-      console.log(`Lottery winner for synapse ${synapseId}: ${winnerId} (ship ${winnerShipId}) won ${reward} AGI!`)
-      // Could trigger a notification UI here
-      break
-    }
+    // Autopilot
+    toggleAutopilot,
+    setAutopilotPreferences,
 
-    case 'error': {
-      console.error('Server error:', message.data.message)
-      break
-    }
+    // Items
+    equipItem,
+    unequipItem,
+
+    // Deploy/Recall
+    deployShip,
+    deployToSynapse,
+    recallShip,
+
+    // API Actions
+    fetchUserShips,
+    fetchWorldState,
+    fetchSynapseDetails,
+    fetchSynapseExplorers,
+
+    // UI Actions
+    setViewMode,
+    setShowShipPaths,
+    setShowDiscoveredOnly,
+    setLodLevel,
+
+    // Utility
+    getSynapseClustersForLod,
+    getShipClustersForLod,
+    canCreateShip,
   }
 }
 
-// ============ SELECTORS ============
+export const shipStore = createRoot(createShipStore)
 
-export const selectUserShips = (state: ShipStore) => state.userShips
-export const selectSelectedShip = (state: ShipStore) =>
-  state.userShips.find(s => s.id === state.selectedShipId) || null
-export const selectExploringShips = (state: ShipStore) =>
-  state.userShips.filter(s => s.state === 'exploring')
-export const selectIdleShips = (state: ShipStore) =>
-  state.userShips.filter(s => s.state === 'idle')
-export const selectCurrentExploration = (state: ShipStore) => ({
-  synapse: state.currentExplorationSynapse,
-  explorers: state.currentExplorers,
-})
-export const selectDiscoveryProgress = (state: ShipStore) => state.discoveryProgress
-export const selectRecentLoot = (state: ShipStore) => state.recentLoot
+// ============ SELECTOR FUNCTIONS (for compatibility) ============
+
+export const selectUserShips = () => shipStore.userShips
+export const selectSelectedShip = () => shipStore.selectedShip
+export const selectExploringShips = () => shipStore.exploringShips
+export const selectIdleShips = () => shipStore.idleShips
+export const selectCurrentExploration = () => shipStore.currentExploration
+export const selectDiscoveryProgress = () => shipStore.discoveryProgress
+export const selectRecentLoot = () => shipStore.recentLoot

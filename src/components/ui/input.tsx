@@ -1,166 +1,62 @@
-import * as React from 'react'
+import { createUniqueId, Show, splitProps, type JSX, type Component } from 'solid-js'
 import { cn } from '@/lib/utils'
-import { Check, AlertCircle } from 'lucide-react'
+import { Check, AlertCircle } from 'lucide-solid'
 
-export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+export interface InputProps extends Omit<JSX.InputHTMLAttributes<HTMLInputElement>, 'class'> {
   label?: string
   hint?: string
   error?: string
   success?: string
-  leftIcon?: React.ReactNode
-  rightIcon?: React.ReactNode
+  leftIcon?: JSX.Element
+  rightIcon?: JSX.Element
   showCharCount?: boolean
   maxLength?: number
+  class?: string
 }
 
-const Input = React.forwardRef<HTMLInputElement, InputProps>(
-  ({ className, type, label, hint, error, success, leftIcon, rightIcon, disabled, showCharCount, maxLength, value, ...props }, ref) => {
-    const id = React.useId()
-    const charCount = typeof value === 'string' ? value.length : 0
+export function Input(props: InputProps) {
+  const [local, rest] = splitProps(props, [
+    'class', 'type', 'label', 'hint', 'error', 'success', 'leftIcon', 'rightIcon', 'disabled', 'showCharCount', 'maxLength', 'value', 'required'
+  ])
 
-    return (
-      <div className="w-full space-y-[var(--space-2)]">
-        {label && (
-          <label
-            htmlFor={id}
-            className="block text-sm font-semibold text-[var(--text-secondary)] mb-[var(--space-3)]"
-          >
-            {label}
-            {props.required && <span className="text-[var(--status-error)] ml-[var(--space-1)]">*</span>}
-          </label>
-        )}
+  const id = createUniqueId()
+  const charCount = () => typeof local.value === 'string' ? local.value.length : 0
 
-        <div className="relative group">
-          {leftIcon && (
-            <div className="absolute left-[var(--space-4)] top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none transition-colors group-focus-within:text-[var(--brand-teal-1)]">
-              {leftIcon}
-            </div>
-          )}
+  return (
+    <div class="w-full space-y-[var(--space-2)]">
+      <Show when={local.label}>
+        <label
+          for={id}
+          class="block text-sm font-semibold text-[var(--text-secondary)] mb-[var(--space-3)]"
+        >
+          {local.label}
+          <Show when={local.required}>
+            <span class="text-[var(--status-error)] ml-[var(--space-1)]">*</span>
+          </Show>
+        </label>
+      </Show>
 
-          <input
-            id={id}
-            type={type}
-            value={value}
-            maxLength={maxLength}
-            className={cn(
-              // Base styles
-              'flex h-[var(--input-height)] w-full rounded-xl border bg-[var(--background-primary)] text-[var(--text-primary)] text-base',
-              // Padding - adjust for icons
-              leftIcon ? 'pl-[var(--space-12)]' : 'pl-[var(--space-5)]',
-              rightIcon || success || error ? 'pr-[var(--space-12)]' : 'pr-[var(--space-5)]',
-              'py-[var(--space-4)]',
-              // Border and focus
-              'border-[var(--card-border)]',
-              'transition-all duration-200',
-              'placeholder:text-[var(--text-muted)]',
-              // Focus state
-              'focus:outline-none focus:border-[var(--brand-teal-1)] focus:ring-[var(--space-4)] focus:ring-[var(--brand-teal-1)]/15',
-              // Hover state
-              'hover:border-[var(--card-border-hover)]',
-              // Success state
-              success && 'border-[var(--status-success)]/50 focus:border-[var(--status-success)] focus:ring-[var(--status-success)]/15',
-              // Error state
-              error && 'border-[var(--status-error)]/50 focus:border-[var(--status-error)] focus:ring-[var(--status-error)]/15',
-              // Disabled state
-              disabled && 'opacity-50 cursor-not-allowed bg-[var(--background-secondary)]',
-              className
-            )}
-            ref={ref}
-            disabled={disabled}
-            {...props}
-          />
-
-          {/* Right side icons */}
-          <div className="absolute right-[var(--space-4)] top-1/2 -translate-y-1/2 flex items-center gap-[var(--space-2)]">
-            {success && !error && (
-              <div className="p-[var(--space-1)] rounded-full bg-[var(--status-success)]/20">
-                <Check className="h-[var(--icon-sm)] w-[var(--icon-sm)] text-[var(--status-success)]" />
-              </div>
-            )}
-            {error && (
-              <div className="p-[var(--space-1)] rounded-full bg-[var(--status-error)]/20">
-                <AlertCircle className="h-[var(--icon-sm)] w-[var(--icon-sm)] text-[var(--status-error)]" />
-              </div>
-            )}
-            {rightIcon && !success && !error && (
-              <div className="text-[var(--text-muted)]">
-                {rightIcon}
-              </div>
-            )}
+      <div class="relative group">
+        <Show when={local.leftIcon}>
+          <div class="absolute left-[var(--space-4)] top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none transition-colors group-focus-within:text-[var(--brand-teal-1)]">
+            {local.leftIcon}
           </div>
-        </div>
+        </Show>
 
-        {/* Helper text row */}
-        <div className="flex items-center justify-between mt-[var(--space-2\.5)] min-h-[var(--space-5)]">
-          <div className="flex-1">
-            {error && (
-              <p className="text-sm text-[var(--status-error)] font-medium flex items-center gap-[var(--space-1\.5)]">
-                <AlertCircle className="h-[var(--icon-xs)] w-[var(--icon-xs)]" />
-                {error}
-              </p>
-            )}
-            {success && !error && (
-              <p className="text-sm text-[var(--status-success)] font-medium flex items-center gap-[var(--space-1\.5)]">
-                <Check className="h-[var(--icon-xs)] w-[var(--icon-xs)]" />
-                {success}
-              </p>
-            )}
-            {hint && !error && !success && (
-              <p className="text-sm text-[var(--text-muted)]">
-                {hint}
-              </p>
-            )}
-          </div>
-          {showCharCount && maxLength && (
-            <span className={cn(
-              'text-xs font-medium tabular-nums ml-[var(--space-3)]',
-              charCount >= maxLength ? 'text-[var(--status-error)]' : 'text-[var(--text-muted)]'
-            )}>
-              {charCount}/{maxLength}
-            </span>
-          )}
-        </div>
-      </div>
-    )
-  }
-)
-Input.displayName = 'Input'
-
-// Textarea variant
-export interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
-  label?: string
-  hint?: string
-  error?: string
-  success?: string
-  showCharCount?: boolean
-  maxLength?: number
-}
-
-const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
-  ({ className, label, hint, error, success, disabled, showCharCount, maxLength, value, ...props }, ref) => {
-    const id = React.useId()
-    const charCount = typeof value === 'string' ? value.length : 0
-
-    return (
-      <div className="w-full space-y-[var(--space-2)]">
-        {label && (
-          <label
-            htmlFor={id}
-            className="block text-sm font-semibold text-[var(--text-secondary)] mb-[var(--space-3)]"
-          >
-            {label}
-            {props.required && <span className="text-[var(--status-error)] ml-[var(--space-1)]">*</span>}
-          </label>
-        )}
-
-        <textarea
+        <input
           id={id}
-          value={value}
-          maxLength={maxLength}
-          className={cn(
+          type={local.type}
+          value={local.value}
+          maxLength={local.maxLength}
+          disabled={local.disabled}
+          required={local.required}
+          class={cn(
             // Base styles
-            'flex min-h-[var(--textarea-min-height)] w-full rounded-xl border bg-[var(--background-primary)] text-[var(--text-primary)] text-base',
-            'px-[var(--space-5)] py-[var(--space-4)]',
+            'flex h-[var(--input-height)] w-full rounded-xl border bg-[var(--background-primary)] text-[var(--text-primary)] text-base',
+            // Padding - adjust for icons
+            local.leftIcon ? 'pl-[var(--space-12)]' : 'pl-[var(--space-5)]',
+            local.rightIcon || local.success || local.error ? 'pr-[var(--space-12)]' : 'pr-[var(--space-5)]',
+            'py-[var(--space-4)]',
             // Border and focus
             'border-[var(--card-border)]',
             'transition-all duration-200',
@@ -169,291 +65,403 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
             'focus:outline-none focus:border-[var(--brand-teal-1)] focus:ring-[var(--space-4)] focus:ring-[var(--brand-teal-1)]/15',
             // Hover state
             'hover:border-[var(--card-border-hover)]',
-            // Resize
-            'resize-none',
             // Success state
-            success && 'border-[var(--status-success)]/50 focus:border-[var(--status-success)] focus:ring-[var(--status-success)]/15',
+            local.success && 'border-[var(--status-success)]/50 focus:border-[var(--status-success)] focus:ring-[var(--status-success)]/15',
             // Error state
-            error && 'border-[var(--status-error)]/50 focus:border-[var(--status-error)] focus:ring-[var(--status-error)]/15',
+            local.error && 'border-[var(--status-error)]/50 focus:border-[var(--status-error)] focus:ring-[var(--status-error)]/15',
             // Disabled state
-            disabled && 'opacity-50 cursor-not-allowed bg-[var(--background-secondary)]',
-            className
+            local.disabled && 'opacity-50 cursor-not-allowed bg-[var(--background-secondary)]',
+            local.class
           )}
-          ref={ref}
-          disabled={disabled}
-          {...props}
+          {...rest}
         />
 
-        {/* Helper text row */}
-        <div className="flex items-center justify-between mt-[var(--space-2\.5)] min-h-[var(--space-5)]">
-          <div className="flex-1">
-            {error && (
-              <p className="text-sm text-[var(--status-error)] font-medium flex items-center gap-[var(--space-1\.5)]">
-                <AlertCircle className="h-[var(--icon-xs)] w-[var(--icon-xs)]" />
-                {error}
-              </p>
-            )}
-            {success && !error && (
-              <p className="text-sm text-[var(--status-success)] font-medium flex items-center gap-[var(--space-1\.5)]">
-                <Check className="h-[var(--icon-xs)] w-[var(--icon-xs)]" />
-                {success}
-              </p>
-            )}
-            {hint && !error && !success && (
-              <p className="text-sm text-[var(--text-muted)]">
-                {hint}
-              </p>
-            )}
-          </div>
-          {showCharCount && maxLength && (
-            <span className={cn(
-              'text-xs font-medium tabular-nums ml-[var(--space-3)]',
-              charCount >= maxLength ? 'text-[var(--status-error)]' : 'text-[var(--text-muted)]'
-            )}>
-              {charCount}/{maxLength}
-            </span>
-          )}
+        {/* Right side icons */}
+        <div class="absolute right-[var(--space-4)] top-1/2 -translate-y-1/2 flex items-center gap-[var(--space-2)]">
+          <Show when={local.success && !local.error}>
+            <div class="p-[var(--space-1)] rounded-full bg-[var(--status-success)]/20">
+              <Check class="h-[var(--icon-sm)] w-[var(--icon-sm)] text-[var(--status-success)]" />
+            </div>
+          </Show>
+          <Show when={local.error}>
+            <div class="p-[var(--space-1)] rounded-full bg-[var(--status-error)]/20">
+              <AlertCircle class="h-[var(--icon-sm)] w-[var(--icon-sm)] text-[var(--status-error)]" />
+            </div>
+          </Show>
+          <Show when={local.rightIcon && !local.success && !local.error}>
+            <div class="text-[var(--text-muted)]">
+              {local.rightIcon}
+            </div>
+          </Show>
         </div>
       </div>
-    )
-  }
-)
-Textarea.displayName = 'Textarea'
+
+      {/* Helper text row */}
+      <div class="flex items-center justify-between mt-[var(--space-2\.5)] min-h-[var(--space-5)]">
+        <div class="flex-1">
+          <Show when={local.error}>
+            <p class="text-sm text-[var(--status-error)] font-medium flex items-center gap-[var(--space-1\.5)]">
+              <AlertCircle class="h-[var(--icon-xs)] w-[var(--icon-xs)]" />
+              {local.error}
+            </p>
+          </Show>
+          <Show when={local.success && !local.error}>
+            <p class="text-sm text-[var(--status-success)] font-medium flex items-center gap-[var(--space-1\.5)]">
+              <Check class="h-[var(--icon-xs)] w-[var(--icon-xs)]" />
+              {local.success}
+            </p>
+          </Show>
+          <Show when={local.hint && !local.error && !local.success}>
+            <p class="text-sm text-[var(--text-muted)]">
+              {local.hint}
+            </p>
+          </Show>
+        </div>
+        <Show when={local.showCharCount && local.maxLength}>
+          <span class={cn(
+            'text-xs font-medium tabular-nums ml-[var(--space-3)]',
+            charCount() >= (local.maxLength ?? 0) ? 'text-[var(--status-error)]' : 'text-[var(--text-muted)]'
+          )}>
+            {charCount()}/{local.maxLength}
+          </span>
+        </Show>
+      </div>
+    </div>
+  )
+}
+
+// Textarea variant
+export interface TextareaProps extends Omit<JSX.TextareaHTMLAttributes<HTMLTextAreaElement>, 'class'> {
+  label?: string
+  hint?: string
+  error?: string
+  success?: string
+  showCharCount?: boolean
+  maxLength?: number
+  class?: string
+}
+
+export function Textarea(props: TextareaProps) {
+  const [local, rest] = splitProps(props, [
+    'class', 'label', 'hint', 'error', 'success', 'disabled', 'showCharCount', 'maxLength', 'value', 'required'
+  ])
+
+  const id = createUniqueId()
+  const charCount = () => typeof local.value === 'string' ? local.value.length : 0
+
+  return (
+    <div class="w-full space-y-[var(--space-2)]">
+      <Show when={local.label}>
+        <label
+          for={id}
+          class="block text-sm font-semibold text-[var(--text-secondary)] mb-[var(--space-3)]"
+        >
+          {local.label}
+          <Show when={local.required}>
+            <span class="text-[var(--status-error)] ml-[var(--space-1)]">*</span>
+          </Show>
+        </label>
+      </Show>
+
+      <textarea
+        id={id}
+        value={local.value}
+        maxLength={local.maxLength}
+        disabled={local.disabled}
+        required={local.required}
+        class={cn(
+          // Base styles
+          'flex min-h-[var(--textarea-min-height)] w-full rounded-xl border bg-[var(--background-primary)] text-[var(--text-primary)] text-base',
+          'px-[var(--space-5)] py-[var(--space-4)]',
+          // Border and focus
+          'border-[var(--card-border)]',
+          'transition-all duration-200',
+          'placeholder:text-[var(--text-muted)]',
+          // Focus state
+          'focus:outline-none focus:border-[var(--brand-teal-1)] focus:ring-[var(--space-4)] focus:ring-[var(--brand-teal-1)]/15',
+          // Hover state
+          'hover:border-[var(--card-border-hover)]',
+          // Resize
+          'resize-none',
+          // Success state
+          local.success && 'border-[var(--status-success)]/50 focus:border-[var(--status-success)] focus:ring-[var(--status-success)]/15',
+          // Error state
+          local.error && 'border-[var(--status-error)]/50 focus:border-[var(--status-error)] focus:ring-[var(--status-error)]/15',
+          // Disabled state
+          local.disabled && 'opacity-50 cursor-not-allowed bg-[var(--background-secondary)]',
+          local.class
+        )}
+        {...rest}
+      />
+
+      {/* Helper text row */}
+      <div class="flex items-center justify-between mt-[var(--space-2\.5)] min-h-[var(--space-5)]">
+        <div class="flex-1">
+          <Show when={local.error}>
+            <p class="text-sm text-[var(--status-error)] font-medium flex items-center gap-[var(--space-1\.5)]">
+              <AlertCircle class="h-[var(--icon-xs)] w-[var(--icon-xs)]" />
+              {local.error}
+            </p>
+          </Show>
+          <Show when={local.success && !local.error}>
+            <p class="text-sm text-[var(--status-success)] font-medium flex items-center gap-[var(--space-1\.5)]">
+              <Check class="h-[var(--icon-xs)] w-[var(--icon-xs)]" />
+              {local.success}
+            </p>
+          </Show>
+          <Show when={local.hint && !local.error && !local.success}>
+            <p class="text-sm text-[var(--text-muted)]">
+              {local.hint}
+            </p>
+          </Show>
+        </div>
+        <Show when={local.showCharCount && local.maxLength}>
+          <span class={cn(
+            'text-xs font-medium tabular-nums ml-[var(--space-3)]',
+            charCount() >= (local.maxLength ?? 0) ? 'text-[var(--status-error)]' : 'text-[var(--text-muted)]'
+          )}>
+            {charCount()}/{local.maxLength}
+          </span>
+        </Show>
+      </div>
+    </div>
+  )
+}
 
 // Select variant
-export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
+export interface SelectProps extends Omit<JSX.SelectHTMLAttributes<HTMLSelectElement>, 'class'> {
   label?: string
   hint?: string
   error?: string
   options: { value: string; label: string; disabled?: boolean }[]
   placeholder?: string
+  class?: string
 }
 
-const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
-  ({ className, label, hint, error, options, placeholder, disabled, ...props }, ref) => {
-    const id = React.useId()
+export function Select(props: SelectProps) {
+  const [local, rest] = splitProps(props, [
+    'class', 'label', 'hint', 'error', 'options', 'placeholder', 'disabled', 'required'
+  ])
 
-    return (
-      <div className="w-full space-y-[var(--space-2)]">
-        {label && (
-          <label
-            htmlFor={id}
-            className="block text-sm font-semibold text-[var(--text-secondary)] mb-[var(--space-3)]"
+  const id = createUniqueId()
+
+  return (
+    <div class="w-full space-y-[var(--space-2)]">
+      <Show when={local.label}>
+        <label
+          for={id}
+          class="block text-sm font-semibold text-[var(--text-secondary)] mb-[var(--space-3)]"
+        >
+          {local.label}
+          <Show when={local.required}>
+            <span class="text-[var(--status-error)] ml-[var(--space-1)]">*</span>
+          </Show>
+        </label>
+      </Show>
+
+      <div class="relative">
+        <select
+          id={id}
+          disabled={local.disabled}
+          required={local.required}
+          class={cn(
+            // Base styles
+            'flex h-[var(--input-height)] w-full rounded-xl border bg-[var(--background-primary)] text-[var(--text-primary)] text-base appearance-none',
+            'px-[var(--space-5)] py-[var(--space-4)] pr-[var(--space-12)]',
+            // Border and focus
+            'border-[var(--card-border)]',
+            'transition-all duration-200',
+            // Focus state
+            'focus:outline-none focus:border-[var(--brand-teal-1)] focus:ring-[var(--space-4)] focus:ring-[var(--brand-teal-1)]/15',
+            // Hover state
+            'hover:border-[var(--card-border-hover)]',
+            // Cursor
+            'cursor-pointer',
+            // Error state
+            local.error && 'border-[var(--status-error)]/50 focus:border-[var(--status-error)] focus:ring-[var(--status-error)]/15',
+            // Disabled state
+            local.disabled && 'opacity-50 cursor-not-allowed bg-[var(--background-secondary)]',
+            local.class
+          )}
+          {...rest}
+        >
+          <Show when={local.placeholder}>
+            <option value="" disabled>
+              {local.placeholder}
+            </option>
+          </Show>
+          {local.options.map((option) => (
+            <option value={option.value} disabled={option.disabled}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+
+        {/* Custom dropdown arrow */}
+        <div class="absolute right-[var(--space-4)] top-1/2 -translate-y-1/2 pointer-events-none">
+          <svg
+            class="h-[var(--icon-md)] w-[var(--icon-md)] text-[var(--text-muted)]"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
           >
-            {label}
-            {props.required && <span className="text-[var(--status-error)] ml-[var(--space-1)]">*</span>}
-          </label>
-        )}
-
-        <div className="relative">
-          <select
-            id={id}
-            className={cn(
-              // Base styles
-              'flex h-[var(--input-height)] w-full rounded-xl border bg-[var(--background-primary)] text-[var(--text-primary)] text-base appearance-none',
-              'px-[var(--space-5)] py-[var(--space-4)] pr-[var(--space-12)]',
-              // Border and focus
-              'border-[var(--card-border)]',
-              'transition-all duration-200',
-              // Focus state
-              'focus:outline-none focus:border-[var(--brand-teal-1)] focus:ring-[var(--space-4)] focus:ring-[var(--brand-teal-1)]/15',
-              // Hover state
-              'hover:border-[var(--card-border-hover)]',
-              // Cursor
-              'cursor-pointer',
-              // Error state
-              error && 'border-[var(--status-error)]/50 focus:border-[var(--status-error)] focus:ring-[var(--status-error)]/15',
-              // Disabled state
-              disabled && 'opacity-50 cursor-not-allowed bg-[var(--background-secondary)]',
-              className
-            )}
-            ref={ref}
-            disabled={disabled}
-            {...props}
-          >
-            {placeholder && (
-              <option value="" disabled>
-                {placeholder}
-              </option>
-            )}
-            {options.map((option) => (
-              <option key={option.value} value={option.value} disabled={option.disabled}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-
-          {/* Custom dropdown arrow */}
-          <div className="absolute right-[var(--space-4)] top-1/2 -translate-y-1/2 pointer-events-none">
-            <svg
-              className="h-[var(--icon-md)] w-[var(--icon-md)] text-[var(--text-muted)]"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </div>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width={2} d="M19 9l-7 7-7-7" />
+          </svg>
         </div>
-
-        {(hint || error) && (
-          <p className={cn(
-            'mt-[var(--space-2\.5)] text-sm',
-            error ? 'text-[var(--status-error)] font-medium' : 'text-[var(--text-muted)]'
-          )}>
-            {error || hint}
-          </p>
-        )}
       </div>
-    )
-  }
-)
-Select.displayName = 'Select'
+
+      <Show when={local.hint || local.error}>
+        <p class={cn(
+          'mt-[var(--space-2\.5)] text-sm',
+          local.error ? 'text-[var(--status-error)] font-medium' : 'text-[var(--text-muted)]'
+        )}>
+          {local.error || local.hint}
+        </p>
+      </Show>
+    </div>
+  )
+}
 
 // Checkbox component
-export interface CheckboxProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'> {
+export interface CheckboxProps extends Omit<JSX.InputHTMLAttributes<HTMLInputElement>, 'type' | 'class'> {
   label?: string
   description?: string
+  class?: string
 }
 
-const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
-  ({ className, label, description, disabled, ...props }, ref) => {
-    const id = React.useId()
+export function Checkbox(props: CheckboxProps) {
+  const [local, rest] = splitProps(props, ['class', 'label', 'description', 'disabled'])
+  const id = createUniqueId()
 
-    return (
-      <div className={cn('flex items-start gap-[var(--space-4)]', disabled && 'opacity-50')}>
-        <div className="relative flex items-center justify-center mt-[var(--space-0\.5)]">
-          <input
-            id={id}
-            type="checkbox"
-            ref={ref}
-            disabled={disabled}
-            className={cn(
-              'peer h-[var(--checkbox-size)] w-[var(--checkbox-size)] rounded-lg border-2 border-[var(--card-border)] bg-[var(--background-primary)]',
-              'transition-all duration-200',
-              'checked:bg-[var(--brand-teal-1)] checked:border-[var(--brand-teal-1)]',
-              'hover:border-[var(--card-border-hover)]',
-              'focus:outline-none focus:ring-[var(--space-4)] focus:ring-[var(--brand-teal-1)]/15',
-              'cursor-pointer disabled:cursor-not-allowed',
-              'appearance-none',
-              className
-            )}
-            {...props}
-          />
-          {/* Checkmark icon */}
-          <Check className="absolute h-[var(--icon-sm)] w-[var(--icon-sm)] text-white pointer-events-none opacity-0 peer-checked:opacity-100 transition-opacity" />
-        </div>
-        {(label || description) && (
-          <label htmlFor={id} className="cursor-pointer select-none">
-            {label && (
-              <span className="block text-base font-medium text-[var(--text-primary)]">
-                {label}
-              </span>
-            )}
-            {description && (
-              <span className="block text-sm text-[var(--text-muted)] mt-[var(--space-1)]">
-                {description}
-              </span>
-            )}
-          </label>
-        )}
+  return (
+    <div class={cn('flex items-start gap-[var(--space-4)]', local.disabled && 'opacity-50')}>
+      <div class="relative flex items-center justify-center mt-[var(--space-0\.5)]">
+        <input
+          id={id}
+          type="checkbox"
+          disabled={local.disabled}
+          class={cn(
+            'peer h-[var(--checkbox-size)] w-[var(--checkbox-size)] rounded-lg border-2 border-[var(--card-border)] bg-[var(--background-primary)]',
+            'transition-all duration-200',
+            'checked:bg-[var(--brand-teal-1)] checked:border-[var(--brand-teal-1)]',
+            'hover:border-[var(--card-border-hover)]',
+            'focus:outline-none focus:ring-[var(--space-4)] focus:ring-[var(--brand-teal-1)]/15',
+            'cursor-pointer disabled:cursor-not-allowed',
+            'appearance-none',
+            local.class
+          )}
+          {...rest}
+        />
+        {/* Checkmark icon */}
+        <Check class="absolute h-[var(--icon-sm)] w-[var(--icon-sm)] text-white pointer-events-none opacity-0 peer-checked:opacity-100 transition-opacity" />
       </div>
-    )
-  }
-)
-Checkbox.displayName = 'Checkbox'
+      <Show when={local.label || local.description}>
+        <label for={id} class="cursor-pointer select-none">
+          <Show when={local.label}>
+            <span class="block text-base font-medium text-[var(--text-primary)]">
+              {local.label}
+            </span>
+          </Show>
+          <Show when={local.description}>
+            <span class="block text-sm text-[var(--text-muted)] mt-[var(--space-1)]">
+              {local.description}
+            </span>
+          </Show>
+        </label>
+      </Show>
+    </div>
+  )
+}
 
 // Radio button component
-export interface RadioProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'> {
+export interface RadioProps extends Omit<JSX.InputHTMLAttributes<HTMLInputElement>, 'type' | 'class'> {
   label?: string
   description?: string
+  class?: string
 }
 
-const Radio = React.forwardRef<HTMLInputElement, RadioProps>(
-  ({ className, label, description, disabled, ...props }, ref) => {
-    const id = React.useId()
+export function Radio(props: RadioProps) {
+  const [local, rest] = splitProps(props, ['class', 'label', 'description', 'disabled'])
+  const id = createUniqueId()
 
-    return (
-      <div className={cn('flex items-start gap-[var(--space-4)]', disabled && 'opacity-50')}>
-        <div className="relative flex items-center justify-center mt-[var(--space-0\.5)]">
-          <input
-            id={id}
-            type="radio"
-            ref={ref}
-            disabled={disabled}
-            className={cn(
-              'peer h-[var(--checkbox-size)] w-[var(--checkbox-size)] rounded-full border-2 border-[var(--card-border)] bg-[var(--background-primary)]',
-              'transition-all duration-200',
-              'checked:border-[var(--brand-teal-1)]',
-              'hover:border-[var(--card-border-hover)]',
-              'focus:outline-none focus:ring-[var(--space-4)] focus:ring-[var(--brand-teal-1)]/15',
-              'cursor-pointer disabled:cursor-not-allowed',
-              'appearance-none',
-              className
-            )}
-            {...props}
-          />
-          {/* Radio dot */}
-          <div className="absolute h-[var(--radio-dot-size)] w-[var(--radio-dot-size)] rounded-full bg-[var(--brand-teal-1)] pointer-events-none opacity-0 peer-checked:opacity-100 transition-opacity" />
-        </div>
-        {(label || description) && (
-          <label htmlFor={id} className="cursor-pointer select-none">
-            {label && (
-              <span className="block text-base font-medium text-[var(--text-primary)]">
-                {label}
-              </span>
-            )}
-            {description && (
-              <span className="block text-sm text-[var(--text-muted)] mt-[var(--space-1)]">
-                {description}
-              </span>
-            )}
-          </label>
-        )}
+  return (
+    <div class={cn('flex items-start gap-[var(--space-4)]', local.disabled && 'opacity-50')}>
+      <div class="relative flex items-center justify-center mt-[var(--space-0\.5)]">
+        <input
+          id={id}
+          type="radio"
+          disabled={local.disabled}
+          class={cn(
+            'peer h-[var(--checkbox-size)] w-[var(--checkbox-size)] rounded-full border-2 border-[var(--card-border)] bg-[var(--background-primary)]',
+            'transition-all duration-200',
+            'checked:border-[var(--brand-teal-1)]',
+            'hover:border-[var(--card-border-hover)]',
+            'focus:outline-none focus:ring-[var(--space-4)] focus:ring-[var(--brand-teal-1)]/15',
+            'cursor-pointer disabled:cursor-not-allowed',
+            'appearance-none',
+            local.class
+          )}
+          {...rest}
+        />
+        {/* Radio dot */}
+        <div class="absolute h-[var(--radio-dot-size)] w-[var(--radio-dot-size)] rounded-full bg-[var(--brand-teal-1)] pointer-events-none opacity-0 peer-checked:opacity-100 transition-opacity" />
       </div>
-    )
-  }
-)
-Radio.displayName = 'Radio'
+      <Show when={local.label || local.description}>
+        <label for={id} class="cursor-pointer select-none">
+          <Show when={local.label}>
+            <span class="block text-base font-medium text-[var(--text-primary)]">
+              {local.label}
+            </span>
+          </Show>
+          <Show when={local.description}>
+            <span class="block text-sm text-[var(--text-muted)] mt-[var(--space-1)]">
+              {local.description}
+            </span>
+          </Show>
+        </label>
+      </Show>
+    </div>
+  )
+}
 
 // Form field wrapper for consistent spacing
 interface FormFieldProps {
-  children: React.ReactNode
-  className?: string
+  children: JSX.Element
+  class?: string
 }
 
-const FormField = ({ children, className }: FormFieldProps) => (
-  <div className={cn('space-y-[var(--space-6)]', className)}>
-    {children}
-  </div>
-)
-FormField.displayName = 'FormField'
+export function FormField(props: FormFieldProps) {
+  return (
+    <div class={cn('space-y-[var(--space-6)]', props.class)}>
+      {props.children}
+    </div>
+  )
+}
 
 // Form group for related fields
 interface FormGroupProps {
-  children: React.ReactNode
+  children: JSX.Element
   title?: string
   description?: string
-  className?: string
+  class?: string
 }
 
-const FormGroup = ({ children, title, description, className }: FormGroupProps) => (
-  <div className={cn('space-y-[var(--space-5)]', className)}>
-    {(title || description) && (
-      <div className="space-y-[var(--space-1\.5)] pb-[var(--space-2)] border-b border-[var(--card-border)]/50">
-        {title && (
-          <h3 className="text-lg font-bold text-[var(--text-primary)]">{title}</h3>
-        )}
-        {description && (
-          <p className="text-sm text-[var(--text-muted)]">{description}</p>
-        )}
+export function FormGroup(props: FormGroupProps) {
+  return (
+    <div class={cn('space-y-[var(--space-5)]', props.class)}>
+      <Show when={props.title || props.description}>
+        <div class="space-y-[var(--space-1\.5)] pb-[var(--space-2)] border-b border-[var(--card-border)]/50">
+          <Show when={props.title}>
+            <h3 class="text-lg font-bold text-[var(--text-primary)]">{props.title}</h3>
+          </Show>
+          <Show when={props.description}>
+            <p class="text-sm text-[var(--text-muted)]">{props.description}</p>
+          </Show>
+        </div>
+      </Show>
+      <div class="space-y-[var(--space-5)]">
+        {props.children}
       </div>
-    )}
-    <div className="space-y-[var(--space-5)]">
-      {children}
     </div>
-  </div>
-)
-FormGroup.displayName = 'FormGroup'
-
-export { Input, Textarea, Select, Checkbox, Radio, FormField, FormGroup }
+  )
+}

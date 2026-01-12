@@ -1,5 +1,5 @@
-import { motion } from 'framer-motion'
-import { Zap, Clover, TrendingUp, Radar, EyeOff, Check, Clock, Coins } from 'lucide-react'
+import { Show } from 'solid-js'
+import { Zap, Clover, TrendingUp, Radar, EyeOff, Check, Clock, Coins } from 'lucide-solid'
 import type { ShopItem } from '@/stores/shopStore'
 import { formatDuration, getRemainingTime } from '@/stores/shopStore'
 import { cn } from '@/lib/utils'
@@ -39,20 +39,20 @@ const ITEM_TYPE_STYLES: Record<string, { bg: string; text: string; border: strin
 }
 
 // Icon component based on item type
-function ItemIcon({ itemType, className }: { itemType: string; className?: string }) {
-  switch (itemType) {
+function ItemIcon(props: { itemType: string; class?: string }) {
+  switch (props.itemType) {
     case 'speed_boost':
-      return <Zap className={className} />
+      return <Zap class={props.class} />
     case 'luck_charm':
-      return <Clover className={className} />
+      return <Clover class={props.class} />
     case 'xp_amplifier':
-      return <TrendingUp className={className} />
+      return <TrendingUp class={props.class} />
     case 'radar':
-      return <Radar className={className} />
+      return <Radar class={props.class} />
     case 'cloak':
-      return <EyeOff className={className} />
+      return <EyeOff class={props.class} />
     default:
-      return <Coins className={className} />
+      return <Coins class={props.class} />
   }
 }
 
@@ -66,153 +66,147 @@ export interface ShopItemCardProps {
  * ShopItemCard - Displays a shop item with purchase capability
  * Shows item details, cost, duration, and purchase status
  */
-export function ShopItemCard({ item, onPurchase, isPurchasing = false }: ShopItemCardProps) {
-  const styles = ITEM_TYPE_STYLES[item.id] || ITEM_TYPE_STYLES.speed_boost
-  const isOwned = item.isOwned
-  const canPurchase = item.canPurchase && !isPurchasing
+export function ShopItemCard(props: ShopItemCardProps) {
+  const styles = () => ITEM_TYPE_STYLES[props.item.id] || ITEM_TYPE_STYLES.speed_boost
+  const isOwned = () => props.item.isOwned
+  const canPurchase = () => props.item.canPurchase && !props.isPurchasing
 
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={cn(
-        'relative rounded-2xl border-2 transition-all duration-300',
-        isOwned
-          ? `${styles.border} ${styles.bg}`
+    <div
+      class={cn(
+        'relative rounded-2xl border-2 transition-all duration-300 animate-in fade-in slide-in-from-bottom-2',
+        isOwned()
+          ? `${styles().border} ${styles().bg}`
           : 'border-[var(--card-border)]/30 bg-gradient-to-br from-[var(--background-secondary)] to-[var(--background-primary)]/50',
-        canPurchase && 'hover:-translate-y-1 hover:shadow-xl hover:shadow-black/20 cursor-pointer'
+        canPurchase() && 'hover:-translate-y-1 hover:shadow-xl hover:shadow-black/20 cursor-pointer'
       )}
     >
       {/* Owned indicator glow */}
-      {isOwned && (
-        <div className={cn(
+      <Show when={isOwned()}>
+        <div class={cn(
           'absolute -inset-0.5 rounded-2xl opacity-30 blur-sm',
-          styles.bg.replace('/10', '/30')
+          styles().bg.replace('/10', '/30')
         )} />
-      )}
+      </Show>
 
-      <div className="relative p-5">
+      <div class="relative p-5">
         {/* Header: Icon + Name */}
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className={cn(
+        <div class="flex items-start justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div class={cn(
               'p-3 rounded-xl border',
-              styles.bg,
-              styles.border
+              styles().bg,
+              styles().border
             )}>
-              <ItemIcon itemType={item.id} className={cn('h-6 w-6', styles.text)} />
+              <ItemIcon itemType={props.item.id} class={cn('h-6 w-6', styles().text)} />
             </div>
             <div>
-              <h3 className="font-bold text-lg text-[var(--text-primary)]">{item.name}</h3>
-              <p className="text-sm text-[var(--text-muted)]">{item.description}</p>
+              <h3 class="font-bold text-lg text-[var(--text-primary)]">{props.item.name}</h3>
+              <p class="text-sm text-[var(--text-muted)]">{props.item.description}</p>
             </div>
           </div>
-          {isOwned && (
-            <div className={cn(
+          <Show when={isOwned()}>
+            <div class={cn(
               'p-1.5 rounded-full',
-              styles.bg,
-              styles.border,
+              styles().bg,
+              styles().border,
               'border'
             )}>
-              <Check className={cn('h-4 w-4', styles.text)} />
+              <Check class={cn('h-4 w-4', styles().text)} />
             </div>
-          )}
+          </Show>
         </div>
 
         {/* Effect Display */}
-        <div className={cn(
+        <div class={cn(
           'p-3 rounded-xl mb-4',
           'bg-[var(--background-primary)]/50 border border-[var(--card-border)]/20'
         )}>
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-[var(--text-muted)]">Effect</span>
-            <span className={cn('text-sm font-bold', styles.text)}>{item.effect}</span>
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-[var(--text-muted)]">Effect</span>
+            <span class={cn('text-sm font-bold', styles().text)}>{props.item.effect}</span>
           </div>
         </div>
 
         {/* Duration & Cost Row */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Clock className="h-4 w-4 text-[var(--text-muted)]" />
-            <span className="text-sm text-[var(--text-muted)]">
-              {formatDuration(item.duration)}
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <Clock class="h-4 w-4 text-[var(--text-muted)]" />
+            <span class="text-sm text-[var(--text-muted)]">
+              {formatDuration(props.item.duration)}
             </span>
           </div>
-          <div className="flex items-center gap-2">
-            <Coins className="h-4 w-4 text-[hsl(var(--accent))]" />
-            <span className="text-sm font-bold text-[hsl(var(--accent))]">
-              {item.cost.toLocaleString()} $AGENTIC
+          <div class="flex items-center gap-2">
+            <Coins class="h-4 w-4 text-[hsl(var(--accent))]" />
+            <span class="text-sm font-bold text-[hsl(var(--accent))]">
+              {props.item.cost.toLocaleString()} $AGENTIC
             </span>
           </div>
         </div>
 
         {/* Owned Item Status */}
-        {isOwned && item.ownedItem && (
-          <div className={cn(
+        <Show when={isOwned() && props.item.ownedItem}>
+          <div class={cn(
             'p-3 rounded-xl mb-4',
-            styles.bg,
-            styles.border,
+            styles().bg,
+            styles().border,
             'border'
           )}>
-            <div className="flex items-center justify-between">
-              <span className={cn('text-sm font-medium', styles.text)}>Active</span>
-              <span className="text-sm text-[var(--text-muted)]">
-                {getRemainingTime(item.ownedItem.expiresAt)}
+            <div class="flex items-center justify-between">
+              <span class={cn('text-sm font-medium', styles().text)}>Active</span>
+              <span class="text-sm text-[var(--text-muted)]">
+                {getRemainingTime(props.item.ownedItem!.expiresAt)}
               </span>
             </div>
           </div>
-        )}
+        </Show>
 
         {/* Purchase Button */}
-        {!isOwned && (
-          <motion.button
-            onClick={() => canPurchase && onPurchase(item.id)}
-            disabled={!canPurchase}
-            aria-label={`Purchase ${item.name} for ${item.cost.toLocaleString()} AGENTIC`}
-            whileHover={canPurchase ? { scale: 1.02 } : undefined}
-            whileTap={canPurchase ? { scale: 0.98 } : undefined}
-            className={cn(
-              'w-full px-4 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all',
-              canPurchase
-                ? `bg-gradient-to-r from-[var(--brand-teal-1)]/20 to-[hsl(var(--accent))]/20 border ${styles.border} ${styles.text} hover:from-[var(--brand-teal-1)]/30 hover:to-[hsl(var(--accent))]/30 shadow-lg ${styles.glow}`
+        <Show when={!isOwned()}>
+          <button
+            onClick={() => canPurchase() && props.onPurchase(props.item.id)}
+            disabled={!canPurchase()}
+            aria-label={`Purchase ${props.item.name} for ${props.item.cost.toLocaleString()} AGENTIC`}
+            class={cn(
+              'w-full px-4 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all duration-200',
+              canPurchase()
+                ? `bg-gradient-to-r from-[var(--brand-teal-1)]/20 to-[hsl(var(--accent))]/20 border ${styles().border} ${styles().text} hover:from-[var(--brand-teal-1)]/30 hover:to-[hsl(var(--accent))]/30 shadow-lg ${styles().glow} hover:scale-[1.02] active:scale-[0.98]`
                 : 'bg-[var(--background-primary)] text-[var(--text-muted)] border border-[var(--card-border)]/20 cursor-not-allowed'
             )}
           >
-            {isPurchasing ? (
-              <>
-                <motion.div
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-                >
-                  <Zap className="h-4 w-4" />
-                </motion.div>
-                Purchasing...
-              </>
-            ) : canPurchase ? (
-              <>
-                <Coins className="h-4 w-4" />
+            <Show
+              when={!props.isPurchasing}
+              fallback={
+                <>
+                  <Zap class="h-4 w-4 animate-spin" />
+                  Purchasing...
+                </>
+              }
+            >
+              <Show
+                when={canPurchase()}
+                fallback={<span class="text-xs">{props.item.purchaseError || 'Unavailable'}</span>}
+              >
+                <Coins class="h-4 w-4" />
                 Purchase
-              </>
-            ) : (
-              <span className="text-xs">{item.purchaseError || 'Unavailable'}</span>
-            )}
-          </motion.button>
-        )}
+              </Show>
+            </Show>
+          </button>
+        </Show>
 
         {/* Already Owned State */}
-        {isOwned && (
-          <div className={cn(
+        <Show when={isOwned()}>
+          <div class={cn(
             'w-full px-4 py-3 rounded-xl font-medium text-sm flex items-center justify-center gap-2',
-            styles.bg,
-            styles.border,
+            styles().bg,
+            styles().border,
             'border'
           )}>
-            <Check className={cn('h-4 w-4', styles.text)} />
-            <span className={styles.text}>Owned</span>
+            <Check class={cn('h-4 w-4', styles().text)} />
+            <span class={styles().text}>Owned</span>
           </div>
-        )}
+        </Show>
       </div>
-    </motion.div>
+    </div>
   )
 }

@@ -1,9 +1,9 @@
-import { useRef, useMemo, useEffect, useState } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { onMount, onCleanup, createEffect, createMemo, createSignal, For } from 'solid-js'
 import * as THREE from 'three'
+import { useThree, useFrame } from '@/three/hooks'
 import type { SpaceDiscoveryEvent } from '@/types/agent'
 import { BRAIN_SCALE, LOOT_THRESHOLDS } from '@/constants'
-import { useScaledTime } from './core/useBrainTime'
+import { TRANCE_CONFIG } from './core/brainConstants'
 
 interface DiscoveryBurstProps {
   recentDiscoveries: SpaceDiscoveryEvent[]
@@ -79,23 +79,33 @@ const BURST_FRAGMENT_SHADER = `
 
 const PARTICLES_PER_BURST = 50
 
-export function DiscoveryBurstNew({ recentDiscoveries }: DiscoveryBurstProps) {
-  const [activeBursts, setActiveBursts] = useState<Burst[]>([])
-  const processedIds = useRef(new Set<string>())
+export function DiscoveryBurstNew(props: DiscoveryBurstProps) {
+  const { scene } = useThree()
+
+  // Active bursts signal
+  const [activeBursts, setActiveBursts] = createSignal<Burst[]>([])
+
+  // Track processed discoveries to avoid duplicates
+  let processedIds = new Set<string>()
+
+  // Time tracking for scaled time (trance mode)
+  let scaledTime = 0
+  let lastRealTime = 0
 
   // Create new bursts for significant discoveries
-  useEffect(() => {
+  createEffect(() => {
+    const recentDiscoveries = props.recentDiscoveries
     if (recentDiscoveries.length === 0) return
 
     const latestDiscovery = recentDiscoveries[0]
-    if (processedIds.current.has(latestDiscovery.spaceId)) return
+    if (processedIds.has(latestDiscovery.spaceId)) return
 
-    processedIds.current.add(latestDiscovery.spaceId)
+    processedIds.add(latestDiscovery.spaceId)
 
     // Only keep last 50 processed IDs
-    if (processedIds.current.size > 50) {
-      const ids = Array.from(processedIds.current)
-      processedIds.current = new Set(ids.slice(-25))
+    if (processedIds.size > 50) {
+      const ids = Array.from(processedIds)
+      processedIds = new Set(ids.slice(-25))
     }
 
     // Calculate loot amount for intensity
@@ -126,35 +136,46 @@ export function DiscoveryBurstNew({ recentDiscoveries }: DiscoveryBurstProps) {
 
       setActiveBursts(prev => [...prev.slice(-4), newBurst])
     }
-  }, [recentDiscoveries])
+  })
 
-  // Remove expired bursts
-  useEffect(() => {
+  onMount(() => {
+    // Remove expired bursts periodically
     const interval = setInterval(() => {
       const now = Date.now() / 1000
       setActiveBursts(prev => prev.filter(b => now - b.startTime < b.duration))
     }, 200)
-    return () => clearInterval(interval)
-  }, [])
 
-  if (activeBursts.length === 0) return null
+    onCleanup(() => {
+      clearInterval(interval)
+    })
+  })
 
+  // Render individual burst particle systems
   return (
-    <group>
-      {activeBursts.map(burst => (
-        <BurstParticles key={burst.id} burst={burst} />
-      ))}
-    </group>
+    <For each={activeBursts()}>
+      {(burst) => <BurstParticles burst={burst} />}
+    </For>
   )
 }
 
 // Individual burst particle system
-function BurstParticles({ burst }: { burst: Burst }) {
-  const pointsRef = useRef<THREE.Points>(null)
-  const materialRef = useRef<THREE.ShaderMaterial>(null)
+function BurstParticles(props: { burst: Burst }) {
+  const { scene } = useThree()
 
-  const { positions, sizes, velocities, lives } = useMemo(() => {
+  // Three.js objects (imperative)
+  let points: THREE.Points | null = null
+  let geometry: THREE.BufferGeometry | null = null
+  let material: THREE.ShaderMaterial | null = null
+
+  // Time tracking for scaled time (trance mode)
+  let scaledTime = 0
+  let lastRealTime = 0
+
+  // Build geometry data for this burst
+  const geometryData = createMemo(() => {
+    const burst = props.burst
     const count = Math.floor(PARTICLES_PER_BURST * burst.intensity)
+
     const positions = new Float32Array(count * 3)
     const sizes = new Float32Array(count)
     const velocities = new Float32Array(count * 3)
@@ -180,37 +201,66 @@ function BurstParticles({ burst }: { burst: Burst }) {
     }
 
     return { positions, sizes, velocities, lives }
-  }, [burst])
+  })
 
-  const scaledTime = useScaledTime()
+  onMount(() => {
+    const sceneObj = scene()
+    if (!sceneObj) {
+      console.warn('BurstParticles: Scene not available')
+      return
+    }
 
-  useFrame(() => {
-    if (materialRef.current) {
-      materialRef.current.uniforms.uTime.value = scaledTime
+    const data = geometryData()
+
+    // Create geometry
+    geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
+    geometry.setAttribute('aVelocity', new THREE.BufferAttribute(data.velocities, 3))
+    geometry.setAttribute('aLife', new THREE.BufferAttribute(data.lives, 1))
+
+    // Create shader material
+    material = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uStartTime: { value: props.burst.startTime },
+        uDuration: { value: props.burst.duration },
+      },
+      vertexShader: BURST_VERTEX_SHADER,
+      fragmentShader: BURST_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+
+    // Create points
+    points = new THREE.Points(geometry, material)
+    points.frustumCulled = false
+    sceneObj.add(points)
+
+    onCleanup(() => {
+      if (points && sceneObj) {
+        sceneObj.remove(points)
+      }
+      geometry?.dispose()
+      material?.dispose()
+    })
+  })
+
+  // Update shader uniforms with scaled time
+  useFrame(({ clock }) => {
+    // Update scaled time (trance mode deprecated - always normal scale)
+    const timeScale = TRANCE_CONFIG.normalScale
+
+    const realTime = clock.getElapsedTime()
+    const delta = realTime - lastRealTime
+    lastRealTime = realTime
+    scaledTime += delta * timeScale
+
+    if (material) {
+      material.uniforms.uTime.value = scaledTime
     }
   })
 
-  return (
-    <points ref={pointsRef} frustumCulled={false}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-        <bufferAttribute attach="attributes-aSize" args={[sizes, 1]} />
-        <bufferAttribute attach="attributes-aVelocity" args={[velocities, 3]} />
-        <bufferAttribute attach="attributes-aLife" args={[lives, 1]} />
-      </bufferGeometry>
-      <shaderMaterial
-        ref={materialRef}
-        uniforms={{
-          uTime: { value: 0 },
-          uStartTime: { value: burst.startTime },
-          uDuration: { value: burst.duration },
-        }}
-        vertexShader={BURST_VERTEX_SHADER}
-        fragmentShader={BURST_FRAGMENT_SHADER}
-        transparent
-        depthWrite={false}
-        blending={THREE.AdditiveBlending}
-      />
-    </points>
-  )
+  return null
 }
