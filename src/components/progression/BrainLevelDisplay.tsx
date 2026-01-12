@@ -1,6 +1,6 @@
-import { motion } from 'framer-motion'
-import { Brain, Lock, Unlock } from 'lucide-react'
-import { useUserStore } from '@/stores/userStore'
+import { Show, For } from 'solid-js'
+import { Brain, Lock, Unlock } from 'lucide-solid'
+import { userStore } from '@/stores/userStore'
 import {
   BRAIN_LEVEL_CONFIG,
   SYNAPSE_UNLOCK_LEVELS,
@@ -34,177 +34,161 @@ const getBrainLevelTitle = (level: number): string => {
 interface BrainLevelDisplayProps {
   compact?: boolean
   showUnlocks?: boolean
-  className?: string
+  class?: string
 }
 
 /**
  * BrainLevelDisplay - Shows brain level with XP progress
  * Masterplan 2026: 248 levels with exponential XP curve
  */
-export function BrainLevelDisplay({
-  compact = false,
-  showUnlocks = true,
-  className,
-}: BrainLevelDisplayProps) {
-  const {
-    brainLevel,
-    brainXP,
-    totalBrainXP,
-    xpToNextLevel,
-    xpProgress,
-    unlockedSynapseTypes,
-  } = useUserStore()
+export function BrainLevelDisplay(props: BrainLevelDisplayProps) {
+  const compact = () => props.compact ?? false
+  const showUnlocks = () => props.showUnlocks ?? true
 
-  const color = getBrainLevelColor(brainLevel)
-  const title = getBrainLevelTitle(brainLevel)
-  const isMaxLevel = brainLevel >= BRAIN_LEVEL_CONFIG.maxLevel
+  const color = () => getBrainLevelColor(userStore.brainLevel)
+  const title = () => getBrainLevelTitle(userStore.brainLevel)
+  const isMaxLevel = () => userStore.brainLevel >= BRAIN_LEVEL_CONFIG.maxLevel
 
   // Get next unlock
   const getNextUnlock = (): { type: string; level: number } | null => {
     // Check synapse unlocks
     for (const [type, level] of Object.entries(SYNAPSE_UNLOCK_LEVELS)) {
-      if (brainLevel < level) {
+      if (userStore.brainLevel < level) {
         return { type: `${getSynapseTypeLabel(type as SynapseType)} Synapses`, level }
       }
     }
     // Check ship unlocks
     for (const [level, ships] of Object.entries(SHIP_UNLOCK_MILESTONES)) {
       const lvl = parseInt(level)
-      if (brainLevel < lvl) {
+      if (userStore.brainLevel < lvl) {
         return { type: `${ships} Ships`, level: lvl }
       }
     }
     return null
   }
 
-  const nextUnlock = getNextUnlock()
-
-  if (compact) {
-    return (
-      <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className={cn(
-          'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border',
-          'bg-gradient-to-r from-[var(--background-secondary)] to-[var(--background-primary)]',
-          'border-[var(--card-border)]/30',
-          className
-        )}
-      >
-        <Brain className="h-4 w-4" style={{ color }} />
-        <span className="font-bold" style={{ color }}>
-          Lvl {brainLevel}
-        </span>
-        <div className="w-16 h-1.5 rounded-full bg-[var(--background-primary)] overflow-hidden">
-          <motion.div
-            initial={{ width: 0 }}
-            animate={{ width: `${xpProgress}%` }}
-            className="h-full rounded-full"
-            style={{ backgroundColor: color }}
-          />
-        </div>
-      </motion.div>
-    )
-  }
+  const nextUnlock = () => getNextUnlock()
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={cn(
-        'rounded-xl border p-4 bg-gradient-to-br from-[var(--background-secondary)] to-[var(--background-primary)]',
-        'border-[var(--card-border)]/30',
-        className
-      )}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div
-            className="p-2.5 rounded-xl"
-            style={{ backgroundColor: `${color}20` }}
-          >
-            <Brain className="h-6 w-6" style={{ color }} />
-          </div>
-          <div>
-            <p className="font-bold text-lg" style={{ color }}>
-              Brain Level {brainLevel}
-            </p>
-            <p className="text-sm text-[var(--text-muted)]">{title}</p>
-          </div>
-        </div>
+    <Show
+      when={!compact()}
+      fallback={
         <div
-          className="px-3 py-1.5 rounded-lg text-sm font-medium"
-          style={{ backgroundColor: `${color}20`, color }}
+          class={cn(
+            'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border',
+            'bg-gradient-to-r from-[var(--background-secondary)] to-[var(--background-primary)]',
+            'border-[var(--card-border)]/30',
+            'animate-in fade-in zoom-in-95 duration-200',
+            props.class
+          )}
         >
-          {isMaxLevel ? 'MAX' : `${xpProgress.toFixed(1)}%`}
-        </div>
-      </div>
-
-      {/* XP Progress */}
-      {!isMaxLevel && (
-        <div className="mb-4">
-          <div className="flex justify-between text-sm mb-2">
-            <span className="text-[var(--text-muted)]">XP to Level {brainLevel + 1}</span>
-            <span className="font-medium text-[var(--text-primary)]">
-              {formatPoints(brainXP)} / {formatPoints(xpToNextLevel)}
-            </span>
-          </div>
-          <div className="h-3 rounded-full bg-[var(--background-primary)] overflow-hidden">
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: `${xpProgress}%` }}
-              transition={{ duration: 0.5 }}
-              className="h-full rounded-full"
-              style={{ backgroundColor: color }}
+          <Brain class="h-4 w-4" style={{ color: color() }} />
+          <span class="font-bold" style={{ color: color() }}>
+            Lvl {userStore.brainLevel}
+          </span>
+          <div class="w-16 h-1.5 rounded-full bg-[var(--background-primary)] overflow-hidden">
+            <div
+              class="h-full rounded-full transition-all duration-300"
+              style={{ width: `${userStore.xpProgress}%`, "background-color": color() }}
             />
           </div>
-          <p className="text-xs text-[var(--text-muted)] mt-1">
-            Total XP: {formatPoints(totalBrainXP)}
-          </p>
         </div>
-      )}
-
-      {/* Next Unlock */}
-      {nextUnlock && showUnlocks && (
-        <div className="p-3 rounded-lg bg-[var(--background-primary)] border border-[var(--card-border)]/20 mb-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Lock className="h-4 w-4 text-[var(--text-muted)]" />
-              <span className="text-sm text-[var(--text-muted)]">Next Unlock</span>
+      }
+    >
+      <div
+        class={cn(
+          'rounded-xl border p-4 bg-gradient-to-br from-[var(--background-secondary)] to-[var(--background-primary)]',
+          'border-[var(--card-border)]/30',
+          'animate-in fade-in slide-in-from-bottom-2 duration-300',
+          props.class
+        )}
+      >
+        {/* Header */}
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div
+              class="p-2.5 rounded-xl"
+              style={{ "background-color": `${color()}20` }}
+            >
+              <Brain class="h-6 w-6" style={{ color: color() }} />
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-[var(--text-primary)]">
-                {nextUnlock.type}
-              </span>
-              <span className="text-xs px-2 py-0.5 rounded bg-[var(--background-secondary)] text-[var(--text-muted)]">
-                Lvl {nextUnlock.level}
-              </span>
+            <div>
+              <p class="font-bold text-lg" style={{ color: color() }}>
+                Brain Level {userStore.brainLevel}
+              </p>
+              <p class="text-sm text-[var(--text-muted)]">{title()}</p>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Unlocked Synapses */}
-      {showUnlocks && (
-        <div>
-          <p className="text-sm font-medium text-[var(--text-primary)] mb-2 flex items-center gap-2">
-            <Unlock className="h-4 w-4 text-[var(--text-muted)]" />
-            Unlocked Synapses
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {unlockedSynapseTypes.map((type) => (
-              <SynapseTypeBadge key={type} type={type} />
-            ))}
+          <div
+            class="px-3 py-1.5 rounded-lg text-sm font-medium"
+            style={{ "background-color": `${color()}20`, color: color() }}
+          >
+            {isMaxLevel() ? 'MAX' : `${userStore.xpProgress.toFixed(1)}%`}
           </div>
         </div>
-      )}
-    </motion.div>
+
+        {/* XP Progress */}
+        <Show when={!isMaxLevel()}>
+          <div class="mb-4">
+            <div class="flex justify-between text-sm mb-2">
+              <span class="text-[var(--text-muted)]">XP to Level {userStore.brainLevel + 1}</span>
+              <span class="font-medium text-[var(--text-primary)]">
+                {formatPoints(userStore.brainXP)} / {formatPoints(userStore.xpToNextLevel)}
+              </span>
+            </div>
+            <div class="h-3 rounded-full bg-[var(--background-primary)] overflow-hidden">
+              <div
+                class="h-full rounded-full transition-all duration-500"
+                style={{ width: `${userStore.xpProgress}%`, "background-color": color() }}
+              />
+            </div>
+            <p class="text-xs text-[var(--text-muted)] mt-1">
+              Total XP: {formatPoints(userStore.totalBrainXP)}
+            </p>
+          </div>
+        </Show>
+
+        {/* Next Unlock */}
+        <Show when={nextUnlock() && showUnlocks()}>
+          <div class="p-3 rounded-lg bg-[var(--background-primary)] border border-[var(--card-border)]/20 mb-4">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <Lock class="h-4 w-4 text-[var(--text-muted)]" />
+                <span class="text-sm text-[var(--text-muted)]">Next Unlock</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-[var(--text-primary)]">
+                  {nextUnlock()!.type}
+                </span>
+                <span class="text-xs px-2 py-0.5 rounded bg-[var(--background-secondary)] text-[var(--text-muted)]">
+                  Lvl {nextUnlock()!.level}
+                </span>
+              </div>
+            </div>
+          </div>
+        </Show>
+
+        {/* Unlocked Synapses */}
+        <Show when={showUnlocks()}>
+          <div>
+            <p class="text-sm font-medium text-[var(--text-primary)] mb-2 flex items-center gap-2">
+              <Unlock class="h-4 w-4 text-[var(--text-muted)]" />
+              Unlocked Synapses
+            </p>
+            <div class="flex flex-wrap gap-2">
+              <For each={userStore.unlockedSynapseTypes}>
+                {(type) => <SynapseTypeBadge type={type} />}
+              </For>
+            </div>
+          </div>
+        </Show>
+      </div>
+    </Show>
   )
 }
 
 // Synapse type badge
-function SynapseTypeBadge({ type }: { type: SynapseType }) {
+function SynapseTypeBadge(props: { type: SynapseType }) {
   const colors: Record<SynapseType, { bg: string; text: string }> = {
     minor: { bg: 'bg-blue-500/20', text: 'text-blue-400' },
     complex: { bg: 'bg-purple-500/20', text: 'text-purple-400' },
@@ -215,11 +199,11 @@ function SynapseTypeBadge({ type }: { type: SynapseType }) {
     unique: { bg: 'bg-amber-400/20', text: 'text-amber-300' },
   }
 
-  const { bg, text } = colors[type]
+  const styles = () => colors[props.type]
 
   return (
-    <span className={cn('px-2 py-1 rounded-lg text-xs font-medium capitalize', bg, text)}>
-      {type}
+    <span class={cn('px-2 py-1 rounded-lg text-xs font-medium capitalize', styles().bg, styles().text)}>
+      {props.type}
     </span>
   )
 }
@@ -228,19 +212,18 @@ function SynapseTypeBadge({ type }: { type: SynapseType }) {
  * BrainLevelMini - Minimal version for headers
  */
 export function BrainLevelMini() {
-  const { brainLevel, xpProgress } = useUserStore()
-  const color = getBrainLevelColor(brainLevel)
+  const color = () => getBrainLevelColor(userStore.brainLevel)
 
   return (
-    <div className="flex items-center gap-2">
-      <Brain className="h-4 w-4" style={{ color }} />
-      <span className="text-sm font-bold" style={{ color }}>
-        {brainLevel}
+    <div class="flex items-center gap-2">
+      <Brain class="h-4 w-4" style={{ color: color() }} />
+      <span class="text-sm font-bold" style={{ color: color() }}>
+        {userStore.brainLevel}
       </span>
-      <div className="w-12 h-1 rounded-full bg-[var(--background-primary)] overflow-hidden">
+      <div class="w-12 h-1 rounded-full bg-[var(--background-primary)] overflow-hidden">
         <div
-          className="h-full rounded-full transition-all"
-          style={{ width: `${xpProgress}%`, backgroundColor: color }}
+          class="h-full rounded-full transition-all"
+          style={{ width: `${userStore.xpProgress}%`, "background-color": color() }}
         />
       </div>
     </div>

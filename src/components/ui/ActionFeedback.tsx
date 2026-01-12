@@ -1,6 +1,5 @@
-import { motion, AnimatePresence } from 'framer-motion'
-import { Check, X, Loader2, Sparkles, Rocket, Zap, Fuel } from 'lucide-react'
-import { useEffect } from 'react'
+import { createSignal, createEffect, onCleanup, Show, For, type JSX } from 'solid-js'
+import { Check, X, Loader2, Sparkles, Rocket, Zap, Fuel } from 'lucide-solid'
 
 // Success celebration animation
 interface SuccessCelebrationProps {
@@ -9,92 +8,105 @@ interface SuccessCelebrationProps {
   onComplete?: () => void
 }
 
-export function SuccessCelebration({ show, message, onComplete }: SuccessCelebrationProps) {
-  useEffect(() => {
-    if (show && onComplete) {
-      const timer = setTimeout(onComplete, 2000)
-      return () => clearTimeout(timer)
+export function SuccessCelebration(props: SuccessCelebrationProps) {
+  const [isVisible, setIsVisible] = createSignal(false)
+
+  createEffect(() => {
+    if (props.show) {
+      requestAnimationFrame(() => setIsVisible(true))
+      if (props.onComplete) {
+        const timer = setTimeout(props.onComplete, 2000)
+        onCleanup(() => clearTimeout(timer))
+      }
+    } else {
+      setIsVisible(false)
     }
-  }, [show, onComplete])
+  })
 
   return (
-    <AnimatePresence>
-      {show && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.5, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.5, y: -20 }}
-          className="fixed inset-0 flex items-center justify-center z-[200] pointer-events-none"
+    <Show when={props.show}>
+      <div
+        class="fixed inset-0 flex items-center justify-center z-[200] pointer-events-none"
+      >
+        <div
+          class="relative transition-all duration-300 ease-out"
+          classList={{
+            'opacity-0 scale-50 translate-y-5': !isVisible(),
+            'opacity-100 scale-100 translate-y-0': isVisible(),
+          }}
         >
-          <div className="relative">
-            {/* Glow effect */}
-            <motion.div
-              initial={{ scale: 0 }}
-              animate={{ scale: [0, 1.5, 1] }}
-              transition={{ duration: 0.5 }}
-              className="absolute bg-[var(--synapse-connected)]/20 rounded-full blur-2xl"
-              style={{ inset: 'var(--space-8)' }}
-            />
+          {/* Glow effect */}
+          <div
+            class="absolute bg-[var(--synapse-connected)]/20 rounded-full blur-2xl transition-transform duration-500"
+            classList={{
+              'scale-0': !isVisible(),
+              'scale-100': isVisible(),
+            }}
+            style={{ inset: 'var(--space-8)' }}
+          />
 
-            {/* Main card */}
-            <motion.div
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-              className="relative bg-[var(--background-secondary)] border border-[var(--synapse-connected)]/30 shadow-2xl shadow-[var(--synapse-connected)]/20"
-              style={{
-                borderRadius: 'var(--radius-2xl)',
-                padding: 'var(--space-6) var(--space-8)'
-              }}
-            >
-              <div className="flex flex-col items-center" style={{ gap: 'var(--space-4)' }}>
-                {/* Animated checkmark */}
-                <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: [0, 1.2, 1] }}
-                  transition={{ delay: 0.2, duration: 0.3 }}
-                  className="rounded-full bg-[var(--synapse-connected)]/20 flex items-center justify-center"
-                  style={{ width: 'var(--space-16)', height: 'var(--space-16)' }}
-                >
-                  <Check className="text-[var(--synapse-connected)]" style={{ width: 'var(--space-8)', height: 'var(--space-8)' }} />
-                </motion.div>
-
-                {/* Message */}
-                <motion.p
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.4 }}
-                  className="text-lg font-semibold text-[var(--text-primary)] text-center"
-                >
-                  {message}
-                </motion.p>
-
-                {/* Sparkles decoration */}
-                {[...Array(6)].map((_, i) => (
-                  <motion.div
-                    key={i}
-                    initial={{ scale: 0, opacity: 0 }}
-                    animate={{
-                      scale: [0, 1, 0],
-                      opacity: [0, 1, 0],
-                      x: Math.cos((i * Math.PI * 2) / 6) * 60,
-                      y: Math.sin((i * Math.PI * 2) / 6) * 60,
-                    }}
-                    transition={{
-                      delay: 0.3 + i * 0.05,
-                      duration: 0.8,
-                    }}
-                    className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
-                  >
-                    <Sparkles className="text-[var(--rarity-legendary)]" style={{ width: 'var(--space-4)', height: 'var(--space-4)' }} />
-                  </motion.div>
-                ))}
+          {/* Main card */}
+          <div
+            class="relative bg-[var(--background-secondary)] border border-[var(--synapse-connected)]/30 shadow-2xl shadow-[var(--synapse-connected)]/20 transition-transform duration-300"
+            classList={{
+              'scale-0': !isVisible(),
+              'scale-100': isVisible(),
+            }}
+            style={{
+              "border-radius": 'var(--radius-2xl)',
+              padding: 'var(--space-6) var(--space-8)'
+            }}
+          >
+            <div class="flex flex-col items-center" style={{ gap: 'var(--space-4)' }}>
+              {/* Animated checkmark */}
+              <div
+                class="rounded-full bg-[var(--synapse-connected)]/20 flex items-center justify-center transition-transform duration-300 delay-200"
+                classList={{
+                  'scale-0': !isVisible(),
+                  'scale-100': isVisible(),
+                }}
+                style={{ width: 'var(--space-16)', height: 'var(--space-16)' }}
+              >
+                <Check class="text-[var(--synapse-connected)]" style={{ width: 'var(--space-8)', height: 'var(--space-8)' }} />
               </div>
-            </motion.div>
+
+              {/* Message */}
+              <p
+                class="text-lg font-semibold text-[var(--text-primary)] text-center transition-all duration-300 delay-400"
+                classList={{
+                  'opacity-0 translate-y-2.5': !isVisible(),
+                  'opacity-100 translate-y-0': isVisible(),
+                }}
+              >
+                {props.message}
+              </p>
+
+              {/* Sparkles decoration */}
+              <For each={[...Array(6).keys()]}>
+                {(i) => (
+                  <div
+                    class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-all duration-800"
+                    classList={{
+                      'scale-0 opacity-0': !isVisible(),
+                      'opacity-0': isVisible(),
+                    }}
+                    style={{
+                      transform: isVisible()
+                        ? `translate(calc(-50% + ${Math.cos((i * Math.PI * 2) / 6) * 60}px), calc(-50% + ${Math.sin((i * Math.PI * 2) / 6) * 60}px))`
+                        : 'translate(-50%, -50%)',
+                      "transition-delay": `${300 + i * 50}ms`,
+                      animation: isVisible() ? `sparkle-burst 0.8s ease-out ${0.3 + i * 0.05}s forwards` : 'none',
+                    }}
+                  >
+                    <Sparkles class="text-[var(--rarity-legendary)]" style={{ width: 'var(--space-4)', height: 'var(--space-4)' }} />
+                  </div>
+                )}
+              </For>
+            </div>
           </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+        </div>
+      </div>
+    </Show>
   )
 }
 
@@ -107,31 +119,18 @@ interface InlineFeedbackProps {
   onReset?: () => void
 }
 
-export function InlineFeedback({
-  status,
-  loadingText = 'Processing...',
-  successText = 'Success!',
-  errorText = 'Error occurred',
-  onReset
-}: InlineFeedbackProps) {
-  useEffect(() => {
-    if ((status === 'success' || status === 'error') && onReset) {
-      const timer = setTimeout(onReset, 2000)
-      return () => clearTimeout(timer)
+export function InlineFeedback(props: InlineFeedbackProps) {
+  createEffect(() => {
+    if ((props.status === 'success' || props.status === 'error') && props.onReset) {
+      const timer = setTimeout(props.onReset, 2000)
+      onCleanup(() => clearTimeout(timer))
     }
-  }, [status, onReset])
-
-  const variants = {
-    idle: { opacity: 0, height: 0 },
-    loading: { opacity: 1, height: 'auto' },
-    success: { opacity: 1, height: 'auto' },
-    error: { opacity: 1, height: 'auto' },
-  }
+  })
 
   const statusConfig = {
     loading: {
       icon: Loader2,
-      text: loadingText,
+      text: () => props.loadingText ?? 'Processing...',
       color: 'text-[var(--brand-blue-2)]',
       bg: 'bg-[var(--brand-blue-2)]/10',
       border: 'border-[var(--brand-blue-2)]/20',
@@ -139,7 +138,7 @@ export function InlineFeedback({
     },
     success: {
       icon: Check,
-      text: successText,
+      text: () => props.successText ?? 'Success!',
       color: 'text-[var(--synapse-connected)]',
       bg: 'bg-[var(--synapse-connected)]/10',
       border: 'border-[var(--synapse-connected)]/20',
@@ -147,7 +146,7 @@ export function InlineFeedback({
     },
     error: {
       icon: X,
-      text: errorText,
+      text: () => props.errorText ?? 'Error occurred',
       color: 'text-[var(--brand-red-4)]',
       bg: 'bg-[var(--brand-red-4)]/10',
       border: 'border-[var(--brand-red-4)]/20',
@@ -155,31 +154,32 @@ export function InlineFeedback({
     },
   }
 
-  if (status === 'idle') return null
-
-  const config = statusConfig[status]
-  const Icon = config.icon
-
   return (
-    <motion.div
-      initial="idle"
-      animate={status}
-      variants={variants}
-      className="overflow-hidden"
-    >
-      <div
-        className={`flex items-center ${config.bg} border ${config.border}`}
-        style={{
-          gap: 'var(--gap-items-sm)',
-          padding: 'var(--space-3) var(--space-4)',
-          borderRadius: 'var(--radius-xl)',
-          marginTop: 'var(--space-3)'
-        }}
-      >
-        <Icon className={`${config.color} ${config.animate ? 'animate-spin' : ''}`} style={{ width: 'var(--space-4)', height: 'var(--space-4)' }} />
-        <span className={`text-sm font-medium ${config.color}`}>{config.text}</span>
-      </div>
-    </motion.div>
+    <Show when={props.status !== 'idle'}>
+      {(() => {
+        const config = statusConfig[props.status as keyof typeof statusConfig]
+        const Icon = config.icon
+        return (
+          <div class="overflow-hidden animate-[slideDown_200ms_ease-out]">
+            <div
+              class={`flex items-center ${config.bg} border ${config.border}`}
+              style={{
+                gap: 'var(--gap-items-sm)',
+                padding: 'var(--space-3) var(--space-4)',
+                "border-radius": 'var(--radius-xl)',
+                "margin-top": 'var(--space-3)'
+              }}
+            >
+              <Icon
+                class={`${config.color} ${config.animate ? 'animate-spin' : ''}`}
+                style={{ width: 'var(--space-4)', height: 'var(--space-4)' }}
+              />
+              <span class={`text-sm font-medium ${config.color}`}>{config.text()}</span>
+            </div>
+          </div>
+        )
+      })()}
+    </Show>
   )
 }
 
@@ -218,96 +218,107 @@ const actionConfig = {
   },
 }
 
-export function ActionNotification({ show, type, message, onDismiss }: ActionNotificationProps) {
-  const config = actionConfig[type]
-  const Icon = config.icon
+export function ActionNotification(props: ActionNotificationProps) {
+  const [isVisible, setIsVisible] = createSignal(false)
 
-  useEffect(() => {
-    if (show) {
-      const timer = setTimeout(onDismiss, 3000)
-      return () => clearTimeout(timer)
+  createEffect(() => {
+    if (props.show) {
+      requestAnimationFrame(() => setIsVisible(true))
+      const timer = setTimeout(props.onDismiss, 3000)
+      onCleanup(() => clearTimeout(timer))
+    } else {
+      setIsVisible(false)
     }
-  }, [show, onDismiss])
+  })
+
+  const config = () => actionConfig[props.type]
+  const Icon = () => config().icon
 
   return (
-    <AnimatePresence>
-      {show && (
-        <motion.div
-          initial={{ opacity: 0, y: 50, x: '-50%' }}
-          animate={{ opacity: 1, y: 0, x: '-50%' }}
-          exit={{ opacity: 0, y: 50, x: '-50%' }}
-          className="fixed left-1/2 z-[100]"
-          style={{ bottom: 'var(--space-24)' }}
-        >
-          <div className="relative">
-            {/* Glow */}
-            <div className={`absolute bg-gradient-to-r ${config.gradient} blur-xl opacity-50`} style={{ inset: 'calc(-1 * var(--space-2))', borderRadius: 'var(--radius-2xl)' }} />
+    <Show when={props.show}>
+      <div
+        class="fixed left-1/2 z-[100] transition-all duration-300 ease-out"
+        style={{ bottom: 'var(--space-24)' }}
+        classList={{
+          'opacity-0 translate-y-[50px] -translate-x-1/2': !isVisible(),
+          'opacity-100 translate-y-0 -translate-x-1/2': isVisible(),
+        }}
+      >
+        <div class="relative">
+          {/* Glow */}
+          <div
+            class={`absolute bg-gradient-to-r ${config().gradient} blur-xl opacity-50`}
+            style={{ inset: 'calc(-1 * var(--space-2))', "border-radius": 'var(--radius-2xl)' }}
+          />
 
+          <div
+            class="relative flex items-center bg-[var(--background-secondary)]/95 backdrop-blur-xl border border-[var(--card-border)] shadow-2xl"
+            style={{
+              gap: 'var(--space-4)',
+              padding: 'var(--space-4) var(--space-5)',
+              "border-radius": 'var(--radius-xl)'
+            }}
+          >
+            {/* Icon */}
             <div
-              className="relative flex items-center bg-[var(--background-secondary)]/95 backdrop-blur-xl border border-[var(--card-border)] shadow-2xl"
-              style={{
-                gap: 'var(--space-4)',
-                padding: 'var(--space-4) var(--space-5)',
-                borderRadius: 'var(--radius-xl)'
+              class={`${config().iconBg} flex items-center justify-center transition-transform duration-300 delay-100`}
+              classList={{
+                'scale-0': !isVisible(),
+                'scale-100': isVisible(),
               }}
+              style={{ width: 'var(--space-10)', height: 'var(--space-10)', "border-radius": 'var(--radius-xl)' }}
             >
-              {/* Icon */}
-              <motion.div
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ type: 'spring', stiffness: 300, delay: 0.1 }}
-                className={`${config.iconBg} flex items-center justify-center`}
-                style={{ width: 'var(--space-10)', height: 'var(--space-10)', borderRadius: 'var(--radius-xl)' }}
-              >
-                <Icon className={config.iconColor} style={{ width: 'var(--space-5)', height: 'var(--space-5)' }} />
-              </motion.div>
-
-              {/* Message */}
-              <p className="text-sm font-medium text-[var(--text-primary)]" style={{ paddingRight: 'var(--space-2)' }}>
-                {message}
-              </p>
-
-              {/* Close button */}
-              <button
-                onClick={onDismiss}
-                className="hover:bg-[var(--background-primary)] transition-colors"
-                style={{ padding: 'var(--space-1)', borderRadius: 'var(--radius-lg)' }}
-              >
-                <X className="text-[var(--text-muted)]" style={{ width: 'var(--space-4)', height: 'var(--space-4)' }} />
-              </button>
+              <Icon class={config().iconColor} style={{ width: 'var(--space-5)', height: 'var(--space-5)' }} />
             </div>
+
+            {/* Message */}
+            <p class="text-sm font-medium text-[var(--text-primary)]" style={{ "padding-right": 'var(--space-2)' }}>
+              {props.message}
+            </p>
+
+            {/* Close button */}
+            <button
+              onClick={props.onDismiss}
+              class="hover:bg-[var(--background-primary)] transition-colors"
+              style={{ padding: 'var(--space-1)', "border-radius": 'var(--radius-lg)' }}
+            >
+              <X class="text-[var(--text-muted)]" style={{ width: 'var(--space-4)', height: 'var(--space-4)' }} />
+            </button>
           </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+        </div>
+      </div>
+    </Show>
   )
 }
 
 // Loading button state wrapper
 interface LoadingButtonWrapperProps {
   isLoading: boolean
-  children: React.ReactNode
+  children: JSX.Element
   loadingText?: string
 }
 
-export function LoadingButtonWrapper({ isLoading, children, loadingText = 'Loading...' }: LoadingButtonWrapperProps) {
-  if (isLoading) {
-    return (
-      <div
-        className="flex items-center bg-[var(--background-secondary)] border border-[var(--card-border)]"
-        style={{
-          gap: 'var(--gap-items-sm)',
-          padding: 'var(--space-2) var(--space-5)',
-          borderRadius: 'var(--radius-xl)'
-        }}
-      >
-        <Loader2 className="animate-spin text-[var(--brand-teal-1)]" style={{ width: 'var(--space-4)', height: 'var(--space-4)' }} />
-        <span className="text-sm text-[var(--text-secondary)]">{loadingText}</span>
-      </div>
-    )
-  }
-
-  return <>{children}</>
+export function LoadingButtonWrapper(props: LoadingButtonWrapperProps) {
+  return (
+    <Show
+      when={!props.isLoading}
+      fallback={
+        <div
+          class="flex items-center bg-[var(--background-secondary)] border border-[var(--card-border)]"
+          style={{
+            gap: 'var(--gap-items-sm)',
+            padding: 'var(--space-2) var(--space-5)',
+            "border-radius": 'var(--radius-xl)'
+          }}
+        >
+          <Loader2 class="animate-spin text-[var(--brand-teal-1)]" style={{ width: 'var(--space-4)', height: 'var(--space-4)' }} />
+          <span class="text-sm text-[var(--text-secondary)]">{props.loadingText ?? 'Loading...'}</span>
+        </div>
+      }
+    >
+      {props.children}
+    </Show>
+  )
 }
 
 // Pulse indicator for live elements
@@ -330,11 +341,14 @@ const pulseSizes = {
   lg: 'w-4 h-4',
 }
 
-export function PulseIndicator({ color = 'teal', size = 'default' }: PulseIndicatorProps) {
+export function PulseIndicator(props: PulseIndicatorProps) {
+  const color = () => props.color ?? 'teal'
+  const size = () => props.size ?? 'default'
+
   return (
-    <span className="relative flex">
-      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${pulseColors[color]} opacity-75`} />
-      <span className={`relative inline-flex rounded-full ${pulseColors[color]} ${pulseSizes[size]}`} />
+    <span class="relative flex">
+      <span class={`animate-ping absolute inline-flex h-full w-full rounded-full ${pulseColors[color()]} opacity-75`} />
+      <span class={`relative inline-flex rounded-full ${pulseColors[color()]} ${pulseSizes[size()]}`} />
     </span>
   )
 }

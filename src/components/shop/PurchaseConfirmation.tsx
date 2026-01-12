@@ -1,7 +1,7 @@
-import { motion, AnimatePresence } from 'framer-motion'
-import { X, Coins, Clock, Zap, Clover, TrendingUp, Radar, EyeOff, AlertTriangle, Check, Sparkles } from 'lucide-react'
-import { useShopStore, formatDuration } from '@/stores/shopStore'
-import { useUserStore } from '@/stores/userStore'
+import { Show } from 'solid-js'
+import { X, Coins, Clock, Zap, Clover, TrendingUp, Radar, EyeOff, AlertTriangle, Check, Sparkles } from 'lucide-solid'
+import { shopStore, formatDuration } from '@/stores/shopStore'
+import { userStore } from '@/stores/userStore'
 import { cn } from '@/lib/utils'
 
 // Item type colors
@@ -34,20 +34,20 @@ const ITEM_TYPE_STYLES: Record<string, { bg: string; text: string; border: strin
 }
 
 // Icon component
-function ItemIcon({ itemType, className }: { itemType: string; className?: string }) {
-  switch (itemType) {
+function ItemIcon(props: { itemType: string; class?: string }) {
+  switch (props.itemType) {
     case 'speed_boost':
-      return <Zap className={className} />
+      return <Zap class={props.class} />
     case 'luck_charm':
-      return <Clover className={className} />
+      return <Clover class={props.class} />
     case 'xp_amplifier':
-      return <TrendingUp className={className} />
+      return <TrendingUp class={props.class} />
     case 'radar':
-      return <Radar className={className} />
+      return <Radar class={props.class} />
     case 'cloak':
-      return <EyeOff className={className} />
+      return <EyeOff class={props.class} />
     default:
-      return <Coins className={className} />
+      return <Coins class={props.class} />
   }
 }
 
@@ -56,244 +56,211 @@ function ItemIcon({ itemType, className }: { itemType: string; className?: strin
  * Shows item details, cost, and remaining balance after purchase
  */
 export function PurchaseConfirmation() {
-  const { confirmationDialog, closePurchaseConfirmation, confirmPurchase } = useShopStore()
-  const { agenticBalance } = useUserStore()
+  const confirmationDialog = () => shopStore.confirmationDialog
+  const agenticBalance = () => userStore.agenticBalance
+  const item = () => confirmationDialog().item
+  const isOpen = () => confirmationDialog().isOpen
+  const isPurchasing = () => confirmationDialog().isPurchasing
+  const error = () => confirmationDialog().error
 
-  const { isOpen, item, isPurchasing, error } = confirmationDialog
-
-  if (!isOpen || !item) return null
-
-  const styles = ITEM_TYPE_STYLES[item.id] || ITEM_TYPE_STYLES.speed_boost
-  const remainingBalance = agenticBalance - item.cost
-  const canAfford = remainingBalance >= 0
+  const styles = () => ITEM_TYPE_STYLES[item()?.id || 'speed_boost'] || ITEM_TYPE_STYLES.speed_boost
+  const remainingBalance = () => agenticBalance() - (item()?.cost || 0)
+  const canAfford = () => remainingBalance() >= 0
 
   return (
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-        onClick={closePurchaseConfirmation}
+    <Show when={isOpen() && item()}>
+      <div
+        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+        onClick={() => shopStore.closePurchaseConfirmation()}
       >
-        <motion.div
-          initial={{ scale: 0.95, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          exit={{ scale: 0.95, opacity: 0 }}
+        <div
           onClick={(e) => e.stopPropagation()}
-          className="w-full max-w-md bg-[var(--background-secondary)] rounded-2xl border border-[var(--card-border)]/30 shadow-2xl overflow-hidden"
+          class="w-full max-w-md bg-[var(--background-secondary)] rounded-2xl border border-[var(--card-border)]/30 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
         >
           {/* Header */}
-          <div className={cn('p-6 border-b border-[var(--card-border)]/20', styles.bg)}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className={cn('p-3 rounded-xl border', styles.bg, styles.border)}>
-                  <ItemIcon itemType={item.id} className={cn('h-6 w-6', styles.text)} />
+          <div class={cn('p-6 border-b border-[var(--card-border)]/20', styles().bg)}>
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class={cn('p-3 rounded-xl border', styles().bg, styles().border)}>
+                  <ItemIcon itemType={item()!.id} class={cn('h-6 w-6', styles().text)} />
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-[var(--text-primary)]">
+                  <h2 class="text-xl font-bold text-[var(--text-primary)]">
                     Confirm Purchase
                   </h2>
-                  <p className={cn('text-sm font-medium', styles.text)}>{item.name}</p>
+                  <p class={cn('text-sm font-medium', styles().text)}>{item()!.name}</p>
                 </div>
               </div>
               <button
-                onClick={closePurchaseConfirmation}
-                className="p-2 rounded-lg hover:bg-[var(--background-primary)] transition-colors"
+                onClick={() => shopStore.closePurchaseConfirmation()}
+                class="p-2 rounded-lg hover:bg-[var(--background-primary)] transition-colors"
               >
-                <X className="h-5 w-5 text-[var(--text-muted)]" />
+                <X class="h-5 w-5 text-[var(--text-muted)]" />
               </button>
             </div>
           </div>
 
           {/* Content */}
-          <div className="p-6 space-y-6">
+          <div class="p-6 space-y-6">
             {/* Item Description */}
-            <p className="text-[var(--text-secondary)] text-center">
-              {item.description}
+            <p class="text-[var(--text-secondary)] text-center">
+              {item()!.description}
             </p>
 
             {/* Item Details */}
-            <div className="space-y-3">
+            <div class="space-y-3">
               {/* Effect */}
-              <div className={cn(
+              <div class={cn(
                 'p-4 rounded-xl border',
-                styles.bg,
-                styles.border
+                styles().bg,
+                styles().border
               )}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className={cn('h-4 w-4', styles.text)} />
-                    <span className="text-sm text-[var(--text-muted)]">Effect</span>
+                <div class="flex items-center justify-between">
+                  <div class="flex items-center gap-2">
+                    <Sparkles class={cn('h-4 w-4', styles().text)} />
+                    <span class="text-sm text-[var(--text-muted)]">Effect</span>
                   </div>
-                  <span className={cn('text-sm font-bold', styles.text)}>{item.effect}</span>
+                  <span class={cn('text-sm font-bold', styles().text)}>{item()!.effect}</span>
                 </div>
               </div>
 
               {/* Duration */}
-              <div className="p-4 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-[var(--text-muted)]" />
-                    <span className="text-sm text-[var(--text-muted)]">Duration</span>
+              <div class="p-4 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20">
+                <div class="flex items-center justify-between">
+                  <div class="flex items-center gap-2">
+                    <Clock class="h-4 w-4 text-[var(--text-muted)]" />
+                    <span class="text-sm text-[var(--text-muted)]">Duration</span>
                   </div>
-                  <span className="text-sm font-medium text-[var(--text-primary)]">
-                    {formatDuration(item.duration)}
+                  <span class="text-sm font-medium text-[var(--text-primary)]">
+                    {formatDuration(item()!.duration)}
                   </span>
                 </div>
               </div>
             </div>
 
             {/* Cost Summary */}
-            <div className="p-4 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-[var(--text-muted)]">Current Balance</span>
-                <div className="flex items-center gap-1">
-                  <Coins className="h-4 w-4 text-[hsl(var(--accent))]" />
-                  <span className="font-medium text-[hsl(var(--accent))]">
-                    {agenticBalance.toLocaleString()}
+            <div class="p-4 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20 space-y-3">
+              <div class="flex items-center justify-between">
+                <span class="text-sm text-[var(--text-muted)]">Current Balance</span>
+                <div class="flex items-center gap-1">
+                  <Coins class="h-4 w-4 text-[hsl(var(--accent))]" />
+                  <span class="font-medium text-[hsl(var(--accent))]">
+                    {agenticBalance().toLocaleString()}
                   </span>
                 </div>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-[var(--text-muted)]">Item Cost</span>
-                <div className="flex items-center gap-1">
-                  <span className="font-medium text-red-400">
-                    -{item.cost.toLocaleString()}
+              <div class="flex items-center justify-between">
+                <span class="text-sm text-[var(--text-muted)]">Item Cost</span>
+                <div class="flex items-center gap-1">
+                  <span class="font-medium text-red-400">
+                    -{item()!.cost.toLocaleString()}
                   </span>
                 </div>
               </div>
-              <div className="h-px bg-[var(--card-border)]/20" />
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-[var(--text-primary)]">After Purchase</span>
-                <div className="flex items-center gap-1">
-                  <Coins className={cn(
+              <div class="h-px bg-[var(--card-border)]/20" />
+              <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-[var(--text-primary)]">After Purchase</span>
+                <div class="flex items-center gap-1">
+                  <Coins class={cn(
                     'h-4 w-4',
-                    canAfford ? 'text-green-400' : 'text-red-400'
+                    canAfford() ? 'text-green-400' : 'text-red-400'
                   )} />
-                  <span className={cn(
+                  <span class={cn(
                     'font-bold',
-                    canAfford ? 'text-green-400' : 'text-red-400'
+                    canAfford() ? 'text-green-400' : 'text-red-400'
                   )}>
-                    {remainingBalance.toLocaleString()}
+                    {remainingBalance().toLocaleString()}
                   </span>
                 </div>
               </div>
             </div>
 
             {/* Error Message */}
-            {error && (
-              <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-red-400 mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-red-400">{error}</p>
+            <Show when={error()}>
+              <div class="p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-3">
+                <AlertTriangle class="h-5 w-5 text-red-400 mt-0.5 flex-shrink-0" />
+                <p class="text-sm text-red-400">{error()}</p>
               </div>
-            )}
+            </Show>
 
             {/* Insufficient Balance Warning */}
-            {!canAfford && (
-              <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-red-400 mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-red-400">
-                  Insufficient $AGENTIC balance. You need {Math.abs(remainingBalance).toLocaleString()} more.
+            <Show when={!canAfford()}>
+              <div class="p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-3">
+                <AlertTriangle class="h-5 w-5 text-red-400 mt-0.5 flex-shrink-0" />
+                <p class="text-sm text-red-400">
+                  Insufficient $AGENTIC balance. You need {Math.abs(remainingBalance()).toLocaleString()} more.
                 </p>
               </div>
-            )}
+            </Show>
           </div>
 
           {/* Footer */}
-          <div className="p-6 border-t border-[var(--card-border)]/20 bg-[var(--background-primary)]/50">
-            <div className="flex gap-3">
+          <div class="p-6 border-t border-[var(--card-border)]/20 bg-[var(--background-primary)]/50">
+            <div class="flex gap-3">
               <button
-                onClick={closePurchaseConfirmation}
-                disabled={isPurchasing}
-                className="flex-1 px-4 py-3 rounded-xl bg-[var(--background-secondary)] border border-[var(--card-border)]/20 text-[var(--text-muted)] font-medium hover:bg-[var(--background-secondary)]/80 transition-colors disabled:opacity-50"
+                onClick={() => shopStore.closePurchaseConfirmation()}
+                disabled={isPurchasing()}
+                class="flex-1 px-4 py-3 rounded-xl bg-[var(--background-secondary)] border border-[var(--card-border)]/20 text-[var(--text-muted)] font-medium hover:bg-[var(--background-secondary)]/80 transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
-              <motion.button
-                onClick={confirmPurchase}
-                disabled={!canAfford || isPurchasing}
-                whileHover={canAfford && !isPurchasing ? { scale: 1.02 } : undefined}
-                whileTap={canAfford && !isPurchasing ? { scale: 0.98 } : undefined}
-                className={cn(
-                  'flex-1 px-4 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all',
-                  canAfford && !isPurchasing
-                    ? 'bg-gradient-to-r from-[var(--brand-teal-1)] to-[hsl(var(--accent))] text-white shadow-lg shadow-[var(--brand-teal-1)]/20'
+              <button
+                onClick={() => shopStore.confirmPurchase()}
+                disabled={!canAfford() || isPurchasing()}
+                class={cn(
+                  'flex-1 px-4 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all duration-200',
+                  canAfford() && !isPurchasing()
+                    ? 'bg-gradient-to-r from-[var(--brand-teal-1)] to-[hsl(var(--accent))] text-white shadow-lg shadow-[var(--brand-teal-1)]/20 hover:scale-[1.02] active:scale-[0.98]'
                     : 'bg-[var(--background-secondary)] text-[var(--text-muted)] cursor-not-allowed'
                 )}
               >
-                {isPurchasing ? (
-                  <>
-                    <motion.div
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-                    >
-                      <Coins className="h-4 w-4" />
-                    </motion.div>
-                    Processing...
-                  </>
-                ) : (
-                  <>
-                    <Check className="h-4 w-4" />
-                    Confirm Purchase
-                  </>
-                )}
-              </motion.button>
+                <Show
+                  when={!isPurchasing()}
+                  fallback={
+                    <>
+                      <Coins class="h-4 w-4 animate-spin" />
+                      Processing...
+                    </>
+                  }
+                >
+                  <Check class="h-4 w-4" />
+                  Confirm Purchase
+                </Show>
+              </button>
             </div>
           </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+        </div>
+      </div>
+    </Show>
   )
 }
 
 /**
- * PurchaseSuccess - Optional success state overlay
+ * PurchaseSuccessOverlay - Optional success state overlay
  * Can be used for showing purchase success animation
  */
-export function PurchaseSuccessOverlay({
-  itemName,
-  onClose
-}: {
+export function PurchaseSuccessOverlay(props: {
   itemName: string
   onClose: () => void
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-      onClick={onClose}
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+      onClick={props.onClose}
     >
-      <motion.div
-        initial={{ scale: 0.5, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.5, opacity: 0 }}
-        className="flex flex-col items-center gap-4 p-8"
-      >
-        <motion.div
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
-          transition={{ type: 'spring', delay: 0.2 }}
-          className="p-6 rounded-full bg-green-500/20 border-2 border-green-500/40"
-        >
-          <Check className="h-12 w-12 text-green-400" />
-        </motion.div>
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-          className="text-center"
-        >
-          <h3 className="text-2xl font-bold text-[var(--text-primary)] mb-2">
+      <div class="flex flex-col items-center gap-4 p-8 animate-in zoom-in-50 duration-300">
+        <div class="p-6 rounded-full bg-green-500/20 border-2 border-green-500/40 animate-in zoom-in duration-500 delay-200">
+          <Check class="h-12 w-12 text-green-400" />
+        </div>
+        <div class="text-center animate-in slide-in-from-bottom-4 duration-300 delay-400">
+          <h3 class="text-2xl font-bold text-[var(--text-primary)] mb-2">
             Purchase Complete!
           </h3>
-          <p className="text-[var(--text-muted)]">
-            {itemName} is now active
+          <p class="text-[var(--text-muted)]">
+            {props.itemName} is now active
           </p>
-        </motion.div>
-      </motion.div>
-    </motion.div>
+        </div>
+      </div>
+    </div>
   )
 }

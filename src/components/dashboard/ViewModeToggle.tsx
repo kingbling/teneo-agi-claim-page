@@ -8,13 +8,13 @@ export interface ViewModeToggleProps {
 /**
  * ViewModeToggle - Toggle buttons for 3D/Top-Down view modes
  */
-export function ViewModeToggle({ viewMode, onViewChange }: ViewModeToggleProps) {
+export function ViewModeToggle(props: ViewModeToggleProps) {
   return (
-    <div className="absolute bottom-6 right-6 flex flex-col gap-2">
+    <div class="absolute bottom-6 right-6 flex flex-col gap-2">
       <button
-        onClick={() => onViewChange('3d')}
-        className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-          viewMode === '3d'
+        onClick={() => props.onViewChange('3d')}
+        class={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+          props.viewMode === '3d'
             ? 'bg-[var(--brand-teal-1)] text-[var(--background-primary)]'
             : 'bg-[var(--background-secondary)] text-[var(--text-secondary)] hover:bg-[var(--background-primary)]'
         }`}
@@ -22,9 +22,9 @@ export function ViewModeToggle({ viewMode, onViewChange }: ViewModeToggleProps) 
         3D View
       </button>
       <button
-        onClick={() => onViewChange('topdown')}
-        className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-          viewMode === 'topdown'
+        onClick={() => props.onViewChange('topdown')}
+        class={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+          props.viewMode === 'topdown'
             ? 'bg-[var(--brand-teal-1)] text-[var(--background-primary)]'
             : 'bg-[var(--background-secondary)] text-[var(--text-secondary)] hover:bg-[var(--background-primary)]'
         }`}

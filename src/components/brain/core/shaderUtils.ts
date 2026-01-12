@@ -161,6 +161,7 @@ export const BRAIN_REGION_VERTEX_SHADER = `
 
   varying vec3 vColor;
   varying float vHighlight;
+  varying float vIsRegionSelected;  // Pass to fragment shader for dimming logic
 
   void main() {
     vColor = aColor;
@@ -168,6 +169,7 @@ export const BRAIN_REGION_VERTEX_SHADER = `
     // Calculate if this particle is in the selected region
     float isSelected = step(abs(aRegionId - uSelectedRegion), 0.5);
     vHighlight = isSelected * uHighlightIntensity;
+    vIsRegionSelected = step(0.01, uHighlightIntensity);  // 1.0 if any region selected
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
@@ -175,8 +177,8 @@ export const BRAIN_REGION_VERTEX_SHADER = `
     float distToCamera = -mvPosition.z;
     float distScale = smoothstep(1.5, 6.0, distToCamera);
 
-    // Slightly enlarge highlighted particles
-    float sizeBoost = 1.0 + vHighlight * 0.5;
+    // Enlarge highlighted particles more dramatically
+    float sizeBoost = 1.0 + vHighlight * 0.8;
     gl_PointSize = aSize * 1.2 * sizeBoost * max(0.2, distScale);
 
     gl_Position = projectionMatrix * mvPosition;
@@ -187,6 +189,7 @@ export const BRAIN_REGION_VERTEX_SHADER = `
 export const BRAIN_REGION_FRAGMENT_SHADER = `
   varying vec3 vColor;
   varying float vHighlight;
+  varying float vIsRegionSelected;
 
   void main() {
     // Soft circular falloff
@@ -195,18 +198,29 @@ export const BRAIN_REGION_FRAGMENT_SHADER = `
     if (dist > 0.5) discard;
     float softness = 1.0 - smoothstep(0.0, 0.5, dist);
 
-    // Boost brightness for highlighted region
-    vec3 finalColor = vColor * (1.0 + vHighlight * 0.8);
+    // Base brightness with highlight boost
+    vec3 finalColor = vColor * (1.2 + vHighlight * 1.2);
 
-    // Subtle glow for core of bright particles (reduced to prevent over-bloom)
-    float coreGlow = smoothstep(0.25, 0.0, dist) * 0.15;
-    finalColor += coreGlow * vColor * 0.8;
+    // Core glow - brighter for highlighted particles
+    float coreGlow = smoothstep(0.2, 0.0, dist) * (0.35 + vHighlight * 0.4);
+    finalColor += coreGlow * vColor;
 
-    // Base alpha balanced for visibility without over-exposure
-    float alpha = softness * (0.28 + vHighlight * 0.5);
+    // Add white highlight to selected region particles
+    if (vHighlight > 0.5) {
+      float whiteCore = smoothstep(0.15, 0.0, dist) * 0.5;
+      finalColor = mix(finalColor, vec3(1.0), whiteCore);
+    }
 
-    // Dim non-highlighted particles when something is selected
-    float dimFactor = 1.0 - (1.0 - vHighlight) * 0.4 * step(0.01, vHighlight + 0.01);
+    // Clamp to prevent bloom explosion
+    finalColor = min(finalColor, vec3(1.5));
+
+    // Alpha with highlight boost
+    float alpha = softness * (0.65 + vHighlight * 0.25);
+
+    // Dim non-highlighted particles when a region IS selected
+    // vIsRegionSelected is 1.0 when any region is selected, 0.0 otherwise
+    // Stronger dimming (0.65) for clearer contrast
+    float dimFactor = 1.0 - (1.0 - vHighlight) * 0.65 * vIsRegionSelected;
 
     gl_FragColor = vec4(finalColor * dimFactor, alpha);
   }

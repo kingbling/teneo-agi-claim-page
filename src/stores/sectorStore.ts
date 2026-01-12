@@ -1,5 +1,6 @@
-import { create } from 'zustand'
-import { useUserStore } from './userStore'
+import { createRoot } from 'solid-js'
+import { createStore } from 'solid-js/store'
+import { userStore } from './userStore'
 
 // API Configuration
 const API_URL = import.meta.env.VITE_API_URL
@@ -75,24 +76,6 @@ export interface SectorState {
   error: string | null
 }
 
-export interface SectorActions {
-  // Fetch
-  fetchSectors: () => Promise<void>
-  fetchSectorProgress: (sectorId: string) => Promise<void>
-
-  // Navigation
-  setActiveSector: (sectorId: string | null) => void
-
-  // Helpers
-  getSectorById: (sectorId: string) => Sector | undefined
-  getUnlockedSectors: () => Sector[]
-  getLockedSectors: () => Sector[]
-  getSectorProgressPercent: (sectorId: string) => number
-  canUnlockSector: (sectorId: string) => { canUnlock: boolean; reason: string | null }
-}
-
-export type SectorStore = SectorState & SectorActions
-
 const initialState: SectorState = {
   sectors: [],
   activeSector: null,
@@ -123,13 +106,13 @@ function getSectorColor(region: string): string {
   return colors[region] || colors.default
 }
 
-export const useSectorStore = create<SectorStore>((set, get) => ({
-  ...initialState,
+function createSectorStore() {
+  const [state, setState] = createStore<SectorState>(initialState)
 
   // ============ FETCH ============
 
-  fetchSectors: async () => {
-    set({ isLoading: true, error: null })
+  const fetchSectors = async () => {
+    setState({ isLoading: true, error: null })
 
     try {
       const response = await fetch(`${API_URL}/api/sectors`)
@@ -163,24 +146,24 @@ export const useSectorStore = create<SectorStore>((set, get) => ({
       // Set active sector to first active or first sector
       const activeSector = sectors.find(s => s.status === 'active') || sectors[0] || null
 
-      set({
+      setState({
         sectors,
         activeSector,
         isLoading: false,
       })
     } catch (error) {
       console.error('Failed to fetch sectors:', error)
-      set({
+      setState({
         sectors: [],
         activeSector: null,
         isLoading: false,
         error: 'Failed to load sectors',
       })
     }
-  },
+  }
 
-  fetchSectorProgress: async (sectorId: string) => {
-    set({ isLoadingProgress: true })
+  const fetchSectorProgress = async (sectorId: string) => {
+    setState({ isLoadingProgress: true })
 
     try {
       const response = await fetch(`${API_URL}/api/sectors/${sectorId}/progress`)
@@ -198,17 +181,12 @@ export const useSectorStore = create<SectorStore>((set, get) => ({
         completedAt: null,
       }
 
-      set((state) => ({
-        sectorProgress: {
-          ...state.sectorProgress,
-          [sectorId]: progress,
-        },
-        isLoadingProgress: false,
-      }))
+      setState('sectorProgress', sectorId, progress)
+      setState({ isLoadingProgress: false })
     } catch (error) {
       console.error('Failed to fetch sector progress:', error)
       // Fall back to local sector data
-      const sector = get().sectors.find(s => s.id === sectorId)
+      const sector = state.sectors.find(s => s.id === sectorId)
       if (sector) {
         const progress: SectorProgress = {
           sectorId,
@@ -219,60 +197,53 @@ export const useSectorStore = create<SectorStore>((set, get) => ({
           rewardsEarned: [],
           completedAt: null,
         }
-        set((state) => ({
-          sectorProgress: {
-            ...state.sectorProgress,
-            [sectorId]: progress,
-          },
-          isLoadingProgress: false,
-        }))
-      } else {
-        set({ isLoadingProgress: false })
+        setState('sectorProgress', sectorId, progress)
       }
+      setState({ isLoadingProgress: false })
     }
-  },
+  }
 
   // ============ NAVIGATION ============
 
-  setActiveSector: (sectorId: string | null) => {
+  const setActiveSector = (sectorId: string | null) => {
     if (sectorId === null) {
-      set({ activeSector: null })
+      setState({ activeSector: null })
       return
     }
 
-    const sector = get().sectors.find(s => s.id === sectorId)
+    const sector = state.sectors.find(s => s.id === sectorId)
     if (sector) {
-      set({ activeSector: sector })
+      setState({ activeSector: sector })
       // Fetch progress when sector is selected
-      get().fetchSectorProgress(sectorId)
+      fetchSectorProgress(sectorId)
     }
-  },
+  }
 
   // ============ HELPERS ============
 
-  getSectorById: (sectorId: string) => {
-    return get().sectors.find(s => s.id === sectorId)
-  },
+  const getSectorById = (sectorId: string) => {
+    return state.sectors.find(s => s.id === sectorId)
+  }
 
-  getUnlockedSectors: () => {
-    return get().sectors.filter(s => s.status === 'active' || s.status === 'completed')
-  },
+  const getUnlockedSectors = () => {
+    return state.sectors.filter(s => s.status === 'active' || s.status === 'completed')
+  }
 
-  getLockedSectors: () => {
-    return get().sectors.filter(s => s.status === 'locked' || s.status === 'upcoming')
-  },
+  const getLockedSectors = () => {
+    return state.sectors.filter(s => s.status === 'locked' || s.status === 'upcoming')
+  }
 
-  getSectorProgressPercent: (sectorId: string) => {
-    const progress = get().sectorProgress[sectorId]
+  const getSectorProgressPercent = (sectorId: string) => {
+    const progress = state.sectorProgress[sectorId]
     if (progress) {
       return progress.progressPercent
     }
-    const sector = get().sectors.find(s => s.id === sectorId)
+    const sector = state.sectors.find(s => s.id === sectorId)
     return sector?.progressPercent || 0
-  },
+  }
 
-  canUnlockSector: (sectorId: string) => {
-    const sector = get().sectors.find(s => s.id === sectorId)
+  const canUnlockSector = (sectorId: string) => {
+    const sector = state.sectors.find(s => s.id === sectorId)
     if (!sector) {
       return { canUnlock: false, reason: 'Sector not found' }
     }
@@ -289,7 +260,7 @@ export const useSectorStore = create<SectorStore>((set, get) => ({
 
     if (unlockRequirement.type === 'brain_level') {
       const requiredLevel = unlockRequirement.value as number
-      const currentBrainLevel = useUserStore.getState().brainLevel
+      const currentBrainLevel = userStore.brainLevel
       if (currentBrainLevel >= requiredLevel) {
         return { canUnlock: true, reason: null }
       }
@@ -301,7 +272,7 @@ export const useSectorStore = create<SectorStore>((set, get) => ({
 
     if (unlockRequirement.type === 'previous_sector') {
       const previousSectorId = unlockRequirement.value as string
-      const previousSector = get().sectors.find(s => s.id === previousSectorId)
+      const previousSector = state.sectors.find(s => s.id === previousSectorId)
       if (!previousSector) {
         return { canUnlock: false, reason: 'Previous sector not found' }
       }
@@ -315,17 +286,36 @@ export const useSectorStore = create<SectorStore>((set, get) => ({
     }
 
     return { canUnlock: false, reason: 'Unknown unlock requirement' }
-  },
-}))
+  }
 
-// ============ SELECTORS ============
+  return {
+    // State getters
+    get sectors() { return state.sectors },
+    get activeSector() { return state.activeSector },
+    get sectorProgress() { return state.sectorProgress },
+    get isLoading() { return state.isLoading },
+    get isLoadingProgress() { return state.isLoadingProgress },
+    get error() { return state.error },
 
-export const selectSectors = (state: SectorStore) => state.sectors
-export const selectActiveSector = (state: SectorStore) => state.activeSector
-export const selectSectorProgress = (state: SectorStore) => state.sectorProgress
-export const selectIsLoadingSectors = (state: SectorStore) => state.isLoading
-export const selectUnlockedSectors = (state: SectorStore) => state.getUnlockedSectors()
-export const selectLockedSectors = (state: SectorStore) => state.getLockedSectors()
+    // Computed getters
+    get unlockedSectors() { return getUnlockedSectors() },
+    get lockedSectors() { return getLockedSectors() },
+
+    // Actions
+    fetchSectors,
+    fetchSectorProgress,
+    setActiveSector,
+
+    // Helpers
+    getSectorById,
+    getUnlockedSectors,
+    getLockedSectors,
+    getSectorProgressPercent,
+    canUnlockSector,
+  }
+}
+
+export const sectorStore = createRoot(createSectorStore)
 
 // ============ HELPER FUNCTIONS ============
 

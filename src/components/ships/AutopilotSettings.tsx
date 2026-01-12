@@ -1,7 +1,6 @@
-import { useState } from 'react'
-import { motion } from 'framer-motion'
-import { Bot, BotOff, Gauge, Target, Sparkles, AlertTriangle, Check, X } from 'lucide-react'
-import { useShipStore, type Ship, type AutopilotPreferences } from '@/stores/shipStore'
+import { createSignal, Show, For } from 'solid-js'
+import { Bot, BotOff, Gauge, Target, Sparkles, AlertTriangle, Check, X } from 'lucide-solid'
+import { shipStore, type Ship, type AutopilotPreferences } from '@/stores/shipStore'
 import { SYNAPSE_CONFIG, type SynapseType, SYNAPSE_TYPE_ORDER } from '@/types/game'
 import { cn } from '@/lib/utils'
 
@@ -13,7 +12,7 @@ export interface AutopilotSettingsProps {
   /** Compact inline mode */
   inline?: boolean
   /** Additional CSS classes */
-  className?: string
+  class?: string
 }
 
 const SYNAPSE_COLORS: Record<SynapseType, { bg: string; border: string; text: string }> = {
@@ -37,26 +36,19 @@ const SPENDING_PRESETS = [50, 100, 200, 500, 1000]
  * - Choose preferred synapse types
  * - Toggle crowded synapse avoidance
  */
-export function AutopilotSettings({
-  ship,
-  onClose,
-  inline = false,
-  className,
-}: AutopilotSettingsProps) {
-  const { toggleAutopilot, setAutopilotPreferences } = useShipStore()
-
+export function AutopilotSettings(props: AutopilotSettingsProps) {
   // Local state for form
-  const [enabled, setEnabled] = useState(ship.autopilotEnabled)
-  const [maxPointsPerMin, setMaxPointsPerMin] = useState(
-    ship.autopilotPreferences?.maxPointsPerMin ?? 100
+  const [enabled, setEnabled] = createSignal(props.ship.autopilotEnabled)
+  const [maxPointsPerMin, setMaxPointsPerMin] = createSignal(
+    props.ship.autopilotPreferences?.maxPointsPerMin ?? 100
   )
-  const [preferredTypes, setPreferredTypes] = useState<SynapseType[]>(
-    ship.autopilotPreferences?.preferredSynapseTypes ?? ['minor', 'complex']
+  const [preferredTypes, setPreferredTypes] = createSignal<SynapseType[]>(
+    props.ship.autopilotPreferences?.preferredSynapseTypes ?? ['minor', 'complex']
   )
-  const [avoidCrowded, setAvoidCrowded] = useState(
-    ship.autopilotPreferences?.avoidCrowded ?? true
+  const [avoidCrowded, setAvoidCrowded] = createSignal(
+    props.ship.autopilotPreferences?.avoidCrowded ?? true
   )
-  const [isSaving, setIsSaving] = useState(false)
+  const [isSaving, setIsSaving] = createSignal(false)
 
   const handleToggleType = (type: SynapseType) => {
     setPreferredTypes(prev =>
@@ -70,19 +62,19 @@ export function AutopilotSettings({
     setIsSaving(true)
     try {
       // Toggle autopilot if changed
-      if (enabled !== ship.autopilotEnabled) {
-        await toggleAutopilot(ship.id, enabled)
+      if (enabled() !== props.ship.autopilotEnabled) {
+        await shipStore.toggleAutopilot(props.ship.id, enabled())
       }
 
       // Update preferences
       const prefs: AutopilotPreferences = {
-        maxPointsPerMin,
-        preferredSynapseTypes: preferredTypes,
-        avoidCrowded,
+        maxPointsPerMin: maxPointsPerMin(),
+        preferredSynapseTypes: preferredTypes(),
+        avoidCrowded: avoidCrowded(),
       }
-      await setAutopilotPreferences(ship.id, prefs)
+      await shipStore.setAutopilotPreferences(props.ship.id, prefs)
 
-      onClose?.()
+      props.onClose?.()
     } catch (error) {
       console.error('Failed to save autopilot settings:', error)
     } finally {
@@ -91,219 +83,213 @@ export function AutopilotSettings({
   }
 
   const content = (
-    <div className="space-y-5">
+    <div class="space-y-5">
       {/* Enable/Disable Toggle */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
           <div
-            className={cn(
+            class={cn(
               'p-2.5 rounded-xl transition-colors',
-              enabled
+              enabled()
                 ? 'bg-[var(--brand-teal-1)]/20'
                 : 'bg-[var(--background-primary)]'
             )}
           >
-            {enabled ? (
-              <Bot className="h-5 w-5 text-[var(--brand-teal-1)]" />
-            ) : (
-              <BotOff className="h-5 w-5 text-[var(--text-muted)]" />
-            )}
+            <Show when={enabled()} fallback={<BotOff class="h-5 w-5 text-[var(--text-muted)]" />}>
+              <Bot class="h-5 w-5 text-[var(--brand-teal-1)]" />
+            </Show>
           </div>
           <div>
-            <p className="font-semibold text-[var(--text-primary)]">Autopilot</p>
-            <p className="text-xs text-[var(--text-muted)]">
-              {enabled ? 'Auto-find next synapse when done' : 'Manual control'}
+            <p class="font-semibold text-[var(--text-primary)]">Autopilot</p>
+            <p class="text-xs text-[var(--text-muted)]">
+              {enabled() ? 'Auto-find next synapse when done' : 'Manual control'}
             </p>
           </div>
         </div>
         <button
-          onClick={() => setEnabled(!enabled)}
+          onClick={() => setEnabled(!enabled())}
           role="switch"
-          aria-checked={enabled}
+          aria-checked={enabled()}
           aria-label="Toggle autopilot"
-          className={cn(
+          class={cn(
             'relative w-12 h-6 rounded-full transition-colors',
-            enabled ? 'bg-[var(--brand-teal-1)]' : 'bg-[var(--background-primary)]'
+            enabled() ? 'bg-[var(--brand-teal-1)]' : 'bg-[var(--background-primary)]'
           )}
         >
-          <motion.div
-            animate={{ x: enabled ? 24 : 2 }}
-            className="absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm"
+          <div
+            class="absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200"
+            style={{ transform: enabled() ? 'translateX(24px)' : 'translateX(2px)' }}
           />
         </button>
       </div>
 
       {/* Settings (only shown when enabled) */}
-      {enabled && (
-        <motion.div
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          exit={{ opacity: 0, height: 0 }}
-          className="space-y-4 pt-4 border-t border-[var(--card-border)]/20"
+      <Show when={enabled()}>
+        <div
+          class="space-y-4 pt-4 border-t border-[var(--card-border)]/20 transition-all duration-300"
         >
           {/* Max Spending Rate */}
           <div>
-            <div className="flex items-center gap-2 mb-2">
-              <Gauge className="h-4 w-4 text-[var(--text-muted)]" />
-              <span className="text-sm font-medium text-[var(--text-primary)]">
+            <div class="flex items-center gap-2 mb-2">
+              <Gauge class="h-4 w-4 text-[var(--text-muted)]" />
+              <span class="text-sm font-medium text-[var(--text-primary)]">
                 Max Spending Rate
               </span>
-              <span className="ml-auto text-sm font-semibold text-[var(--brand-teal-1)]">
-                {maxPointsPerMin}/min
+              <span class="ml-auto text-sm font-semibold text-[var(--brand-teal-1)]">
+                {maxPointsPerMin()}/min
               </span>
             </div>
-            <div className="flex gap-2">
-              {SPENDING_PRESETS.map(preset => (
-                <button
-                  key={preset}
-                  onClick={() => setMaxPointsPerMin(preset)}
-                  className={cn(
-                    'flex-1 py-1.5 px-2 rounded-lg text-xs font-medium transition-colors border',
-                    maxPointsPerMin === preset
-                      ? 'bg-[var(--brand-teal-1)]/20 border-[var(--brand-teal-1)]/50 text-[var(--brand-teal-1)]'
-                      : 'bg-[var(--background-primary)] border-[var(--card-border)]/30 text-[var(--text-muted)] hover:border-[var(--card-border)]/50'
-                  )}
-                >
-                  {preset}
-                </button>
-              ))}
+            <div class="flex gap-2">
+              <For each={SPENDING_PRESETS}>
+                {(preset) => (
+                  <button
+                    onClick={() => setMaxPointsPerMin(preset)}
+                    class={cn(
+                      'flex-1 py-1.5 px-2 rounded-lg text-xs font-medium transition-colors border',
+                      maxPointsPerMin() === preset
+                        ? 'bg-[var(--brand-teal-1)]/20 border-[var(--brand-teal-1)]/50 text-[var(--brand-teal-1)]'
+                        : 'bg-[var(--background-primary)] border-[var(--card-border)]/30 text-[var(--text-muted)] hover:border-[var(--card-border)]/50'
+                    )}
+                  >
+                    {preset}
+                  </button>
+                )}
+              </For>
             </div>
           </div>
 
           {/* Preferred Synapse Types */}
           <div>
-            <div className="flex items-center gap-2 mb-2">
-              <Target className="h-4 w-4 text-[var(--text-muted)]" />
-              <span className="text-sm font-medium text-[var(--text-primary)]">
+            <div class="flex items-center gap-2 mb-2">
+              <Target class="h-4 w-4 text-[var(--text-muted)]" />
+              <span class="text-sm font-medium text-[var(--text-primary)]">
                 Target Synapse Types
               </span>
             </div>
-            <div className="grid grid-cols-4 gap-2">
-              {SYNAPSE_TYPE_ORDER.map((type: SynapseType) => {
-                const config = SYNAPSE_CONFIG[type]
-                const colors = SYNAPSE_COLORS[type]
-                const isSelected = preferredTypes.includes(type)
+            <div class="grid grid-cols-4 gap-2">
+              <For each={SYNAPSE_TYPE_ORDER as SynapseType[]}>
+                {(type) => {
+                  const config = SYNAPSE_CONFIG[type]
+                  const colors = SYNAPSE_COLORS[type]
+                  const isSelected = () => preferredTypes().includes(type)
 
-                return (
-                  <button
-                    key={type}
-                    onClick={() => handleToggleType(type)}
-                    className={cn(
-                      'py-2 px-2 rounded-lg text-xs font-medium transition-all border capitalize',
-                      isSelected
-                        ? `${colors.bg} ${colors.border} ${colors.text}`
-                        : 'bg-[var(--background-primary)] border-[var(--card-border)]/30 text-[var(--text-muted)] hover:border-[var(--card-border)]/50'
-                    )}
-                  >
-                    {type}
-                    <div className="text-[10px] opacity-70 mt-0.5">
-                      {config.distribution === 'lottery' ? 'Lottery' : 'Share'}
-                    </div>
-                  </button>
-                )
-              })}
+                  return (
+                    <button
+                      onClick={() => handleToggleType(type)}
+                      class={cn(
+                        'py-2 px-2 rounded-lg text-xs font-medium transition-all border capitalize',
+                        isSelected()
+                          ? `${colors.bg} ${colors.border} ${colors.text}`
+                          : 'bg-[var(--background-primary)] border-[var(--card-border)]/30 text-[var(--text-muted)] hover:border-[var(--card-border)]/50'
+                      )}
+                    >
+                      {type}
+                      <div class="text-[10px] opacity-70 mt-0.5">
+                        {config.distribution === 'lottery' ? 'Lottery' : 'Share'}
+                      </div>
+                    </button>
+                  )
+                }}
+              </For>
             </div>
-            {preferredTypes.length === 0 && (
-              <p className="text-xs text-amber-400 mt-2 flex items-center gap-1">
-                <AlertTriangle className="h-3 w-3" />
+            <Show when={preferredTypes().length === 0}>
+              <p class="text-xs text-amber-400 mt-2 flex items-center gap-1">
+                <AlertTriangle class="h-3 w-3" />
                 Select at least one synapse type
               </p>
-            )}
+            </Show>
           </div>
 
           {/* Avoid Crowded Toggle */}
-          <div className="flex items-center justify-between p-3 rounded-lg bg-[var(--background-primary)] border border-[var(--card-border)]/20">
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-[var(--text-muted)]" />
+          <div class="flex items-center justify-between p-3 rounded-lg bg-[var(--background-primary)] border border-[var(--card-border)]/20">
+            <div class="flex items-center gap-2">
+              <Sparkles class="h-4 w-4 text-[var(--text-muted)]" />
               <div>
-                <p className="text-sm font-medium text-[var(--text-primary)]">
+                <p class="text-sm font-medium text-[var(--text-primary)]">
                   Avoid Crowded Synapses
                 </p>
-                <p className="text-xs text-[var(--text-muted)]">
+                <p class="text-xs text-[var(--text-muted)]">
                   Skip synapses with many explorers
                 </p>
               </div>
             </div>
             <button
-              onClick={() => setAvoidCrowded(!avoidCrowded)}
+              onClick={() => setAvoidCrowded(!avoidCrowded())}
               role="switch"
-              aria-checked={avoidCrowded}
+              aria-checked={avoidCrowded()}
               aria-label="Avoid crowded synapses"
-              className={cn(
+              class={cn(
                 'relative w-10 h-5 rounded-full transition-colors',
-                avoidCrowded ? 'bg-[var(--brand-teal-1)]' : 'bg-[var(--background-secondary)]'
+                avoidCrowded() ? 'bg-[var(--brand-teal-1)]' : 'bg-[var(--background-secondary)]'
               )}
             >
-              <motion.div
-                animate={{ x: avoidCrowded ? 20 : 2 }}
-                className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm"
+              <div
+                class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200"
+                style={{ transform: avoidCrowded() ? 'translateX(20px)' : 'translateX(2px)' }}
               />
             </button>
           </div>
-        </motion.div>
-      )}
+        </div>
+      </Show>
 
       {/* Actions */}
-      <div className="flex gap-2 pt-2">
-        {onClose && (
+      <div class="flex gap-2 pt-2">
+        <Show when={props.onClose}>
           <button
-            onClick={onClose}
-            className="flex-1 py-2.5 px-4 rounded-lg border border-[var(--card-border)]/30 text-[var(--text-muted)] hover:bg-[var(--background-primary)] transition-colors flex items-center justify-center gap-2"
+            onClick={props.onClose}
+            class="flex-1 py-2.5 px-4 rounded-lg border border-[var(--card-border)]/30 text-[var(--text-muted)] hover:bg-[var(--background-primary)] transition-colors flex items-center justify-center gap-2"
           >
-            <X className="h-4 w-4" />
+            <X class="h-4 w-4" />
             Cancel
           </button>
-        )}
+        </Show>
         <button
           onClick={handleSave}
-          disabled={isSaving || (enabled && preferredTypes.length === 0)}
-          className={cn(
+          disabled={isSaving() || (enabled() && preferredTypes().length === 0)}
+          class={cn(
             'flex-1 py-2.5 px-4 rounded-lg font-medium transition-all flex items-center justify-center gap-2',
-            enabled && preferredTypes.length === 0
+            enabled() && preferredTypes().length === 0
               ? 'bg-[var(--background-secondary)] text-[var(--text-muted)] cursor-not-allowed'
               : 'bg-[var(--brand-teal-1)] text-white hover:bg-[var(--brand-teal-1)]/90'
           )}
         >
-          {isSaving ? (
-            <motion.div
-              animate={{ rotate: 360 }}
-              transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-              className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full"
-            />
-          ) : (
-            <>
-              <Check className="h-4 w-4" />
-              Save Settings
-            </>
-          )}
+          <Show
+            when={!isSaving()}
+            fallback={
+              <div
+                class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"
+              />
+            }
+          >
+            <Check class="h-4 w-4" />
+            Save Settings
+          </Show>
         </button>
       </div>
     </div>
   )
 
-  if (inline) {
+  if (props.inline) {
     return (
-      <div className={cn('space-y-4', className)}>
+      <div class={cn('space-y-4', props.class)}>
         {content}
       </div>
     )
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={cn(
+    <div
+      class={cn(
         'rounded-xl border p-5 bg-gradient-to-br from-[var(--background-secondary)] to-[var(--background-primary)]',
         'border-[var(--card-border)]/30',
-        className
+        props.class
       )}
     >
-      <h3 className="text-lg font-bold text-[var(--text-primary)] mb-4">
+      <h3 class="text-lg font-bold text-[var(--text-primary)] mb-4">
         Autopilot Settings
       </h3>
       {content}
-    </motion.div>
+    </div>
   )
 }
 
@@ -312,17 +298,16 @@ export function AutopilotSettings({
  */
 export interface AutopilotQuickToggleProps {
   ship: Ship
-  className?: string
+  class?: string
 }
 
-export function AutopilotQuickToggle({ ship, className }: AutopilotQuickToggleProps) {
-  const { toggleAutopilot } = useShipStore()
-  const [isToggling, setIsToggling] = useState(false)
+export function AutopilotQuickToggle(props: AutopilotQuickToggleProps) {
+  const [isToggling, setIsToggling] = createSignal(false)
 
   const handleToggle = async () => {
     setIsToggling(true)
     try {
-      await toggleAutopilot(ship.id, !ship.autopilotEnabled)
+      await shipStore.toggleAutopilot(props.ship.id, !props.ship.autopilotEnabled)
     } catch (error) {
       console.error('Failed to toggle autopilot:', error)
     } finally {
@@ -333,31 +318,35 @@ export function AutopilotQuickToggle({ ship, className }: AutopilotQuickTogglePr
   return (
     <button
       onClick={handleToggle}
-      disabled={isToggling}
+      disabled={isToggling()}
       role="switch"
-      aria-checked={ship.autopilotEnabled}
-      aria-label={ship.autopilotEnabled ? 'Disable autopilot' : 'Enable autopilot'}
-      className={cn(
+      aria-checked={props.ship.autopilotEnabled}
+      aria-label={props.ship.autopilotEnabled ? 'Disable autopilot' : 'Enable autopilot'}
+      class={cn(
         'p-1.5 rounded-lg transition-colors border',
-        ship.autopilotEnabled
+        props.ship.autopilotEnabled
           ? 'bg-[var(--brand-teal-1)]/20 border-[var(--brand-teal-1)]/40 text-[var(--brand-teal-1)]'
           : 'bg-[var(--background-primary)] border-[var(--card-border)]/30 text-[var(--text-muted)] hover:border-[var(--card-border)]/50',
-        isToggling && 'opacity-50',
-        className
+        isToggling() && 'opacity-50',
+        props.class
       )}
-      title={ship.autopilotEnabled ? 'Disable autopilot' : 'Enable autopilot'}
+      title={props.ship.autopilotEnabled ? 'Disable autopilot' : 'Enable autopilot'}
     >
-      {isToggling ? (
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-          className="w-4 h-4 border-2 border-current/30 border-t-current rounded-full"
-        />
-      ) : ship.autopilotEnabled ? (
-        <Bot className="h-4 w-4" />
-      ) : (
-        <BotOff className="h-4 w-4" />
-      )}
+      <Show
+        when={!isToggling()}
+        fallback={
+          <div
+            class="w-4 h-4 border-2 border-current/30 border-t-current rounded-full animate-spin"
+          />
+        }
+      >
+        <Show
+          when={props.ship.autopilotEnabled}
+          fallback={<BotOff class="h-4 w-4" />}
+        >
+          <Bot class="h-4 w-4" />
+        </Show>
+      </Show>
     </button>
   )
 }

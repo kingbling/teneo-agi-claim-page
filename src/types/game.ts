@@ -319,13 +319,13 @@ export interface RGBColor {
 }
 
 export const SYNAPSE_TYPE_COLORS: Record<SynapseType, RGBColor> = {
-  minor:     { r: 0.4, g: 0.6, b: 0.8 },  // Blue
-  complex:   { r: 0.6, g: 0.4, b: 0.9 },  // Purple
-  deep:      { r: 0.3, g: 0.8, b: 0.5 },  // Teal
-  core:      { r: 1.0, g: 0.8, b: 0.0 },  // Gold
-  rare:      { r: 0.9, g: 0.3, b: 0.3 },  // Red-pink
-  legendary: { r: 0.9, g: 0.5, b: 1.0 },  // Bright magenta
-  unique:    { r: 1.0, g: 0.9, b: 0.2 },  // Brilliant yellow
+  minor:     { r: 0.5, g: 0.7, b: 1.0 },  // Brighter blue
+  complex:   { r: 0.7, g: 0.5, b: 1.0 },  // Brighter purple
+  deep:      { r: 0.4, g: 1.0, b: 0.7 },  // Brighter teal
+  core:      { r: 1.0, g: 0.85, b: 0.1 }, // Rich gold
+  rare:      { r: 1.0, g: 0.4, b: 0.5 },  // Vibrant coral
+  legendary: { r: 1.0, g: 0.5, b: 1.0 },  // Hot magenta
+  unique:    { r: 1.0, g: 1.0, b: 0.3 },  // Brilliant yellow
 }
 
 export const USER_LEVEL_COLORS: Record<UserLevel, string> = {

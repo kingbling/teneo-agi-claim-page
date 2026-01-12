@@ -1,8 +1,7 @@
-import { useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { createSignal, Show, For, type Component, type JSX } from 'solid-js'
 import { cn } from '@/lib/utils'
 import { Button } from './button'
-import { Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-solid'
 
 export type ConfirmDialogVariant = 'primary' | 'success' | 'warning' | 'destructive'
 
@@ -62,13 +61,13 @@ export interface ConfirmDialogProps {
   /** Optional preview data rows */
   previewData?: PreviewData[]
   /** Icon component */
-  icon?: React.ReactNode
+  icon?: JSX.Element
   /** Whether confirm action is loading */
   isLoading?: boolean
   /** Whether confirm action is disabled */
   isDisabled?: boolean
   /** Additional content to display */
-  children?: React.ReactNode
+  children?: JSX.Element
 }
 
 /**
@@ -80,141 +79,121 @@ export interface ConfirmDialogProps {
  * - Delete confirmations
  * - Any action that needs user confirmation
  */
-export function ConfirmDialog({
-  isOpen,
-  onClose,
-  onConfirm,
-  title,
-  description,
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
-  variant = 'primary',
-  previewData,
-  icon,
-  isLoading = false,
-  isDisabled = false,
-  children,
-}: ConfirmDialogProps) {
-  const [isConfirming, setIsConfirming] = useState(false)
+export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
+  const [isConfirming, setIsConfirming] = createSignal(false)
 
-  const variantConfig = DIALOG_VARIANTS[variant]
+  const variantConfig = () => DIALOG_VARIANTS[props.variant || 'primary']
 
   const handleConfirm = async () => {
-    if (isConfirming || isDisabled) return
+    if (isConfirming() || props.isDisabled) return
     setIsConfirming(true)
     try {
-      await onConfirm()
-      onClose()
+      await props.onConfirm()
+      props.onClose()
     } finally {
       setIsConfirming(false)
     }
   }
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
-          onClick={onClose}
-        >
-          {/* Backdrop */}
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+    <Show when={props.isOpen}>
+      <div
+        class="fixed inset-0 z-[9999] flex items-center justify-center p-4 animate-fade-in"
+        onClick={props.onClose}
+      >
+        {/* Backdrop */}
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" />
 
-          {/* Dialog */}
-          <motion.div
-            initial={{ scale: 0.95, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.95, opacity: 0 }}
-            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-            onClick={(e) => e.stopPropagation()}
-            className="relative w-full max-w-sm rounded-2xl bg-[var(--background-secondary)] border border-[var(--card-border)] shadow-2xl overflow-hidden"
-          >
-            {/* Header */}
-            <div className={cn(
-              'p-4 border-b border-[var(--card-border)]',
-              variantConfig.bg
-            )}>
-              <div className="flex items-center gap-4">
-                {icon ? (
-                  <div className={cn('p-2 rounded-xl', variantConfig.bg, variantConfig.icon)}>
-                    {icon}
+        {/* Dialog */}
+        <div
+          onClick={(e) => e.stopPropagation()}
+          class="relative w-full max-w-sm rounded-2xl bg-[var(--background-secondary)] border border-[var(--card-border)] shadow-2xl overflow-hidden animate-scale-in"
+        >
+          {/* Header */}
+          <div class={cn(
+            'p-4 border-b border-[var(--card-border)]',
+            variantConfig().bg
+          )}>
+            <div class="flex items-center gap-4">
+              <Show
+                when={props.icon}
+                fallback={
+                  <div class={cn('p-2 rounded-xl', variantConfig().bg, variantConfig().icon)}>
+                    <div class="w-5 h-5" />
                   </div>
-                ) : (
-                  <div className={cn('p-2 rounded-xl', variantConfig.bg, variantConfig.icon)}>
-                    <div className="w-5 h-5" />
-                  </div>
-                )}
-                <div>
-                  <h3 className="font-semibold text-[var(--text-primary)]">{title}</h3>
-                  {description && (
-                    <p className="text-xs text-[var(--text-muted)]">{description}</p>
-                  )}
+                }
+              >
+                <div class={cn('p-2 rounded-xl', variantConfig().bg, variantConfig().icon)}>
+                  {props.icon}
                 </div>
+              </Show>
+              <div>
+                <h3 class="font-semibold text-[var(--text-primary)]">{props.title}</h3>
+                <Show when={props.description}>
+                  <p class="text-xs text-[var(--text-muted)]">{props.description}</p>
+                </Show>
               </div>
             </div>
+          </div>
 
-            {/* Content */}
-            <div className="p-4 space-y-4">
-              {/* Preview Data */}
-              {previewData && previewData.length > 0 && (
-                <div className="grid grid-cols-2 gap-3">
-                  {previewData.map((item, index) => (
+          {/* Content */}
+          <div class="p-4 space-y-4">
+            {/* Preview Data */}
+            <Show when={props.previewData && props.previewData.length > 0}>
+              <div class="grid grid-cols-2 gap-3">
+                <For each={props.previewData}>
+                  {(item) => (
                     <div
-                      key={index}
-                      className={cn(
+                      class={cn(
                         'px-4 py-3 rounded-xl border',
                         item.highlight
                           ? 'bg-[hsl(var(--primary))]/10 border-[hsl(var(--primary))]/30'
                           : 'bg-[var(--background-primary)] border-[var(--card-border)]'
                       )}
                     >
-                      <div className="text-xs text-[var(--text-muted)] mb-1">{item.label}</div>
-                      <div className={cn(
+                      <div class="text-xs text-[var(--text-muted)] mb-1">{item.label}</div>
+                      <div class={cn(
                         'text-lg font-bold',
                         item.highlight ? 'text-[hsl(var(--primary))]' : 'text-[var(--text-primary)]'
                       )}>
                         {typeof item.value === 'number' ? item.value.toLocaleString() : item.value}
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
+                  )}
+                </For>
+              </div>
+            </Show>
 
-              {/* Custom content */}
-              {children}
-            </div>
+            {/* Custom content */}
+            {props.children}
+          </div>
 
-            {/* Actions */}
-            <div className="p-4 border-t border-[var(--card-border)] flex gap-3">
-              <Button
-                variant="outline"
-                onClick={onClose}
-                disabled={isConfirming}
-                className="flex-1"
+          {/* Actions */}
+          <div class="p-4 border-t border-[var(--card-border)] flex gap-3">
+            <Button
+              variant="outline"
+              onClick={props.onClose}
+              disabled={isConfirming()}
+              class="flex-1"
+            >
+              {props.cancelLabel || 'Cancel'}
+            </Button>
+            <Button
+              onClick={handleConfirm}
+              disabled={isConfirming() || props.isDisabled}
+              class={cn('flex-1', variantConfig().button)}
+            >
+              <Show
+                when={isConfirming() || props.isLoading}
+                fallback={props.confirmLabel || 'Confirm'}
               >
-                {cancelLabel}
-              </Button>
-              <Button
-                onClick={handleConfirm}
-                disabled={isConfirming || isDisabled}
-                className={cn('flex-1', variantConfig.button)}
-              >
-                {isConfirming || isLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Processing...
-                  </>
-                ) : (
-                  confirmLabel
-                )}
-              </Button>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+                <Loader2 class="h-4 w-4 mr-2 animate-spin" />
+                Processing...
+              </Show>
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Show>
   )
 }

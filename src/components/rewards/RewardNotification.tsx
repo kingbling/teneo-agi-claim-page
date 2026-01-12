@@ -1,7 +1,6 @@
-import { useEffect, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { Coins, Zap, Ticket, Trophy, Image, ArrowUp, X } from 'lucide-react'
-import { useRewardStore, selectRecentRewards, type RewardType, getRewardTypeLabel } from '@/stores/rewardStore'
+import { createEffect, onCleanup, Show, For, type Component } from 'solid-js'
+import { Coins, Zap, Ticket, Trophy, Image, ArrowUp, X } from 'lucide-solid'
+import { rewardStore, type RewardType, getRewardTypeLabel } from '@/stores/rewardStore'
 import { formatPoints } from '@/types/game'
 import { cn } from '@/lib/utils'
 
@@ -66,89 +65,62 @@ interface RewardNotificationItemProps {
   index: number
 }
 
-function RewardNotificationItem({
-  id,
-  type,
-  amount,
-  source,
-  onDismiss,
-  index,
-}: RewardNotificationItemProps) {
-  const styles = REWARD_STYLES[type] || REWARD_STYLES.agi
-  const Icon = styles.icon
+const RewardNotificationItem: Component<RewardNotificationItemProps> = (props) => {
+  const styles = () => REWARD_STYLES[props.type] || REWARD_STYLES.agi
+  const Icon = () => styles().icon
 
   // Format amount based on type
-  const formattedAmount = type === 'nft' ? '+1' : `+${formatPoints(amount)}`
-  const suffix = type === 'xp' ? ' XP' : type === 'lottery_ticket' ? ' Tickets' : type === 'agi' || type === 'lottery_win' ? ' AGI' : ''
+  const formattedAmount = () => props.type === 'nft' ? '+1' : `+${formatPoints(props.amount)}`
+  const suffix = () => props.type === 'xp' ? ' XP' : props.type === 'lottery_ticket' ? ' Tickets' : props.type === 'agi' || props.type === 'lottery_win' ? ' AGI' : ''
 
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, x: 100, scale: 0.8 }}
-      animate={{ opacity: 1, x: 0, scale: 1 }}
-      exit={{ opacity: 0, x: 100, scale: 0.8 }}
-      transition={{
-        type: 'spring',
-        damping: 20,
-        stiffness: 300,
-        delay: index * 0.1,
-      }}
-      className={cn(
+    <div
+      class={cn(
         'relative flex items-center gap-3 px-4 py-3 rounded-xl',
         'border bg-gradient-to-r backdrop-blur-xl',
         'shadow-lg',
-        styles.bg,
-        styles.border,
-        styles.glow
+        'animate-slide-in-right',
+        styles().bg,
+        styles().border,
+        styles().glow
       )}
+      style={{
+        'animation-delay': `${props.index * 100}ms`,
+      }}
     >
       {/* Animated background pulse for lottery wins */}
-      {type === 'lottery_win' && (
-        <motion.div
-          animate={{ scale: [1, 1.5, 1], opacity: [0.3, 0.1, 0.3] }}
-          transition={{ duration: 2, repeat: Infinity }}
-          className="absolute inset-0 rounded-xl bg-amber-500/20"
-        />
-      )}
+      <Show when={props.type === 'lottery_win'}>
+        <div class="absolute inset-0 rounded-xl bg-amber-500/20 animate-pulse" />
+      </Show>
 
       {/* Icon */}
-      <motion.div
-        initial={{ rotate: -10 }}
-        animate={{ rotate: [0, -10, 10, 0] }}
-        transition={{ duration: 0.5, delay: 0.2 }}
-        className={cn('p-2 rounded-lg bg-[var(--background-secondary)]', styles.text)}
-      >
-        <Icon className="h-5 w-5" />
-      </motion.div>
+      <div class={cn('p-2 rounded-lg bg-[var(--background-secondary)]', styles().text)}>
+        <Icon class="h-5 w-5" />
+      </div>
 
       {/* Content */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2">
-          <motion.span
-            initial={{ scale: 0.5 }}
-            animate={{ scale: 1 }}
-            transition={{ type: 'spring', damping: 10, delay: 0.3 }}
-            className={cn('text-lg font-bold tabular-nums', styles.text)}
-          >
-            {formattedAmount}{suffix}
-          </motion.span>
-          <span className="text-xs text-[var(--text-muted)]">
-            {getRewardTypeLabel(type)}
+      <div class="flex-1 min-w-0">
+        <div class="flex items-baseline gap-2">
+          <span class={cn('text-lg font-bold tabular-nums', styles().text)}>
+            {formattedAmount()}{suffix()}
+          </span>
+          <span class="text-xs text-[var(--text-muted)]">
+            {getRewardTypeLabel(props.type)}
           </span>
         </div>
-        <p className="text-xs text-[var(--text-secondary)] truncate">
-          {source}
+        <p class="text-xs text-[var(--text-secondary)] truncate">
+          {props.source}
         </p>
       </div>
 
       {/* Dismiss button */}
       <button
-        onClick={() => onDismiss(id)}
-        className="p-1 rounded-lg hover:bg-[var(--background-secondary)] transition-colors"
+        onClick={() => props.onDismiss(props.id)}
+        class="p-1 rounded-lg hover:bg-[var(--background-secondary)] transition-colors"
       >
-        <X className="h-4 w-4 text-[var(--text-muted)]" />
+        <X class="h-4 w-4 text-[var(--text-muted)]" />
       </button>
-    </motion.div>
+    </div>
   )
 }
 
@@ -156,36 +128,33 @@ function RewardNotificationItem({
  * RewardNotification - Stacked notification popups for rewards
  * Shows animated notifications when user earns AGI, XP, or lottery tickets
  */
-export function RewardNotification() {
-  const recentRewards = useRewardStore(selectRecentRewards)
-  const dismissReward = useRewardStore((state) => state.dismissReward)
-  const showNotifications = useRewardStore((state) => state.showNotifications)
+export const RewardNotification: Component = () => {
+  const recentRewards = () => rewardStore.recentRewards
+  const showNotifications = () => rewardStore.showNotifications
 
-  const handleDismiss = useCallback((id: string) => {
-    dismissReward(id)
-  }, [dismissReward])
-
-  if (!showNotifications || recentRewards.length === 0) {
-    return null
+  const handleDismiss = (id: string) => {
+    rewardStore.dismissReward(id)
   }
 
   return (
-    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
-      <AnimatePresence mode="popLayout">
-        {recentRewards.map((reward, index) => (
-          <div key={reward.id} className="pointer-events-auto">
-            <RewardNotificationItem
-              id={reward.id}
-              type={reward.type}
-              amount={reward.amount}
-              source={reward.source}
-              onDismiss={handleDismiss}
-              index={index}
-            />
-          </div>
-        ))}
-      </AnimatePresence>
-    </div>
+    <Show when={showNotifications() && recentRewards().length > 0}>
+      <div class="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+        <For each={recentRewards()}>
+          {(reward, index) => (
+            <div class="pointer-events-auto">
+              <RewardNotificationItem
+                id={reward.id}
+                type={reward.type}
+                amount={reward.amount}
+                source={reward.source}
+                onDismiss={handleDismiss}
+                index={index()}
+              />
+            </div>
+          )}
+        </For>
+      </div>
+    </Show>
   )
 }
 
@@ -195,34 +164,31 @@ export function RewardNotification() {
 interface RewardNotificationMiniProps {
   type: RewardType
   amount: number
-  className?: string
+  class?: string
 }
 
-export function RewardNotificationMini({ type, amount, className }: RewardNotificationMiniProps) {
-  const styles = REWARD_STYLES[type] || REWARD_STYLES.agi
-  const Icon = styles.icon
+export const RewardNotificationMini: Component<RewardNotificationMiniProps> = (props) => {
+  const styles = () => REWARD_STYLES[props.type] || REWARD_STYLES.agi
+  const Icon = () => styles().icon
 
-  const formattedAmount = type === 'nft' ? '+1' : `+${formatPoints(amount)}`
+  const formattedAmount = () => props.type === 'nft' ? '+1' : `+${formatPoints(props.amount)}`
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10, scale: 0.8 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -10 }}
-      transition={{ type: 'spring', damping: 15 }}
-      className={cn(
+    <div
+      class={cn(
         'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full',
         'border bg-gradient-to-r',
-        styles.bg,
-        styles.border,
-        className
+        'animate-fade-in-up',
+        styles().bg,
+        styles().border,
+        props.class
       )}
     >
-      <Icon className={cn('h-3.5 w-3.5', styles.text)} />
-      <span className={cn('text-sm font-bold tabular-nums', styles.text)}>
-        {formattedAmount}
+      <Icon class={cn('h-3.5 w-3.5', styles().text)} />
+      <span class={cn('text-sm font-bold tabular-nums', styles().text)}>
+        {formattedAmount()}
       </span>
-    </motion.div>
+    </div>
   )
 }
 
@@ -237,58 +203,49 @@ interface RewardToastProps {
   onClose?: () => void
 }
 
-export function RewardToast({ type, amount, source, isVisible, onClose }: RewardToastProps) {
-  const styles = REWARD_STYLES[type] || REWARD_STYLES.agi
-  const Icon = styles.icon
+export const RewardToast: Component<RewardToastProps> = (props) => {
+  const styles = () => REWARD_STYLES[props.type] || REWARD_STYLES.agi
+  const Icon = () => styles().icon
 
-  const formattedAmount = type === 'nft' ? '+1' : `+${formatPoints(amount)}`
-  const suffix = type === 'xp' ? ' XP' : type === 'lottery_ticket' ? ' Tickets' : type === 'agi' || type === 'lottery_win' ? ' AGI' : ''
+  const formattedAmount = () => props.type === 'nft' ? '+1' : `+${formatPoints(props.amount)}`
+  const suffix = () => props.type === 'xp' ? ' XP' : props.type === 'lottery_ticket' ? ' Tickets' : props.type === 'agi' || props.type === 'lottery_win' ? ' AGI' : ''
 
-  useEffect(() => {
-    if (isVisible && onClose) {
-      const timer = setTimeout(onClose, 4000)
-      return () => clearTimeout(timer)
+  createEffect(() => {
+    if (props.isVisible && props.onClose) {
+      const timer = setTimeout(props.onClose, 4000)
+      onCleanup(() => clearTimeout(timer))
     }
-  }, [isVisible, onClose])
+  })
 
   return (
-    <AnimatePresence>
-      {isVisible && (
-        <motion.div
-          initial={{ opacity: 0, y: -20, scale: 0.9 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: -10, scale: 0.95 }}
-          transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-          className={cn(
-            'fixed top-6 left-1/2 -translate-x-1/2 z-50',
-            'px-6 py-4 rounded-2xl',
-            'border bg-gradient-to-r backdrop-blur-xl',
-            'shadow-xl',
-            styles.bg,
-            styles.border,
-            styles.glow
-          )}
-        >
-          <div className="flex items-center gap-4">
-            <motion.div
-              animate={{ rotate: [0, -10, 10, 0] }}
-              transition={{ duration: 0.5 }}
-              className={cn('p-3 rounded-xl bg-[var(--background-secondary)]', styles.text)}
-            >
-              <Icon className="h-6 w-6" />
-            </motion.div>
-
-            <div>
-              <p className={cn('text-xl font-bold tabular-nums', styles.text)}>
-                {formattedAmount}{suffix}
-              </p>
-              {source && (
-                <p className="text-sm text-[var(--text-secondary)]">{source}</p>
-              )}
-            </div>
+    <Show when={props.isVisible}>
+      <div
+        class={cn(
+          'fixed top-6 left-1/2 -translate-x-1/2 z-50',
+          'px-6 py-4 rounded-2xl',
+          'border bg-gradient-to-r backdrop-blur-xl',
+          'shadow-xl',
+          'animate-fade-in-down',
+          styles().bg,
+          styles().border,
+          styles().glow
+        )}
+      >
+        <div class="flex items-center gap-4">
+          <div class={cn('p-3 rounded-xl bg-[var(--background-secondary)]', styles().text)}>
+            <Icon class="h-6 w-6" />
           </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+
+          <div>
+            <p class={cn('text-xl font-bold tabular-nums', styles().text)}>
+              {formattedAmount()}{suffix()}
+            </p>
+            <Show when={props.source}>
+              <p class="text-sm text-[var(--text-secondary)]">{props.source}</p>
+            </Show>
+          </div>
+        </div>
+      </div>
+    </Show>
   )
 }

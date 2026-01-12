@@ -1,5 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { createSignal, createEffect, onCleanup, onMount, Show, For, type Component } from 'solid-js'
 import {
   X,
   Zap,
@@ -11,9 +10,9 @@ import {
   Clock,
   ChevronRight,
   Sparkles,
-} from 'lucide-react'
+} from 'lucide-solid'
 import {
-  useEventStore,
+  eventStore,
   type LiveEvent,
   type EventType,
   formatTimeRemaining,
@@ -28,49 +27,40 @@ interface LiveEventBannerProps {
   dismissible?: boolean
   autoRotate?: boolean
   rotateInterval?: number
-  className?: string
+  class?: string
 }
 
 /**
  * LiveEventBanner - Displays active events with countdown
  * Shows multipliers, time remaining, and can be dismissed
  */
-export function LiveEventBanner({
-  onViewDetails,
-  maxVisible = 1,
-  compact = false,
-  dismissible = true,
-  autoRotate = true,
-  rotateInterval = 5000,
-  className,
-}: LiveEventBannerProps) {
-  const {
-    activeEvents,
-    fetchActiveEvents,
-    dismissEvent,
-    isEventDismissed,
-    getTimeRemaining,
-  } = useEventStore()
+export const LiveEventBanner: Component<LiveEventBannerProps> = (props) => {
+  const maxVisible = () => props.maxVisible ?? 1
+  const compact = () => props.compact ?? false
+  const dismissible = () => props.dismissible ?? true
+  const autoRotate = () => props.autoRotate ?? true
+  const rotateInterval = () => props.rotateInterval ?? 5000
 
-  const [currentIndex, setCurrentIndex] = useState(0)
-  const [timeRemaining, setTimeRemaining] = useState<Record<string, number>>({})
+  const [currentIndex, setCurrentIndex] = createSignal(0)
+  const [timeRemaining, setTimeRemaining] = createSignal<Record<string, number>>({})
 
   // Fetch events on mount
-  useEffect(() => {
-    if (activeEvents.length === 0) {
-      fetchActiveEvents()
+  onMount(() => {
+    if (eventStore.activeEvents.length === 0) {
+      eventStore.fetchActiveEvents()
     }
-  }, [activeEvents.length, fetchActiveEvents])
+  })
 
   // Filter out dismissed events
-  const visibleEvents = activeEvents.filter(event => !isEventDismissed(event.id))
+  const visibleEvents = () => eventStore.activeEvents.filter(event => !eventStore.isEventDismissed(event.id))
 
   // Update countdown timer
-  useEffect(() => {
+  createEffect(() => {
+    const events = visibleEvents()
     const updateTimers = () => {
       const times: Record<string, number> = {}
-      visibleEvents.forEach(event => {
-        const remaining = getTimeRemaining(event.id)
+      events.forEach(event => {
+        const remaining = eventStore.getTimeRemaining(event.id)
         if (remaining !== null) {
           times[event.id] = remaining
         }
@@ -80,87 +70,92 @@ export function LiveEventBanner({
 
     updateTimers()
     const interval = setInterval(updateTimers, 1000)
-    return () => clearInterval(interval)
-  }, [visibleEvents, getTimeRemaining])
+    onCleanup(() => clearInterval(interval))
+  })
 
   // Auto-rotate through events
-  useEffect(() => {
-    if (!autoRotate || visibleEvents.length <= 1) return
+  createEffect(() => {
+    const events = visibleEvents()
+    if (!autoRotate() || events.length <= 1) return
 
     const interval = setInterval(() => {
-      setCurrentIndex(prev => (prev + 1) % visibleEvents.length)
-    }, rotateInterval)
+      setCurrentIndex(prev => (prev + 1) % events.length)
+    }, rotateInterval())
 
-    return () => clearInterval(interval)
-  }, [autoRotate, rotateInterval, visibleEvents.length])
+    onCleanup(() => clearInterval(interval))
+  })
 
   // Reset index if current is out of bounds
-  useEffect(() => {
-    if (currentIndex >= visibleEvents.length) {
+  createEffect(() => {
+    const events = visibleEvents()
+    if (currentIndex() >= events.length) {
       setCurrentIndex(0)
     }
-  }, [currentIndex, visibleEvents.length])
+  })
 
-  const handleDismiss = useCallback((eventId: string) => {
-    dismissEvent(eventId)
-  }, [dismissEvent])
-
-  if (visibleEvents.length === 0) {
-    return null
+  const handleDismiss = (eventId: string) => {
+    eventStore.dismissEvent(eventId)
   }
 
-  const displayEvents = maxVisible === 1
-    ? [visibleEvents[currentIndex]]
-    : visibleEvents.slice(0, maxVisible)
-
-  if (compact) {
-    return (
-      <div className={cn('flex flex-wrap gap-2', className)}>
-        {displayEvents.map(event => (
-          <CompactEventBadge
-            key={event.id}
-            event={event}
-            timeRemaining={timeRemaining[event.id] || 0}
-            onDismiss={dismissible ? () => handleDismiss(event.id) : undefined}
-            onClick={() => onViewDetails?.(event)}
-          />
-        ))}
-      </div>
-    )
+  const displayEvents = () => {
+    const events = visibleEvents()
+    return maxVisible() === 1
+      ? [events[currentIndex()]]
+      : events.slice(0, maxVisible())
   }
 
   return (
-    <div className={cn('space-y-2', className)}>
-      <AnimatePresence mode="popLayout">
-        {displayEvents.map(event => (
-          <EventBannerCard
-            key={event.id}
-            event={event}
-            timeRemaining={timeRemaining[event.id] || 0}
-            onDismiss={dismissible ? () => handleDismiss(event.id) : undefined}
-            onClick={() => onViewDetails?.(event)}
-          />
-        ))}
-      </AnimatePresence>
-
-      {/* Pagination dots */}
-      {visibleEvents.length > 1 && maxVisible === 1 && (
-        <div className="flex items-center justify-center gap-1.5 pt-1">
-          {visibleEvents.map((event, index) => (
-            <button
-              key={event.id}
-              onClick={() => setCurrentIndex(index)}
-              className={cn(
-                'w-2 h-2 rounded-full transition-all',
-                index === currentIndex
-                  ? 'bg-[var(--text-primary)] scale-110'
-                  : 'bg-[var(--text-muted)] hover:bg-[var(--text-secondary)]'
+    <Show when={visibleEvents().length > 0}>
+      <Show
+        when={!compact()}
+        fallback={
+          <div class={cn('flex flex-wrap gap-2', props.class)}>
+            <For each={displayEvents()}>
+              {(event) => (
+                <CompactEventBadge
+                  event={event}
+                  timeRemaining={timeRemaining()[event.id] || 0}
+                  onDismiss={dismissible() ? () => handleDismiss(event.id) : undefined}
+                  onClick={() => props.onViewDetails?.(event)}
+                />
               )}
-            />
-          ))}
+            </For>
+          </div>
+        }
+      >
+        <div class={cn('space-y-2', props.class)}>
+          <For each={displayEvents()}>
+            {(event) => (
+              <EventBannerCard
+                event={event}
+                timeRemaining={timeRemaining()[event.id] || 0}
+                onDismiss={dismissible() ? () => handleDismiss(event.id) : undefined}
+                onClick={() => props.onViewDetails?.(event)}
+              />
+            )}
+          </For>
+
+          {/* Pagination dots */}
+          <Show when={visibleEvents().length > 1 && maxVisible() === 1}>
+            <div class="flex items-center justify-center gap-1.5 pt-1">
+              <For each={visibleEvents()}>
+                {(event, index) => (
+                  <button
+                    onClick={() => setCurrentIndex(index())}
+                    class={cn(
+                      'w-2 h-2 rounded-full transition-all',
+                      index() === currentIndex()
+                        ? 'bg-[var(--text-primary)] scale-110'
+                        : 'bg-[var(--text-muted)] hover:bg-[var(--text-secondary)]'
+                    )}
+                  />
+                )}
+              </For>
+            </div>
+          </Show>
         </div>
-      )}
-    </div>
+      </Show>
+    </Show>
   )
 }
 
@@ -173,115 +168,111 @@ interface EventBannerCardProps {
   onClick?: () => void
 }
 
-function EventBannerCard({ event, timeRemaining, onDismiss, onClick }: EventBannerCardProps) {
-  const Icon = getEventIcon(event.type)
+const EventBannerCard: Component<EventBannerCardProps> = (props) => {
+  const Icon = () => getEventIcon(props.event.type)
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: -20, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -20, scale: 0.95 }}
-      transition={{ type: 'spring', stiffness: 300, damping: 25 }}
-      className={cn(
+    <div
+      class={cn(
         'relative overflow-hidden rounded-xl border p-4',
         'bg-gradient-to-r from-[var(--background-secondary)] via-[var(--background-secondary)] to-transparent',
         'border-[var(--card-border)] hover:border-[var(--card-border-hover)]',
-        'cursor-pointer transition-all hover:shadow-lg'
+        'cursor-pointer transition-all hover:shadow-lg',
+        'animate-slide-in-down'
       )}
       style={{
-        borderColor: `${event.color}40`,
-        boxShadow: `0 0 20px ${event.color}10`,
+        'border-color': `${props.event.color}40`,
+        'box-shadow': `0 0 20px ${props.event.color}10`,
       }}
-      onClick={onClick}
+      onClick={props.onClick}
     >
       {/* Animated gradient background */}
       <div
-        className="absolute inset-0 opacity-10"
+        class="absolute inset-0 opacity-10"
         style={{
-          background: `linear-gradient(135deg, ${event.color}20 0%, transparent 50%, ${event.accentColor}10 100%)`,
+          background: `linear-gradient(135deg, ${props.event.color}20 0%, transparent 50%, ${props.event.accentColor}10 100%)`,
         }}
       />
 
       {/* Animated sparkles */}
-      <motion.div
-        className="absolute top-2 right-16 opacity-30"
-        animate={{ rotate: 360 }}
-        transition={{ duration: 20, repeat: Infinity, ease: 'linear' }}
+      <div
+        class="absolute top-2 right-16 opacity-30 animate-spin-slow"
       >
-        <Sparkles className="h-4 w-4" style={{ color: event.color }} />
-      </motion.div>
+        <Sparkles class="h-4 w-4" style={{ color: props.event.color }} />
+      </div>
 
-      <div className="relative flex items-center gap-4">
+      <div class="relative flex items-center gap-4">
         {/* Icon */}
         <div
-          className="flex-shrink-0 p-3 rounded-xl"
-          style={{ backgroundColor: `${event.color}20` }}
+          class="flex-shrink-0 p-3 rounded-xl"
+          style={{ 'background-color': `${props.event.color}20` }}
         >
-          <Icon className="h-6 w-6" style={{ color: event.color }} />
+          <Icon class="h-6 w-6" style={{ color: props.event.color }} />
         </div>
 
         {/* Content */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <h4 className="font-bold text-[var(--text-primary)] truncate">
-              {event.name}
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-1">
+            <h4 class="font-bold text-[var(--text-primary)] truncate">
+              {props.event.name}
             </h4>
             <span
-              className="px-2 py-0.5 rounded-full text-xs font-medium animate-pulse"
-              style={{ backgroundColor: `${event.color}20`, color: event.color }}
+              class="px-2 py-0.5 rounded-full text-xs font-medium animate-pulse"
+              style={{ 'background-color': `${props.event.color}20`, color: props.event.color }}
             >
               LIVE
             </span>
           </div>
-          <p className="text-sm text-[var(--text-muted)] line-clamp-1">
-            {event.description}
+          <p class="text-sm text-[var(--text-muted)] line-clamp-1">
+            {props.event.description}
           </p>
         </div>
 
         {/* Multipliers */}
-        <div className="flex flex-col items-end gap-1">
-          {event.multipliers.slice(0, 2).map((multiplier, index) => (
-            <div
-              key={index}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-bold"
-              style={{ backgroundColor: `${event.color}20`, color: event.color }}
-            >
-              <Zap className="h-3 w-3" />
-              {multiplier.label}
-            </div>
-          ))}
+        <div class="flex flex-col items-end gap-1">
+          <For each={props.event.multipliers.slice(0, 2)}>
+            {(multiplier, index) => (
+              <div
+                class="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-bold"
+                style={{ 'background-color': `${props.event.color}20`, color: props.event.color }}
+              >
+                <Zap class="h-3 w-3" />
+                {multiplier.label}
+              </div>
+            )}
+          </For>
         </div>
 
         {/* Time remaining */}
-        <div className="flex flex-col items-center">
-          <div className="flex items-center gap-1 text-sm font-medium text-[var(--text-primary)]">
-            <Clock className="h-4 w-4 text-[var(--text-muted)]" />
-            {formatTimeRemaining(timeRemaining)}
+        <div class="flex flex-col items-center">
+          <div class="flex items-center gap-1 text-sm font-medium text-[var(--text-primary)]">
+            <Clock class="h-4 w-4 text-[var(--text-muted)]" />
+            {formatTimeRemaining(props.timeRemaining)}
           </div>
-          <span className="text-xs text-[var(--text-muted)]">remaining</span>
+          <span class="text-xs text-[var(--text-muted)]">remaining</span>
         </div>
 
         {/* View details arrow */}
-        <ChevronRight className="h-5 w-5 text-[var(--text-muted)]" />
+        <ChevronRight class="h-5 w-5 text-[var(--text-muted)]" />
       </div>
 
       {/* Dismiss button */}
-      {onDismiss && (
+      <Show when={props.onDismiss}>
         <button
           onClick={(e) => {
             e.stopPropagation()
-            onDismiss()
+            props.onDismiss?.()
           }}
-          className={cn(
+          class={cn(
             'absolute top-2 right-2 p-1.5 rounded-lg',
             'text-[var(--text-muted)] hover:text-[var(--text-primary)]',
             'hover:bg-[var(--background-tertiary)] transition-colors'
           )}
         >
-          <X className="h-4 w-4" />
+          <X class="h-4 w-4" />
         </button>
-      )}
-    </motion.div>
+      </Show>
+    </div>
   )
 }
 
@@ -294,69 +285,67 @@ interface CompactEventBadgeProps {
   onClick?: () => void
 }
 
-function CompactEventBadge({ event, timeRemaining, onDismiss, onClick }: CompactEventBadgeProps) {
-  const Icon = getEventIcon(event.type)
-  const mainMultiplier = event.multipliers[0]
+const CompactEventBadge: Component<CompactEventBadgeProps> = (props) => {
+  const Icon = () => getEventIcon(props.event.type)
+  const mainMultiplier = () => props.event.multipliers[0]
 
   return (
-    <motion.button
-      initial={{ opacity: 0, scale: 0.9 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.9 }}
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
-      onClick={onClick}
-      className={cn(
+    <button
+      onClick={props.onClick}
+      class={cn(
         'relative inline-flex items-center gap-2 px-3 py-2 rounded-xl border',
         'bg-[var(--background-secondary)] transition-all',
-        'hover:shadow-md'
+        'hover:shadow-md hover:scale-[1.02] active:scale-[0.98]',
+        'animate-fade-in'
       )}
       style={{
-        borderColor: `${event.color}40`,
+        'border-color': `${props.event.color}40`,
       }}
     >
       {/* Icon */}
-      <Icon className="h-4 w-4" style={{ color: event.color }} />
+      <Icon class="h-4 w-4" style={{ color: props.event.color }} />
 
       {/* Name */}
-      <span className="text-sm font-medium text-[var(--text-primary)]">
-        {event.name}
+      <span class="text-sm font-medium text-[var(--text-primary)]">
+        {props.event.name}
       </span>
 
       {/* Multiplier */}
-      {mainMultiplier && (
-        <span
-          className="px-1.5 py-0.5 rounded text-xs font-bold"
-          style={{ backgroundColor: `${event.color}20`, color: event.color }}
-        >
-          {formatMultiplier(mainMultiplier.value)}
-        </span>
-      )}
+      <Show when={mainMultiplier()}>
+        {(multiplier) => (
+          <span
+            class="px-1.5 py-0.5 rounded text-xs font-bold"
+            style={{ 'background-color': `${props.event.color}20`, color: props.event.color }}
+          >
+            {formatMultiplier(multiplier().value)}
+          </span>
+        )}
+      </Show>
 
       {/* Time */}
-      <span className="text-xs text-[var(--text-muted)]">
-        {formatTimeRemaining(timeRemaining)}
+      <span class="text-xs text-[var(--text-muted)]">
+        {formatTimeRemaining(props.timeRemaining)}
       </span>
 
       {/* Dismiss */}
-      {onDismiss && (
+      <Show when={props.onDismiss}>
         <button
           onClick={(e) => {
             e.stopPropagation()
-            onDismiss()
+            props.onDismiss?.()
           }}
-          className="ml-1 p-0.5 rounded hover:bg-[var(--background-tertiary)]"
+          class="ml-1 p-0.5 rounded hover:bg-[var(--background-tertiary)]"
         >
-          <X className="h-3 w-3 text-[var(--text-muted)]" />
+          <X class="h-3 w-3 text-[var(--text-muted)]" />
         </button>
-      )}
+      </Show>
 
       {/* Live indicator */}
       <span
-        className="absolute -top-1 -right-1 w-2 h-2 rounded-full animate-pulse"
-        style={{ backgroundColor: event.color }}
+        class="absolute -top-1 -right-1 w-2 h-2 rounded-full animate-pulse"
+        style={{ 'background-color': props.event.color }}
       />
-    </motion.button>
+    </button>
   )
 }
 
@@ -364,64 +353,62 @@ function CompactEventBadge({ event, timeRemaining, onDismiss, onClick }: Compact
 
 interface MinimalEventBannerProps {
   onClick?: (event: LiveEvent) => void
-  className?: string
+  class?: string
 }
 
 /**
  * MinimalEventBanner - Tiny indicator for headers showing active event count
  */
-export function MinimalEventBanner({ onClick, className }: MinimalEventBannerProps) {
-  const { activeEvents, isEventDismissed, fetchActiveEvents } = useEventStore()
-
-  useEffect(() => {
-    if (activeEvents.length === 0) {
-      fetchActiveEvents()
+export const MinimalEventBanner: Component<MinimalEventBannerProps> = (props) => {
+  onMount(() => {
+    if (eventStore.activeEvents.length === 0) {
+      eventStore.fetchActiveEvents()
     }
-  }, [activeEvents.length, fetchActiveEvents])
+  })
 
-  const visibleEvents = activeEvents.filter(e => !isEventDismissed(e.id))
-
-  if (visibleEvents.length === 0) {
-    return null
-  }
-
-  const primaryEvent = visibleEvents[0]
-  const Icon = getEventIcon(primaryEvent.type)
+  const visibleEvents = () => eventStore.activeEvents.filter(e => !eventStore.isEventDismissed(e.id))
+  const primaryEvent = () => visibleEvents()[0]
 
   return (
-    <motion.button
-      initial={{ opacity: 0, x: 10 }}
-      animate={{ opacity: 1, x: 0 }}
-      whileHover={{ scale: 1.05 }}
-      whileTap={{ scale: 0.95 }}
-      onClick={() => onClick?.(primaryEvent)}
-      className={cn(
-        'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg',
-        'bg-[var(--background-secondary)] border border-[var(--card-border)]',
-        'hover:border-[var(--card-border-hover)] transition-all',
-        className
-      )}
-      style={{ borderColor: `${primaryEvent.color}40` }}
-    >
-      <span
-        className="relative flex h-2 w-2"
-      >
-        <span
-          className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
-          style={{ backgroundColor: primaryEvent.color }}
-        />
-        <span
-          className="relative inline-flex rounded-full h-2 w-2"
-          style={{ backgroundColor: primaryEvent.color }}
-        />
-      </span>
+    <Show when={visibleEvents().length > 0}>
+      {(() => {
+        const event = primaryEvent()
+        if (!event) return null
+        const Icon = getEventIcon(event.type)
 
-      <Icon className="h-4 w-4" style={{ color: primaryEvent.color }} />
+        return (
+          <button
+            onClick={() => props.onClick?.(event)}
+            class={cn(
+              'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg',
+              'bg-[var(--background-secondary)] border border-[var(--card-border)]',
+              'hover:border-[var(--card-border-hover)] transition-all',
+              'hover:scale-[1.05] active:scale-[0.95]',
+              'animate-fade-in',
+              props.class
+            )}
+            style={{ 'border-color': `${event.color}40` }}
+          >
+            <span class="relative flex h-2 w-2">
+              <span
+                class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
+                style={{ 'background-color': event.color }}
+              />
+              <span
+                class="relative inline-flex rounded-full h-2 w-2"
+                style={{ 'background-color': event.color }}
+              />
+            </span>
 
-      <span className="text-sm font-medium text-[var(--text-primary)]">
-        {visibleEvents.length} Active Event{visibleEvents.length > 1 ? 's' : ''}
-      </span>
-    </motion.button>
+            <Icon class="h-4 w-4" style={{ color: event.color }} />
+
+            <span class="text-sm font-medium text-[var(--text-primary)]">
+              {visibleEvents().length} Active Event{visibleEvents().length > 1 ? 's' : ''}
+            </span>
+          </button>
+        )
+      })()}
+    </Show>
   )
 }
 

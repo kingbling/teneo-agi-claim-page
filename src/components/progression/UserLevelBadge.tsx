@@ -1,16 +1,17 @@
-import { motion } from 'framer-motion'
-import { Crown, Star, Anchor, Compass, Ship } from 'lucide-react'
-import { useUserStore } from '@/stores/userStore'
+import { Show } from 'solid-js'
+import type { JSX } from 'solid-js'
+import { Crown, Star, Anchor, Compass, Ship } from 'lucide-solid'
+import { userStore } from '@/stores/userStore'
 import { USER_LEVEL_CONFIG, type UserLevel, USER_LEVEL_COLORS } from '@/types/game'
 import { cn } from '@/lib/utils'
 
 // Icons for each user level
-const LEVEL_ICONS: Record<UserLevel, React.ReactNode> = {
-  1: <Compass className="h-4 w-4" />,
-  2: <Anchor className="h-4 w-4" />,
-  3: <Ship className="h-4 w-4" />,
-  4: <Star className="h-4 w-4" />,
-  5: <Crown className="h-4 w-4" />,
+const LEVEL_ICONS: Record<UserLevel, JSX.Element> = {
+  1: <Compass class="h-4 w-4" />,
+  2: <Anchor class="h-4 w-4" />,
+  3: <Ship class="h-4 w-4" />,
+  4: <Star class="h-4 w-4" />,
+  5: <Crown class="h-4 w-4" />,
 }
 
 // Background gradients for each level
@@ -34,26 +35,23 @@ interface UserLevelBadgeProps {
   size?: 'sm' | 'md' | 'lg'
   showLabel?: boolean
   showMultiplier?: boolean
-  className?: string
+  class?: string
 }
 
 /**
  * UserLevelBadge - Displays user level (L1-L5) with icon and multiplier
  * Masterplan 2026: Based on cumulative USDC spent
  */
-export function UserLevelBadge({
-  size = 'md',
-  showLabel = true,
-  showMultiplier = false,
-  className,
-}: UserLevelBadgeProps) {
-  const { userLevel, rewardMultiplier } = useUserStore()
+export function UserLevelBadge(props: UserLevelBadgeProps) {
+  const size = () => props.size ?? 'md'
+  const showLabel = () => props.showLabel ?? true
+  const showMultiplier = () => props.showMultiplier ?? false
 
-  const config = USER_LEVEL_CONFIG[userLevel]
-  const icon = LEVEL_ICONS[userLevel]
-  const color = USER_LEVEL_COLORS[userLevel]
-  const gradient = LEVEL_GRADIENTS[userLevel]
-  const border = LEVEL_BORDERS[userLevel]
+  const config = () => USER_LEVEL_CONFIG[userStore.userLevel]
+  const icon = () => LEVEL_ICONS[userStore.userLevel]
+  const color = () => USER_LEVEL_COLORS[userStore.userLevel]
+  const gradient = () => LEVEL_GRADIENTS[userStore.userLevel]
+  const border = () => LEVEL_BORDERS[userStore.userLevel]
 
   const sizeClasses = {
     sm: 'text-xs px-2 py-1 gap-1',
@@ -62,29 +60,28 @@ export function UserLevelBadge({
   }
 
   return (
-    <motion.div
-      initial={{ scale: 0.9, opacity: 0 }}
-      animate={{ scale: 1, opacity: 1 }}
-      className={cn(
+    <div
+      class={cn(
         'inline-flex items-center rounded-lg border font-semibold bg-gradient-to-r',
-        gradient,
-        border,
-        sizeClasses[size],
-        className
+        'animate-in fade-in zoom-in-95 duration-200',
+        gradient(),
+        border(),
+        sizeClasses[size()],
+        props.class
       )}
-      style={{ color }}
+      style={{ color: color() }}
     >
-      {icon}
-      <span>L{userLevel}</span>
-      {showLabel && (
-        <span className="opacity-80">{config.label}</span>
-      )}
-      {showMultiplier && (
-        <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-current/20">
-          {rewardMultiplier}x
+      {icon()}
+      <span>L{userStore.userLevel}</span>
+      <Show when={showLabel()}>
+        <span class="opacity-80">{config().label}</span>
+      </Show>
+      <Show when={showMultiplier()}>
+        <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-current/20">
+          {userStore.rewardMultiplier}x
         </span>
-      )}
-    </motion.div>
+      </Show>
+    </div>
   )
 }
 
@@ -92,95 +89,90 @@ export function UserLevelBadge({
  * UserLevelCard - Expanded view with progress to next level
  */
 export function UserLevelCard() {
-  const { userLevel, rewardMultiplier, usdcSpent, maxShips } = useUserStore()
-
-  const config = USER_LEVEL_CONFIG[userLevel]
-  const color = USER_LEVEL_COLORS[userLevel]
-  const gradient = LEVEL_GRADIENTS[userLevel]
-  const border = LEVEL_BORDERS[userLevel]
+  const config = () => USER_LEVEL_CONFIG[userStore.userLevel]
+  const color = () => USER_LEVEL_COLORS[userStore.userLevel]
+  const gradient = () => LEVEL_GRADIENTS[userStore.userLevel]
+  const border = () => LEVEL_BORDERS[userStore.userLevel]
 
   // Calculate progress to next level
-  const isMaxLevel = userLevel === 5
-  const nextLevel = (userLevel < 5 ? userLevel + 1 : 5) as UserLevel
-  const nextLevelConfig = USER_LEVEL_CONFIG[nextLevel]
-  const progressToNext = isMaxLevel
-    ? 100
-    : ((usdcSpent - config.minUSDC) / (nextLevelConfig.minUSDC - config.minUSDC)) * 100
+  const isMaxLevel = () => userStore.userLevel === 5
+  const nextLevel = () => (userStore.userLevel < 5 ? userStore.userLevel + 1 : 5) as UserLevel
+  const nextLevelConfig = () => USER_LEVEL_CONFIG[nextLevel()]
+  const progressToNext = () =>
+    isMaxLevel()
+      ? 100
+      : ((userStore.usdcSpent - config().minUSDC) / (nextLevelConfig().minUSDC - config().minUSDC)) * 100
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={cn(
+    <div
+      class={cn(
         'rounded-xl border p-4 bg-gradient-to-br',
-        gradient,
-        border
+        'animate-in fade-in slide-in-from-bottom-2 duration-300',
+        gradient(),
+        border()
       )}
     >
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-3">
           <div
-            className="p-2 rounded-lg"
-            style={{ backgroundColor: `${color}20` }}
+            class="p-2 rounded-lg"
+            style={{ "background-color": `${color()}20` }}
           >
-            {LEVEL_ICONS[userLevel]}
+            {LEVEL_ICONS[userStore.userLevel]}
           </div>
           <div>
-            <p className="font-bold" style={{ color }}>
-              Level {userLevel} - {config.label}
+            <p class="font-bold" style={{ color: color() }}>
+              Level {userStore.userLevel} - {config().label}
             </p>
-            <p className="text-xs text-[var(--text-muted)]">
-              ${usdcSpent.toFixed(2)} USDC spent
+            <p class="text-xs text-[var(--text-muted)]">
+              ${userStore.usdcSpent.toFixed(2)} USDC spent
             </p>
           </div>
         </div>
         <div
-          className="px-3 py-1.5 rounded-lg text-sm font-bold"
-          style={{ backgroundColor: `${color}20`, color }}
+          class="px-3 py-1.5 rounded-lg text-sm font-bold"
+          style={{ "background-color": `${color()}20`, color: color() }}
         >
-          {rewardMultiplier}x Rewards
+          {userStore.rewardMultiplier}x Rewards
         </div>
       </div>
 
       {/* Progress to next level */}
-      {!isMaxLevel && (
-        <div className="mb-4">
-          <div className="flex justify-between text-xs mb-1">
-            <span className="text-[var(--text-muted)]">Progress to L{nextLevel}</span>
-            <span style={{ color }}>
-              ${usdcSpent.toFixed(2)} / ${nextLevelConfig.minUSDC}
+      <Show when={!isMaxLevel()}>
+        <div class="mb-4">
+          <div class="flex justify-between text-xs mb-1">
+            <span class="text-[var(--text-muted)]">Progress to L{nextLevel()}</span>
+            <span style={{ color: color() }}>
+              ${userStore.usdcSpent.toFixed(2)} / ${nextLevelConfig().minUSDC}
             </span>
           </div>
-          <div className="h-2 rounded-full bg-[var(--background-primary)] overflow-hidden">
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: `${progressToNext}%` }}
-              transition={{ duration: 0.5 }}
-              className="h-full rounded-full"
-              style={{ backgroundColor: color }}
+          <div class="h-2 rounded-full bg-[var(--background-primary)] overflow-hidden">
+            <div
+              class="h-full rounded-full transition-all duration-500"
+              style={{ width: `${progressToNext()}%`, "background-color": color() }}
             />
           </div>
         </div>
-      )}
+      </Show>
 
       {/* Benefits */}
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <div className="p-2 rounded-lg bg-[var(--background-primary)]/50">
-          <p className="text-xs text-[var(--text-muted)]">Multiplier</p>
-          <p className="font-bold" style={{ color }}>{rewardMultiplier}x</p>
+      <div class="grid grid-cols-3 gap-2 text-center">
+        <div class="p-2 rounded-lg bg-[var(--background-primary)]/50">
+          <p class="text-xs text-[var(--text-muted)]">Multiplier</p>
+          <p class="font-bold" style={{ color: color() }}>{userStore.rewardMultiplier}x</p>
         </div>
-        <div className="p-2 rounded-lg bg-[var(--background-primary)]/50">
-          <p className="text-xs text-[var(--text-muted)]">ETA Boost</p>
-          <p className="font-bold" style={{ color }}>
-            {(config.etaBoost * 100).toFixed(0)}%
+        <div class="p-2 rounded-lg bg-[var(--background-primary)]/50">
+          <p class="text-xs text-[var(--text-muted)]">ETA Boost</p>
+          <p class="font-bold" style={{ color: color() }}>
+            {(config().etaBoost * 100).toFixed(0)}%
           </p>
         </div>
-        <div className="p-2 rounded-lg bg-[var(--background-primary)]/50">
-          <p className="text-xs text-[var(--text-muted)]">Max Ships</p>
-          <p className="font-bold" style={{ color }}>{maxShips}</p>
+        <div class="p-2 rounded-lg bg-[var(--background-primary)]/50">
+          <p class="text-xs text-[var(--text-muted)]">Max Ships</p>
+          <p class="font-bold" style={{ color: color() }}>{userStore.maxShips}</p>
         </div>
       </div>
-    </motion.div>
+    </div>
   )
 }

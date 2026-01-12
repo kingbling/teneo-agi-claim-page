@@ -1,7 +1,6 @@
-import * as React from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { createSignal, createMemo, onCleanup, Show, For, type JSX } from 'solid-js'
 import { cn } from '@/lib/utils'
-import { Sparkles, Trophy, Star, Zap, Gift, Crown, Flame, Target } from 'lucide-react'
+import { Sparkles, Trophy, Star, Zap, Gift, Crown, Flame, Target } from 'lucide-solid'
 
 // Floating particles effect for rewards
 interface ParticleProps {
@@ -11,21 +10,14 @@ interface ParticleProps {
   delay: number
 }
 
-function Particle({ x, y, color, delay }: ParticleProps) {
+function Particle(props: ParticleProps) {
   return (
-    <motion.div
-      className={cn('absolute w-spacing-2 h-spacing-2 rounded-full', color)}
-      initial={{ x: 0, y: 0, opacity: 1, scale: 1 }}
-      animate={{
-        x: x,
-        y: y,
-        opacity: 0,
-        scale: 0,
-      }}
-      transition={{
-        duration: 1,
-        delay,
-        ease: 'easeOut',
+    <div
+      class={cn('absolute w-spacing-2 h-spacing-2 rounded-full particle-animate', props.color)}
+      style={{
+        '--particle-x': `${props.x}px`,
+        '--particle-y': `${props.y}px`,
+        'animation-delay': `${props.delay}s`,
       }}
     />
   )
@@ -36,7 +28,7 @@ interface RewardBurstProps {
   isActive: boolean
   variant?: 'gold' | 'teal' | 'rainbow' | 'fire'
   intensity?: 'low' | 'medium' | 'high'
-  className?: string
+  class?: string
 }
 
 const burstColors = {
@@ -46,33 +38,36 @@ const burstColors = {
   fire: ['bg-[hsl(var(--tier-legendary))]', 'bg-[hsl(var(--tier-legendary))]', 'bg-[hsl(var(--accent))]'],
 }
 
-export function RewardBurst({ isActive, variant = 'gold', intensity = 'medium', className }: RewardBurstProps) {
-  const particleCount = { low: 8, medium: 16, high: 24 }[intensity]
-  const colors = burstColors[variant]
+export function RewardBurst(props: RewardBurstProps) {
+  const variant = () => props.variant ?? 'gold'
+  const intensity = () => props.intensity ?? 'medium'
 
-  const particles = React.useMemo(() => {
-    return Array.from({ length: particleCount }).map((_, i) => {
-      const angle = (i / particleCount) * Math.PI * 2
+  const particleCount = createMemo(() => ({ low: 8, medium: 16, high: 24 }[intensity()]))
+  const colors = createMemo(() => burstColors[variant()])
+
+  const particles = createMemo(() => {
+    const count = particleCount()
+    const colorArray = colors()
+    return Array.from({ length: count }).map((_, i) => {
+      const angle = (i / count) * Math.PI * 2
       const distance = 40 + Math.random() * 40
       return {
         x: Math.cos(angle) * distance,
         y: Math.sin(angle) * distance,
-        color: colors[i % colors.length],
+        color: colorArray[i % colorArray.length],
         delay: Math.random() * 0.2,
       }
     })
-  }, [particleCount, colors])
+  })
 
   return (
-    <AnimatePresence>
-      {isActive && (
-        <div className={cn('absolute inset-0 flex items-center justify-center pointer-events-none', className)}>
-          {particles.map((particle, i) => (
-            <Particle key={i} {...particle} />
-          ))}
-        </div>
-      )}
-    </AnimatePresence>
+    <Show when={props.isActive}>
+      <div class={cn('absolute inset-0 flex items-center justify-center pointer-events-none', props.class)}>
+        <For each={particles()}>
+          {(particle, i) => <Particle {...particle} />}
+        </For>
+      </div>
+    </Show>
   )
 }
 
@@ -82,48 +77,48 @@ interface AnimatedCounterProps {
   duration?: number
   prefix?: string
   suffix?: string
-  className?: string
+  class?: string
   onComplete?: () => void
 }
 
-export function AnimatedCounter({
-  value,
-  duration = 1.5,
-  prefix = '',
-  suffix = '',
-  className,
-  onComplete,
-}: AnimatedCounterProps) {
-  const [displayValue, setDisplayValue] = React.useState(0)
+export function AnimatedCounter(props: AnimatedCounterProps) {
+  const duration = () => props.duration ?? 1.5
+  const [displayValue, setDisplayValue] = createSignal(0)
 
-  React.useEffect(() => {
+  const startAnimation = () => {
     const startTime = performance.now()
-    const startValue = displayValue
+    const startValue = displayValue()
 
     const animate = (currentTime: number) => {
       const elapsed = currentTime - startTime
-      const progress = Math.min(elapsed / (duration * 1000), 1)
+      const progress = Math.min(elapsed / (duration() * 1000), 1)
 
       // Easing function for more satisfying animation
       const easeOutQuart = 1 - Math.pow(1 - progress, 4)
-      const current = Math.floor(startValue + (value - startValue) * easeOutQuart)
+      const current = Math.floor(startValue + (props.value - startValue) * easeOutQuart)
 
       setDisplayValue(current)
 
       if (progress < 1) {
         requestAnimationFrame(animate)
       } else {
-        setDisplayValue(value)
-        onComplete?.()
+        setDisplayValue(props.value)
+        props.onComplete?.()
       }
     }
 
     requestAnimationFrame(animate)
-  }, [value, duration])
+  }
+
+  // Watch for value changes
+  createMemo(() => {
+    props.value // track dependency
+    startAnimation()
+  })
 
   return (
-    <span className={cn('tabular-nums font-bold', className)}>
-      {prefix}{displayValue.toLocaleString()}{suffix}
+    <span class={cn('tabular-nums font-bold', props.class)}>
+      {props.prefix ?? ''}{displayValue().toLocaleString()}{props.suffix ?? ''}
     </span>
   )
 }
@@ -135,7 +130,7 @@ interface RewardPopupProps {
   title: string
   description?: string
   value?: number | string
-  icon?: React.ReactNode
+  icon?: JSX.Element
   variant?: 'success' | 'achievement' | 'bonus' | 'levelup' | 'rare'
 }
 
@@ -172,70 +167,59 @@ const popupVariants = {
   },
 }
 
-export function RewardPopup({
-  isOpen,
-  onClose,
-  title,
-  description,
-  value,
-  icon,
-  variant = 'success',
-}: RewardPopupProps) {
-  const styles = popupVariants[variant]
+export function RewardPopup(props: RewardPopupProps) {
+  const variant = () => props.variant ?? 'success'
+  const styles = () => popupVariants[variant()]
 
-  React.useEffect(() => {
-    if (isOpen) {
-      const timer = setTimeout(onClose, 4000)
-      return () => clearTimeout(timer)
+  // Auto-close timer
+  createMemo(() => {
+    if (props.isOpen) {
+      const timer = setTimeout(props.onClose, 4000)
+      onCleanup(() => clearTimeout(timer))
     }
-  }, [isOpen, onClose])
+  })
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0, y: -20, scale: 0.9 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: -10, scale: 0.95 }}
-          transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-          className={cn(
-            'fixed top-spacing-6 left-1/2 -translate-x-1/2 z-50',
-            'px-spacing-6 py-spacing-5 rounded-2xl',
-            'border bg-gradient-to-r backdrop-blur-xl',
-            'shadow-xl',
-            styles.bg,
-            styles.border,
-            styles.glow
-          )}
-        >
-          <RewardBurst isActive={true} variant={variant === 'achievement' ? 'gold' : 'teal'} />
+    <Show when={props.isOpen}>
+      <div
+        class={cn(
+          'fixed top-spacing-6 left-1/2 -translate-x-1/2 z-50',
+          'px-spacing-6 py-spacing-5 rounded-2xl',
+          'border bg-gradient-to-r backdrop-blur-xl',
+          'shadow-xl',
+          'popup-enter',
+          styles().bg,
+          styles().border,
+          styles().glow
+        )}
+      >
+        <RewardBurst isActive={true} variant={variant() === 'achievement' ? 'gold' : 'teal'} />
 
-          <div className="relative flex items-center gap-spacing-4">
-            {icon && (
-              <div className={cn('p-spacing-3 rounded-xl', styles.icon)}>
-                {icon}
-              </div>
-            )}
-
-            <div className="space-y-spacing-1">
-              <h3 className="text-lg font-bold text-[var(--text-primary)]">{title}</h3>
-              {description && (
-                <p className="text-sm text-[var(--text-secondary)]">{description}</p>
-              )}
-              {value !== undefined && (
-                <p className="text-xl font-bold text-[var(--brand-teal-1)]">
-                  {typeof value === 'number' ? (
-                    <AnimatedCounter value={value} prefix="+" suffix=" AGI" />
-                  ) : (
-                    value
-                  )}
-                </p>
-              )}
+        <div class="relative flex items-center gap-spacing-4">
+          <Show when={props.icon}>
+            <div class={cn('p-spacing-3 rounded-xl', styles().icon)}>
+              {props.icon}
             </div>
+          </Show>
+
+          <div class="space-y-spacing-1">
+            <h3 class="text-lg font-bold text-[var(--text-primary)]">{props.title}</h3>
+            <Show when={props.description}>
+              <p class="text-sm text-[var(--text-secondary)]">{props.description}</p>
+            </Show>
+            <Show when={props.value !== undefined}>
+              <p class="text-xl font-bold text-[var(--brand-teal-1)]">
+                {typeof props.value === 'number' ? (
+                  <AnimatedCounter value={props.value} prefix="+" suffix=" AGI" />
+                ) : (
+                  props.value
+                )}
+              </p>
+            </Show>
           </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+        </div>
+      </div>
+    </Show>
   )
 }
 
@@ -243,30 +227,25 @@ export function RewardPopup({
 interface XPGainProps {
   amount: number
   isVisible: boolean
-  className?: string
+  class?: string
 }
 
-export function XPGain({ amount, isVisible, className }: XPGainProps) {
+export function XPGain(props: XPGainProps) {
   return (
-    <AnimatePresence>
-      {isVisible && (
-        <motion.div
-          initial={{ opacity: 0, y: 10, scale: 0.8 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: -20 }}
-          transition={{ type: 'spring', damping: 15 }}
-          className={cn(
-            'inline-flex items-center gap-spacing-1.5 px-spacing-3 py-spacing-1.5 rounded-full',
-            'bg-[var(--brand-teal-1)]/20 border border-[var(--brand-teal-1)]/30',
-            'text-[var(--brand-teal-1)] font-bold text-sm',
-            className
-          )}
-        >
-          <Zap className="w-spacing-4 h-spacing-4" />
-          +{amount}
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <Show when={props.isVisible}>
+      <div
+        class={cn(
+          'inline-flex items-center gap-spacing-1.5 px-spacing-3 py-spacing-1.5 rounded-full',
+          'bg-[var(--brand-teal-1)]/20 border border-[var(--brand-teal-1)]/30',
+          'text-[var(--brand-teal-1)] font-bold text-sm',
+          'xp-gain-enter',
+          props.class
+        )}
+      >
+        <Zap class="w-spacing-4 h-spacing-4" />
+        +{props.amount}
+      </div>
+    </Show>
   )
 }
 
@@ -274,30 +253,30 @@ export function XPGain({ amount, isVisible, className }: XPGainProps) {
 interface StreakIndicatorProps {
   streak: number
   isActive?: boolean
-  className?: string
+  class?: string
 }
 
-export function StreakIndicator({ streak, isActive = true, className }: StreakIndicatorProps) {
+export function StreakIndicator(props: StreakIndicatorProps) {
+  const isActive = () => props.isActive ?? true
+
   return (
-    <div className={cn('flex items-center gap-spacing-2', className)}>
-      <motion.div
-        animate={isActive ? { scale: [1, 1.1, 1] } : {}}
-        transition={{ repeat: Infinity, duration: 1.5 }}
-        className={cn(
+    <div class={cn('flex items-center gap-spacing-2', props.class)}>
+      <div
+        class={cn(
           'p-spacing-2 rounded-lg',
-          isActive ? 'bg-[hsl(var(--tier-legendary))]/20 text-[hsl(var(--tier-legendary))]' : 'bg-[hsl(var(--secondary))]/20 text-[hsl(var(--secondary))]'
+          isActive() ? 'bg-[hsl(var(--tier-legendary))]/20 text-[hsl(var(--tier-legendary))] streak-pulse' : 'bg-[hsl(var(--secondary))]/20 text-[hsl(var(--secondary))]'
         )}
       >
-        <Flame className="w-spacing-5 h-spacing-5" />
-      </motion.div>
+        <Flame class="w-spacing-5 h-spacing-5" />
+      </div>
 
-      <div className="space-y-spacing-0.5">
-        <span className="text-xs font-medium text-[var(--text-muted)]">Streak</span>
-        <span className={cn(
+      <div class="space-y-spacing-0.5">
+        <span class="text-xs font-medium text-[var(--text-muted)]">Streak</span>
+        <span class={cn(
           'block text-lg font-bold tabular-nums',
-          isActive ? 'text-[hsl(var(--tier-legendary))]' : 'text-[hsl(var(--secondary))]'
+          isActive() ? 'text-[hsl(var(--tier-legendary))]' : 'text-[hsl(var(--secondary))]'
         )}>
-          {streak} days
+          {props.streak} days
         </span>
       </div>
     </div>
@@ -309,9 +288,9 @@ interface AchievementUnlockProps {
   isUnlocked: boolean
   title: string
   description?: string
-  icon?: React.ReactNode
+  icon?: JSX.Element
   rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'
-  className?: string
+  class?: string
 }
 
 const rarityStyles = {
@@ -322,66 +301,52 @@ const rarityStyles = {
   legendary: { border: 'border-[hsl(var(--tier-legendary))]/40', glow: 'shadow-[hsl(var(--tier-legendary))]/40' },
 }
 
-export function AchievementUnlock({
-  isUnlocked,
-  title,
-  description,
-  icon,
-  rarity = 'common',
-  className,
-}: AchievementUnlockProps) {
-  const styles = rarityStyles[rarity]
+export function AchievementUnlock(props: AchievementUnlockProps) {
+  const rarity = () => props.rarity ?? 'common'
+  const styles = () => rarityStyles[rarity()]
 
   return (
-    <motion.div
-      initial={isUnlocked ? { opacity: 0, scale: 0.8, y: 20 } : false}
-      animate={isUnlocked ? { opacity: 1, scale: 1, y: 0 } : {}}
-      transition={{ type: 'spring', damping: 15, stiffness: 200 }}
-      className={cn(
+    <div
+      class={cn(
         'relative p-spacing-5 rounded-2xl border bg-[var(--background-secondary)]',
-        styles.border,
-        isUnlocked && 'shadow-lg',
-        isUnlocked && styles.glow,
-        className
+        'transition-all duration-300',
+        styles().border,
+        props.isUnlocked && 'shadow-lg achievement-enter',
+        props.isUnlocked && styles().glow,
+        props.class
       )}
     >
-      <RewardBurst isActive={isUnlocked} variant="gold" intensity="low" />
+      <RewardBurst isActive={props.isUnlocked} variant="gold" intensity="low" />
 
-      <div className="relative flex items-center gap-spacing-4">
-        <motion.div
-          animate={isUnlocked ? { rotate: [0, -10, 10, 0] } : {}}
-          transition={{ delay: 0.2, duration: 0.5 }}
-          className={cn(
-            'p-spacing-3 rounded-xl',
-            isUnlocked ? 'bg-[hsl(var(--tier-legendary))]/20 text-[hsl(var(--tier-legendary))]' : 'bg-[hsl(var(--secondary))]/20 text-[hsl(var(--secondary))]'
+      <div class="relative flex items-center gap-spacing-4">
+        <div
+          class={cn(
+            'p-spacing-3 rounded-xl transition-all duration-300',
+            props.isUnlocked ? 'bg-[hsl(var(--tier-legendary))]/20 text-[hsl(var(--tier-legendary))] achievement-icon-shake' : 'bg-[hsl(var(--secondary))]/20 text-[hsl(var(--secondary))]'
           )}
         >
-          {icon || <Trophy className="w-spacing-6 h-spacing-6" />}
-        </motion.div>
-
-        <div className="flex-1">
-          <h4 className={cn(
-            'font-bold',
-            isUnlocked ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'
-          )}>
-            {title}
-          </h4>
-          {description && (
-            <p className="text-sm text-[var(--text-tertiary)] mt-spacing-1">{description}</p>
-          )}
+          {props.icon ?? <Trophy class="w-spacing-6 h-spacing-6" />}
         </div>
 
-        {isUnlocked && (
-          <motion.div
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{ delay: 0.3, type: 'spring' }}
-          >
-            <Sparkles className="w-spacing-5 h-spacing-5 text-[hsl(var(--tier-legendary))]" />
-          </motion.div>
-        )}
+        <div class="flex-1">
+          <h4 class={cn(
+            'font-bold transition-colors duration-300',
+            props.isUnlocked ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'
+          )}>
+            {props.title}
+          </h4>
+          <Show when={props.description}>
+            <p class="text-sm text-[var(--text-tertiary)] mt-spacing-1">{props.description}</p>
+          </Show>
+        </div>
+
+        <Show when={props.isUnlocked}>
+          <div class="achievement-sparkle-enter">
+            <Sparkles class="w-spacing-5 h-spacing-5 text-[hsl(var(--tier-legendary))]" />
+          </div>
+        </Show>
       </div>
-    </motion.div>
+    </div>
   )
 }
 
@@ -390,44 +355,35 @@ interface MilestoneReachedProps {
   milestone: number
   label?: string
   isReached: boolean
-  className?: string
+  class?: string
 }
 
-export function MilestoneReached({ milestone, label, isReached, className }: MilestoneReachedProps) {
+export function MilestoneReached(props: MilestoneReachedProps) {
   return (
-    <AnimatePresence>
-      {isReached && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.5 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.8 }}
-          transition={{ type: 'spring', damping: 12 }}
-          className={cn(
-            'flex items-center gap-spacing-3 px-spacing-5 py-spacing-4 rounded-2xl',
-            'bg-gradient-to-r from-[hsl(var(--tier-legendary))]/20 to-[hsl(var(--accent))]/20',
-            'border border-[hsl(var(--tier-legendary))]/30 shadow-lg shadow-[hsl(var(--tier-legendary))]/20',
-            className
-          )}
-        >
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-            className="p-spacing-2.5 rounded-xl bg-[hsl(var(--tier-legendary))]/20"
-          >
-            <Star className="w-spacing-6 h-spacing-6 text-[hsl(var(--tier-legendary))]" />
-          </motion.div>
+    <Show when={props.isReached}>
+      <div
+        class={cn(
+          'flex items-center gap-spacing-3 px-spacing-5 py-spacing-4 rounded-2xl',
+          'bg-gradient-to-r from-[hsl(var(--tier-legendary))]/20 to-[hsl(var(--accent))]/20',
+          'border border-[hsl(var(--tier-legendary))]/30 shadow-lg shadow-[hsl(var(--tier-legendary))]/20',
+          'milestone-enter',
+          props.class
+        )}
+      >
+        <div class="p-spacing-2.5 rounded-xl bg-[hsl(var(--tier-legendary))]/20 milestone-star-spin">
+          <Star class="w-spacing-6 h-spacing-6 text-[hsl(var(--tier-legendary))]" />
+        </div>
 
-          <div>
-            <p className="text-xs font-medium text-[hsl(var(--tier-legendary))]/80 uppercase tracking-wider">
-              {label || 'Milestone Reached'}
-            </p>
-            <p className="text-2xl font-bold text-[hsl(var(--tier-legendary))] tabular-nums">
-              {milestone.toLocaleString()}
-            </p>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+        <div>
+          <p class="text-xs font-medium text-[hsl(var(--tier-legendary))]/80 uppercase tracking-wider">
+            {props.label ?? 'Milestone Reached'}
+          </p>
+          <p class="text-2xl font-bold text-[hsl(var(--tier-legendary))] tabular-nums">
+            {props.milestone.toLocaleString()}
+          </p>
+        </div>
+      </div>
+    </Show>
   )
 }
 
@@ -440,70 +396,63 @@ interface DailyRewardProps {
   onClick?: () => void
 }
 
-export function DailyReward({ day, reward, isClaimed, isToday, onClick }: DailyRewardProps) {
+export function DailyReward(props: DailyRewardProps) {
   return (
-    <motion.button
-      whileHover={!isClaimed && isToday ? { scale: 1.05 } : {}}
-      whileTap={!isClaimed && isToday ? { scale: 0.95 } : {}}
-      onClick={!isClaimed && isToday ? onClick : undefined}
-      disabled={isClaimed || !isToday}
-      className={cn(
+    <button
+      onClick={!props.isClaimed && props.isToday ? props.onClick : undefined}
+      disabled={props.isClaimed || !props.isToday}
+      class={cn(
         'relative flex flex-col items-center gap-spacing-2 p-spacing-4 rounded-xl border transition-all',
-        isClaimed
+        props.isClaimed
           ? 'bg-[hsl(var(--success))]/10 border-[hsl(var(--success))]/30'
-          : isToday
-          ? 'bg-[var(--brand-teal-1)]/10 border-[var(--brand-teal-1)]/40 cursor-pointer hover:shadow-lg hover:shadow-[var(--brand-teal-1)]/20'
+          : props.isToday
+          ? 'bg-[var(--brand-teal-1)]/10 border-[var(--brand-teal-1)]/40 cursor-pointer hover:shadow-lg hover:shadow-[var(--brand-teal-1)]/20 hover:scale-105 active:scale-95'
           : 'bg-[var(--background-tertiary)] border-[var(--card-border)] opacity-50'
       )}
     >
-      <span className="text-xs font-medium text-[var(--text-muted)]">Day {day}</span>
+      <span class="text-xs font-medium text-[var(--text-muted)]">Day {props.day}</span>
 
-      <div className={cn(
+      <div class={cn(
         'p-spacing-2 rounded-lg',
-        isClaimed ? 'bg-[hsl(var(--success))]/20' : isToday ? 'bg-[var(--brand-teal-1)]/20' : 'bg-[var(--background-secondary)]'
+        props.isClaimed ? 'bg-[hsl(var(--success))]/20' : props.isToday ? 'bg-[var(--brand-teal-1)]/20' : 'bg-[var(--background-secondary)]'
       )}>
-        {isClaimed ? (
-          <motion.div
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            transition={{ type: 'spring' }}
-          >
-            <Target className="w-spacing-5 h-spacing-5 text-[hsl(var(--success))]" />
-          </motion.div>
-        ) : (
-          <Gift className={cn(
-            'w-spacing-5 h-spacing-5',
-            isToday ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-muted)]'
-          )} />
-        )}
+        <Show
+          when={props.isClaimed}
+          fallback={
+            <Gift class={cn(
+              'w-spacing-5 h-spacing-5',
+              props.isToday ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-muted)]'
+            )} />
+          }
+        >
+          <div class="claimed-icon-enter">
+            <Target class="w-spacing-5 h-spacing-5 text-[hsl(var(--success))]" />
+          </div>
+        </Show>
       </div>
 
-      <span className={cn(
+      <span class={cn(
         'text-sm font-bold tabular-nums',
-        isClaimed ? 'text-[hsl(var(--success))]' : isToday ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-muted)]'
+        props.isClaimed ? 'text-[hsl(var(--success))]' : props.isToday ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-muted)]'
       )}>
-        {typeof reward === 'number' ? `+${reward}` : reward}
+        {typeof props.reward === 'number' ? `+${props.reward}` : props.reward}
       </span>
 
-      {isToday && !isClaimed && (
-        <motion.div
-          animate={{ scale: [1, 1.2, 1] }}
-          transition={{ repeat: Infinity, duration: 2 }}
-          className="absolute -top-spacing-1 -right-spacing-1 w-spacing-3 h-spacing-3 rounded-full bg-[var(--brand-teal-1)]"
-        />
-      )}
-    </motion.button>
+      <Show when={props.isToday && !props.isClaimed}>
+        <div class="absolute -top-spacing-1 -right-spacing-1 w-spacing-3 h-spacing-3 rounded-full bg-[var(--brand-teal-1)] today-pulse" />
+      </Show>
+    </button>
   )
 }
 
 // Reward icons for quick use
 export const RewardIcons = {
-  Trophy: () => <Trophy className="w-spacing-6 h-spacing-6" />,
-  Star: () => <Star className="w-spacing-6 h-spacing-6" />,
-  Sparkles: () => <Sparkles className="w-spacing-6 h-spacing-6" />,
-  Crown: () => <Crown className="w-spacing-6 h-spacing-6" />,
-  Zap: () => <Zap className="w-spacing-6 h-spacing-6" />,
-  Gift: () => <Gift className="w-spacing-6 h-spacing-6" />,
-  Flame: () => <Flame className="w-spacing-6 h-spacing-6" />,
-  Target: () => <Target className="w-spacing-6 h-spacing-6" />,
+  Trophy: () => <Trophy class="w-spacing-6 h-spacing-6" />,
+  Star: () => <Star class="w-spacing-6 h-spacing-6" />,
+  Sparkles: () => <Sparkles class="w-spacing-6 h-spacing-6" />,
+  Crown: () => <Crown class="w-spacing-6 h-spacing-6" />,
+  Zap: () => <Zap class="w-spacing-6 h-spacing-6" />,
+  Gift: () => <Gift class="w-spacing-6 h-spacing-6" />,
+  Flame: () => <Flame class="w-spacing-6 h-spacing-6" />,
+  Target: () => <Target class="w-spacing-6 h-spacing-6" />,
 }

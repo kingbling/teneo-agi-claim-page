@@ -1,8 +1,8 @@
-import { motion, AnimatePresence } from 'framer-motion'
-import { X, Brain, Zap, Users, Clock, Gift, Ship as ShipIcon, AlertTriangle } from 'lucide-react'
-import { useExplorationStore, getSpendingRateOptions } from '@/stores/explorationStore'
-import { useShipStore } from '@/stores/shipStore'
-import { useUserStore } from '@/stores/userStore'
+import { Show, For, createMemo, type JSX } from 'solid-js'
+import { X, Brain, Zap, Users, Clock, Gift, Ship as ShipIcon, AlertTriangle } from 'lucide-solid'
+import { explorationStore, getSpendingRateOptions } from '@/stores/explorationStore'
+import { shipStore } from '@/stores/shipStore'
+import { userStore } from '@/stores/userStore'
 import { SYNAPSE_CONFIG, type SynapseType, formatPoints, formatETA, getSynapseTypeLabel } from '@/types/game'
 import { cn } from '@/lib/utils'
 
@@ -22,129 +22,132 @@ const SYNAPSE_TYPE_STYLES: Record<SynapseType, { bg: string; text: string; borde
  * Masterplan 2026: Choose ship, set spending rate, see rewards
  */
 export function ExplorationDialog() {
-  const {
-    explorationDialog,
-    closeExplorationDialog,
-    setDialogShip,
-    setDialogSpendingRate,
-    confirmStartExploration,
-    canExplore,
-  } = useExplorationStore()
+  // Access store state directly
+  const explorationDialog = () => explorationStore.explorationDialog
+  const closeExplorationDialog = explorationStore.closeExplorationDialog
+  const setDialogShip = explorationStore.setDialogShip
+  const setDialogSpendingRate = explorationStore.setDialogSpendingRate
+  const confirmStartExploration = explorationStore.confirmStartExploration
+  const canExplore = explorationStore.canExplore
 
-  const { userShips } = useShipStore()
-  useUserStore()
+  const userShips = () => shipStore.userShips
+  // Access userStore to ensure reactivity (even if not directly used)
+  const _user = () => userStore
 
-  const { isOpen, synapse, selectedShipId, spendingRate, isStarting, error } = explorationDialog
+  const isOpen = () => explorationDialog().isOpen
+  const synapse = () => explorationDialog().synapse
+  const selectedShipId = () => explorationDialog().selectedShipId
+  const spendingRate = () => explorationDialog().spendingRate
+  const isStarting = () => explorationDialog().isStarting
+  const error = () => explorationDialog().error
 
-  if (!isOpen || !synapse) return null
-
-  const synapseType = synapse.synapseType as SynapseType
-  const config = SYNAPSE_CONFIG[synapseType]
-  const styles = SYNAPSE_TYPE_STYLES[synapseType]
-  const spendingRateOptions = getSpendingRateOptions(synapseType)
-  const isLottery = config.distribution === 'lottery'
-  const canExploreResult = canExplore(synapse)
+  const synapseType = createMemo(() => synapse()?.synapseType as SynapseType | undefined)
+  const config = createMemo(() => synapseType() ? SYNAPSE_CONFIG[synapseType()!] : null)
+  const styles = createMemo(() => synapseType() ? SYNAPSE_TYPE_STYLES[synapseType()!] : null)
+  const spendingRateOptions = createMemo(() => synapseType() ? getSpendingRateOptions(synapseType()!) : [])
+  const isLottery = createMemo(() => config()?.distribution === 'lottery')
+  const canExploreResult = createMemo(() => synapse() ? canExplore(synapse()!) : { canExplore: false, reason: '' })
 
   // Get idle ships
-  const idleShips = userShips.filter(s => s.state === 'idle')
+  const idleShips = createMemo(() => userShips().filter(s => s.state === 'idle'))
 
   // Calculate ETA based on current spending rate and explorers
-  const pointsRemaining = synapse.pointsRequired - synapse.pointsAccumulated
-  const totalPointsPerMin = (synapse.explorerCount * 100) + spendingRate // Estimate
-  const etaMinutes = Math.ceil(pointsRemaining / totalPointsPerMin)
+  const etaMinutes = createMemo(() => {
+    const s = synapse()
+    if (!s) return 0
+    const pointsRemaining = s.pointsRequired - s.pointsAccumulated
+    const totalPointsPerMin = (s.explorerCount * 100) + spendingRate() // Estimate
+    return Math.ceil(pointsRemaining / totalPointsPerMin)
+  })
 
   return (
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+    <Show when={isOpen() && synapse()}>
+      <div
+        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm transition-opacity duration-200"
         onClick={closeExplorationDialog}
+        style={{ animation: 'fadeIn 0.2s ease-out' }}
       >
-        <motion.div
-          initial={{ scale: 0.95, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          exit={{ scale: 0.95, opacity: 0 }}
+        <div
           onClick={(e) => e.stopPropagation()}
-          className="w-full max-w-lg bg-[var(--background-secondary)] rounded-2xl border border-[var(--card-border)]/30 shadow-2xl overflow-hidden"
+          class="w-full max-w-lg bg-[var(--background-secondary)] rounded-2xl border border-[var(--card-border)]/30 shadow-2xl overflow-hidden transition-transform duration-200"
+          style={{ animation: 'scaleIn 0.2s ease-out' }}
         >
           {/* Header */}
-          <div className={cn('p-6 border-b border-[var(--card-border)]/20', styles.bg)}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className={cn('p-3 rounded-xl', styles.bg, styles.border, 'border')}>
-                  <Brain className={cn('h-6 w-6', styles.text)} />
+          <div class={cn('p-6 border-b border-[var(--card-border)]/20', styles()?.bg)}>
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class={cn('p-3 rounded-xl', styles()?.bg, styles()?.border, 'border')}>
+                  <Brain class={cn('h-6 w-6', styles()?.text)} />
                 </div>
                 <div>
-                  <h2 className={cn('text-xl font-bold', styles.text)}>
-                    {getSynapseTypeLabel(synapseType)} Synapse
+                  <h2 class={cn('text-xl font-bold', styles()?.text)}>
+                    {synapseType() && getSynapseTypeLabel(synapseType()!)} Synapse
                   </h2>
-                  <p className="text-sm text-[var(--text-muted)]">
-                    {synapse.region} - {synapse.zone}
+                  <p class="text-sm text-[var(--text-muted)]">
+                    {synapse()?.region} - {synapse()?.zone}
                   </p>
                 </div>
               </div>
               <button
                 onClick={closeExplorationDialog}
-                className="p-2 rounded-lg hover:bg-[var(--background-primary)] transition-colors"
+                class="p-2 rounded-lg hover:bg-[var(--background-primary)] transition-colors"
               >
-                <X className="h-5 w-5 text-[var(--text-muted)]" />
+                <X class="h-5 w-5 text-[var(--text-muted)]" />
               </button>
             </div>
           </div>
 
           {/* Content */}
-          <div className="p-6 space-y-6">
+          <div class="p-6 space-y-6">
             {/* Synapse Info */}
-            <div className="grid grid-cols-3 gap-4">
+            <div class="grid grid-cols-3 gap-4">
               <InfoCard
-                icon={<Clock className="h-4 w-4" />}
+                icon={<Clock class="h-4 w-4" />}
                 label="Est. Time"
-                value={formatETA(etaMinutes)}
+                value={formatETA(etaMinutes())}
               />
               <InfoCard
-                icon={<Users className="h-4 w-4" />}
+                icon={<Users class="h-4 w-4" />}
                 label="Explorers"
-                value={`${synapse.explorerCount}${config.maxExplorers !== -1 ? `/${config.maxExplorers}` : ''}`}
+                value={`${synapse()?.explorerCount}${config()?.maxExplorers !== -1 ? `/${config()?.maxExplorers}` : ''}`}
               />
               <InfoCard
-                icon={<Gift className="h-4 w-4" />}
+                icon={<Gift class="h-4 w-4" />}
                 label="Reward"
-                value={formatPoints(config.agiReward)}
+                value={formatPoints(config()?.agiReward ?? 0)}
                 highlight
               />
             </div>
 
             {/* Progress */}
             <div>
-              <div className="flex justify-between text-sm mb-2">
-                <span className="text-[var(--text-muted)]">Progress</span>
-                <span className="font-medium">
-                  {formatPoints(synapse.pointsAccumulated)} / {formatPoints(synapse.pointsRequired)}
+              <div class="flex justify-between text-sm mb-2">
+                <span class="text-[var(--text-muted)]">Progress</span>
+                <span class="font-medium">
+                  {formatPoints(synapse()?.pointsAccumulated ?? 0)} / {formatPoints(synapse()?.pointsRequired ?? 0)}
                 </span>
               </div>
-              <div className="h-3 rounded-full bg-[var(--background-primary)] overflow-hidden">
+              <div class="h-3 rounded-full bg-[var(--background-primary)] overflow-hidden">
                 <div
-                  className={cn('h-full rounded-full transition-all', styles.bg.replace('/10', ''))}
-                  style={{ width: `${(synapse.pointsAccumulated / synapse.pointsRequired) * 100}%` }}
+                  class={cn('h-full rounded-full transition-all', styles()?.bg?.replace('/10', ''))}
+                  style={{ width: `${((synapse()?.pointsAccumulated ?? 0) / (synapse()?.pointsRequired ?? 1)) * 100}%` }}
                 />
               </div>
             </div>
 
             {/* Reward Info */}
-            <div className={cn(
+            <div class={cn(
               'p-4 rounded-xl border',
-              isLottery ? 'bg-purple-500/10 border-purple-500/30' : 'bg-green-500/10 border-green-500/30'
+              isLottery() ? 'bg-purple-500/10 border-purple-500/30' : 'bg-green-500/10 border-green-500/30'
             )}>
-              <div className="flex items-start gap-3">
-                <Gift className={cn('h-5 w-5 mt-0.5', isLottery ? 'text-purple-400' : 'text-green-400')} />
+              <div class="flex items-start gap-3">
+                <Gift class={cn('h-5 w-5 mt-0.5', isLottery() ? 'text-purple-400' : 'text-green-400')} />
                 <div>
-                  <p className={cn('font-semibold', isLottery ? 'text-purple-400' : 'text-green-400')}>
-                    {isLottery ? 'Lottery Distribution' : 'Fair Share Distribution'}
+                  <p class={cn('font-semibold', isLottery() ? 'text-purple-400' : 'text-green-400')}>
+                    {isLottery() ? 'Lottery Distribution' : 'Fair Share Distribution'}
                   </p>
-                  <p className="text-sm text-[var(--text-muted)] mt-1">
-                    {isLottery
+                  <p class="text-sm text-[var(--text-muted)] mt-1">
+                    {isLottery()
                       ? 'Winner takes all! Your odds are based on your contribution percentage. Non-winners receive lottery tickets.'
                       : 'Rewards are split proportionally based on points contributed.'}
                   </p>
@@ -154,153 +157,149 @@ export function ExplorationDialog() {
 
             {/* Ship Selection */}
             <div>
-              <label className="block text-sm font-medium text-[var(--text-primary)] mb-3">
+              <label class="block text-sm font-medium text-[var(--text-primary)] mb-3">
                 Select Ship
               </label>
-              {idleShips.length === 0 ? (
-                <div className="p-4 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20 text-center">
-                  <ShipIcon className="h-8 w-8 mx-auto text-[var(--text-muted)]/30 mb-2" />
-                  <p className="text-sm text-[var(--text-muted)]">No idle ships available</p>
+              <Show
+                when={idleShips().length > 0}
+                fallback={
+                  <div class="p-4 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20 text-center">
+                    <ShipIcon class="h-8 w-8 mx-auto text-[var(--text-muted)]/30 mb-2" />
+                    <p class="text-sm text-[var(--text-muted)]">No idle ships available</p>
+                  </div>
+                }
+              >
+                <div class="grid grid-cols-2 gap-3">
+                  <For each={idleShips()}>
+                    {(ship) => (
+                      <button
+                        onClick={() => setDialogShip(ship.id)}
+                        class={cn(
+                          'p-3 rounded-xl border text-left transition-all',
+                          selectedShipId() === ship.id
+                            ? 'bg-[var(--brand-teal-1)]/10 border-[var(--brand-teal-1)]/40'
+                            : 'bg-[var(--background-primary)] border-[var(--card-border)]/20 hover:border-[var(--card-border)]/40'
+                        )}
+                      >
+                        <div class="flex items-center gap-2">
+                          <ShipIcon class={cn(
+                            'h-4 w-4',
+                            selectedShipId() === ship.id ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-muted)]'
+                          )} />
+                          <span class={cn(
+                            'font-medium text-sm',
+                            selectedShipId() === ship.id ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-primary)]'
+                          )}>
+                            {ship.name}
+                          </span>
+                        </div>
+                      </button>
+                    )}
+                  </For>
                 </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  {idleShips.map((ship) => (
-                    <button
-                      key={ship.id}
-                      onClick={() => setDialogShip(ship.id)}
-                      className={cn(
-                        'p-3 rounded-xl border text-left transition-all',
-                        selectedShipId === ship.id
-                          ? 'bg-[var(--brand-teal-1)]/10 border-[var(--brand-teal-1)]/40'
-                          : 'bg-[var(--background-primary)] border-[var(--card-border)]/20 hover:border-[var(--card-border)]/40'
-                      )}
-                    >
-                      <div className="flex items-center gap-2">
-                        <ShipIcon className={cn(
-                          'h-4 w-4',
-                          selectedShipId === ship.id ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-muted)]'
-                        )} />
-                        <span className={cn(
-                          'font-medium text-sm',
-                          selectedShipId === ship.id ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-primary)]'
-                        )}>
-                          {ship.name}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
+              </Show>
             </div>
 
             {/* Spending Rate */}
             <div>
-              <label className="block text-sm font-medium text-[var(--text-primary)] mb-3">
+              <label class="block text-sm font-medium text-[var(--text-primary)] mb-3">
                 Spending Rate
               </label>
-              <div className="flex flex-wrap gap-2">
-                {spendingRateOptions.map((rate) => (
-                  <button
-                    key={rate}
-                    onClick={() => setDialogSpendingRate(rate)}
-                    className={cn(
-                      'px-4 py-2 rounded-lg text-sm font-medium transition-all',
-                      spendingRate === rate
-                        ? 'bg-[hsl(var(--accent))]/20 text-[hsl(var(--accent))] border border-[hsl(var(--accent))]/40'
-                        : 'bg-[var(--background-primary)] text-[var(--text-muted)] border border-[var(--card-border)]/20 hover:border-[var(--card-border)]/40'
-                    )}
-                  >
-                    {rate} pts/min
-                  </button>
-                ))}
+              <div class="flex flex-wrap gap-2">
+                <For each={spendingRateOptions()}>
+                  {(rate) => (
+                    <button
+                      onClick={() => setDialogSpendingRate(rate)}
+                      class={cn(
+                        'px-4 py-2 rounded-lg text-sm font-medium transition-all',
+                        spendingRate() === rate
+                          ? 'bg-[hsl(var(--accent))]/20 text-[hsl(var(--accent))] border border-[hsl(var(--accent))]/40'
+                          : 'bg-[var(--background-primary)] text-[var(--text-muted)] border border-[var(--card-border)]/20 hover:border-[var(--card-border)]/40'
+                      )}
+                    >
+                      {rate} pts/min
+                    </button>
+                  )}
+                </For>
               </div>
-              <p className="text-xs text-[var(--text-muted)] mt-2">
-                Max for {getSynapseTypeLabel(synapseType)}: {config.maxPerMin} pts/min
+              <p class="text-xs text-[var(--text-muted)] mt-2">
+                Max for {synapseType() && getSynapseTypeLabel(synapseType()!)}: {config()?.maxPerMin} pts/min
               </p>
             </div>
 
             {/* Error */}
-            {(error || !canExploreResult.canExplore) && (
-              <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-red-400 mt-0.5" />
-                <p className="text-sm text-red-400">
-                  {error || canExploreResult.reason}
+            <Show when={error() || !canExploreResult().canExplore}>
+              <div class="p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-3">
+                <AlertTriangle class="h-5 w-5 text-red-400 mt-0.5" />
+                <p class="text-sm text-red-400">
+                  {error() || canExploreResult().reason}
                 </p>
               </div>
-            )}
+            </Show>
           </div>
 
           {/* Footer */}
-          <div className="p-6 border-t border-[var(--card-border)]/20 bg-[var(--background-primary)]/50">
-            <div className="flex gap-3">
+          <div class="p-6 border-t border-[var(--card-border)]/20 bg-[var(--background-primary)]/50">
+            <div class="flex gap-3">
               <button
                 onClick={closeExplorationDialog}
-                className="flex-1 px-4 py-3 rounded-xl bg-[var(--background-secondary)] border border-[var(--card-border)]/20 text-[var(--text-muted)] font-medium hover:bg-[var(--background-secondary)]/80 transition-colors"
+                class="flex-1 px-4 py-3 rounded-xl bg-[var(--background-secondary)] border border-[var(--card-border)]/20 text-[var(--text-muted)] font-medium hover:bg-[var(--background-secondary)]/80 transition-colors"
               >
                 Cancel
               </button>
-              <motion.button
+              <button
                 onClick={confirmStartExploration}
-                disabled={!selectedShipId || !canExploreResult.canExplore || isStarting}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                className={cn(
+                disabled={!selectedShipId() || !canExploreResult().canExplore || isStarting()}
+                class={cn(
                   'flex-1 px-4 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all',
-                  selectedShipId && canExploreResult.canExplore
-                    ? 'bg-gradient-to-r from-[var(--brand-teal-1)] to-[hsl(var(--accent))] text-white shadow-lg shadow-[var(--brand-teal-1)]/20'
+                  selectedShipId() && canExploreResult().canExplore
+                    ? 'bg-gradient-to-r from-[var(--brand-teal-1)] to-[hsl(var(--accent))] text-white shadow-lg shadow-[var(--brand-teal-1)]/20 hover:scale-[1.02] active:scale-[0.98]'
                     : 'bg-[var(--background-secondary)] text-[var(--text-muted)] cursor-not-allowed'
                 )}
               >
-                {isStarting ? (
-                  <>
-                    <motion.div
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-                    >
-                      <Zap className="h-4 w-4" />
-                    </motion.div>
-                    Starting...
-                  </>
-                ) : (
-                  <>
-                    <Brain className="h-4 w-4" />
-                    Start Exploration
-                  </>
-                )}
-              </motion.button>
+                <Show
+                  when={!isStarting()}
+                  fallback={
+                    <>
+                      <div class="animate-spin">
+                        <Zap class="h-4 w-4" />
+                      </div>
+                      Starting...
+                    </>
+                  }
+                >
+                  <Brain class="h-4 w-4" />
+                  Start Exploration
+                </Show>
+              </button>
             </div>
           </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+        </div>
+      </div>
+    </Show>
   )
 }
 
 // Info card component
-function InfoCard({
-  icon,
-  label,
-  value,
-  highlight = false,
-}: {
-  icon: React.ReactNode
+function InfoCard(props: {
+  icon: JSX.Element
   label: string
   value: string
   highlight?: boolean
 }) {
   return (
-    <div className="p-3 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20">
-      <div className="flex items-center gap-2 mb-1">
-        <span className={highlight ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-muted)]'}>
-          {icon}
+    <div class="p-3 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20">
+      <div class="flex items-center gap-2 mb-1">
+        <span class={props.highlight ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-muted)]'}>
+          {props.icon}
         </span>
-        <span className="text-xs text-[var(--text-muted)]">{label}</span>
+        <span class="text-xs text-[var(--text-muted)]">{props.label}</span>
       </div>
-      <p className={cn(
+      <p class={cn(
         'font-bold',
-        highlight ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-primary)]'
+        props.highlight ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-primary)]'
       )}>
-        {value}
+        {props.value}
       </p>
     </div>
   )

@@ -1,11 +1,7 @@
-import { useEffect, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { Trophy, Brain, Sparkles, RefreshCw, Crown, Medal, Award, ChevronUp, ChevronDown } from 'lucide-react'
+import { createEffect, onMount, Show, For, type Component } from 'solid-js'
+import { Trophy, Brain, Sparkles, RefreshCw, Crown, Medal, Award, ChevronUp, ChevronDown } from 'lucide-solid'
 import {
-  useRewardStore,
-  selectActiveLeaderboard,
-  selectLeaderboardType,
-  selectIsLoadingLeaderboard,
+  rewardStore,
   type LeaderboardType,
   type LeaderboardEntry,
   getLeaderboardTypeLabel,
@@ -34,66 +30,67 @@ interface LeaderboardRowProps {
   index: number
 }
 
-function LeaderboardRow({ entry, type, index }: LeaderboardRowProps) {
-  const RankIcon = RANK_ICONS[entry.rank]
-  const rankColor = RANK_COLORS[entry.rank] || 'text-[var(--text-muted)]'
+const LeaderboardRow: Component<LeaderboardRowProps> = (props) => {
+  const RankIcon = () => RANK_ICONS[props.entry.rank]
+  const rankColor = () => RANK_COLORS[props.entry.rank] || 'text-[var(--text-muted)]'
 
   return (
-    <motion.div
-      initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ delay: index * 0.05 }}
-      className={cn(
-        'flex items-center gap-3 p-3 rounded-xl',
-        entry.isCurrentUser
+    <div
+      class={cn(
+        'flex items-center gap-3 p-3 rounded-xl animate-slide-in-left',
+        props.entry.isCurrentUser
           ? 'bg-[var(--brand-teal-1)]/10 border border-[var(--brand-teal-1)]/30'
           : 'bg-[var(--background-primary)]',
-        entry.rank <= 3 && !entry.isCurrentUser && 'bg-gradient-to-r from-[var(--background-primary)] to-transparent'
+        props.entry.rank <= 3 && !props.entry.isCurrentUser && 'bg-gradient-to-r from-[var(--background-primary)] to-transparent'
       )}
+      style={{ 'animation-delay': `${props.index * 50}ms` }}
     >
       {/* Rank */}
-      <div className={cn(
+      <div class={cn(
         'w-8 h-8 flex items-center justify-center rounded-lg',
-        entry.rank <= 3 ? 'bg-[var(--background-secondary)]' : ''
+        props.entry.rank <= 3 ? 'bg-[var(--background-secondary)]' : ''
       )}>
-        {RankIcon ? (
-          <RankIcon className={cn('h-5 w-5', rankColor)} />
-        ) : (
-          <span className="text-sm font-bold text-[var(--text-muted)]">
-            #{entry.rank}
-          </span>
-        )}
+        <Show
+          when={RankIcon()}
+          fallback={
+            <span class="text-sm font-bold text-[var(--text-muted)]">
+              #{props.entry.rank}
+            </span>
+          }
+        >
+          {(Icon) => <Icon class={cn('h-5 w-5', rankColor())} />}
+        </Show>
       </div>
 
       {/* User Info */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className={cn(
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2">
+          <span class={cn(
             'font-medium truncate',
-            entry.isCurrentUser ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-primary)]'
+            props.entry.isCurrentUser ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-primary)]'
           )}>
-            {entry.userName}
-            {entry.isCurrentUser && ' (You)'}
+            {props.entry.userName}
+            {props.entry.isCurrentUser && ' (You)'}
           </span>
-          {entry.brainLevel && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--background-secondary)] text-[var(--text-muted)]">
-              Lv.{entry.brainLevel}
+          <Show when={props.entry.brainLevel}>
+            <span class="text-xs px-1.5 py-0.5 rounded bg-[var(--background-secondary)] text-[var(--text-muted)]">
+              Lv.{props.entry.brainLevel}
             </span>
-          )}
+          </Show>
         </div>
       </div>
 
       {/* Score */}
-      <div className="text-right">
-        <span className={cn(
+      <div class="text-right">
+        <span class={cn(
           'font-bold tabular-nums',
-          entry.rank === 1 ? 'text-amber-400' :
-          entry.isCurrentUser ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-primary)]'
+          props.entry.rank === 1 ? 'text-amber-400' :
+          props.entry.isCurrentUser ? 'text-[var(--brand-teal-1)]' : 'text-[var(--text-primary)]'
         )}>
-          {formatLeaderboardScore(type, entry.score)}
+          {formatLeaderboardScore(props.type, props.entry.score)}
         </span>
       </div>
-    </motion.div>
+    </div>
   )
 }
 
@@ -103,188 +100,193 @@ interface UserRankCardProps {
   type: LeaderboardType
 }
 
-function UserRankCard({ rank, score, type }: UserRankCardProps) {
-  if (rank === null || score === null) {
-    return (
-      <div className="p-4 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20 text-center">
-        <p className="text-sm text-[var(--text-muted)]">
-          Not yet ranked. Start exploring to appear on the leaderboard!
-        </p>
-      </div>
-    )
-  }
-
-  const isTopTen = rank <= 10
-  const isTopHundred = rank <= 100
-
+const UserRankCard: Component<UserRankCardProps> = (props) => {
   return (
-    <div className={cn(
-      'p-4 rounded-xl border',
-      isTopTen
-        ? 'bg-gradient-to-r from-amber-500/10 to-yellow-500/10 border-amber-500/30'
-        : isTopHundred
-        ? 'bg-gradient-to-r from-[var(--brand-teal-1)]/10 to-teal-500/10 border-[var(--brand-teal-1)]/30'
-        : 'bg-[var(--background-primary)] border-[var(--card-border)]/20'
-    )}>
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs text-[var(--text-muted)] mb-1">Your Rank</p>
-          <div className="flex items-center gap-2">
-            {isTopTen && <Trophy className="h-5 w-5 text-amber-400" />}
-            <span className={cn(
-              'text-2xl font-bold tabular-nums',
-              isTopTen ? 'text-amber-400' : 'text-[var(--text-primary)]'
-            )}>
-              #{rank.toLocaleString()}
-            </span>
-          </div>
+    <Show
+      when={props.rank !== null && props.score !== null}
+      fallback={
+        <div class="p-4 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20 text-center">
+          <p class="text-sm text-[var(--text-muted)]">
+            Not yet ranked. Start exploring to appear on the leaderboard!
+          </p>
         </div>
+      }
+    >
+      {(() => {
+        const isTopTen = () => props.rank !== null && props.rank <= 10
+        const isTopHundred = () => props.rank !== null && props.rank <= 100
 
-        <div className="text-right">
-          <p className="text-xs text-[var(--text-muted)] mb-1">Your Score</p>
-          <span className="text-lg font-bold text-[var(--text-primary)]">
-            {formatLeaderboardScore(type, score)}
-          </span>
-        </div>
-      </div>
-    </div>
+        return (
+          <div class={cn(
+            'p-4 rounded-xl border',
+            isTopTen()
+              ? 'bg-gradient-to-r from-amber-500/10 to-yellow-500/10 border-amber-500/30'
+              : isTopHundred()
+              ? 'bg-gradient-to-r from-[var(--brand-teal-1)]/10 to-teal-500/10 border-[var(--brand-teal-1)]/30'
+              : 'bg-[var(--background-primary)] border-[var(--card-border)]/20'
+          )}>
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-xs text-[var(--text-muted)] mb-1">Your Rank</p>
+                <div class="flex items-center gap-2">
+                  <Show when={isTopTen()}>
+                    <Trophy class="h-5 w-5 text-amber-400" />
+                  </Show>
+                  <span class={cn(
+                    'text-2xl font-bold tabular-nums',
+                    isTopTen() ? 'text-amber-400' : 'text-[var(--text-primary)]'
+                  )}>
+                    #{props.rank?.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              <div class="text-right">
+                <p class="text-xs text-[var(--text-muted)] mb-1">Your Score</p>
+                <span class="text-lg font-bold text-[var(--text-primary)]">
+                  {props.score !== null && formatLeaderboardScore(props.type, props.score)}
+                </span>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+    </Show>
   )
 }
 
 /**
  * LeaderboardPanel - Rankings display with tabs for different leaderboard types
  */
-export function LeaderboardPanel() {
-  const activeLeaderboard = useRewardStore(selectActiveLeaderboard)
-  const activeType = useRewardStore(selectLeaderboardType)
-  const isLoading = useRewardStore(selectIsLoadingLeaderboard)
-  const fetchLeaderboard = useRewardStore((state) => state.fetchLeaderboard)
-  const setActiveLeaderboardType = useRewardStore((state) => state.setActiveLeaderboardType)
+export const LeaderboardPanel: Component = () => {
+  const activeLeaderboard = () => rewardStore.activeLeaderboard
+  const activeType = () => rewardStore.leaderboardType
+  const isLoading = () => rewardStore.isLoadingLeaderboard
 
   // Fetch leaderboard on mount
-  useEffect(() => {
-    fetchLeaderboard(activeType)
-  }, [])
+  onMount(() => {
+    rewardStore.fetchLeaderboard(activeType())
+  })
 
-  const handleTabChange = useCallback((value: string) => {
-    setActiveLeaderboardType(value as LeaderboardType)
-  }, [setActiveLeaderboardType])
+  const handleTabChange = (value: string) => {
+    rewardStore.setActiveLeaderboardType(value as LeaderboardType)
+  }
 
-  const handleRefresh = useCallback(() => {
-    fetchLeaderboard(activeType)
-  }, [fetchLeaderboard, activeType])
+  const handleRefresh = () => {
+    rewardStore.fetchLeaderboard(activeType())
+  }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-[var(--background-secondary)] rounded-2xl border border-[var(--card-border)]/30 overflow-hidden"
-    >
+    <div class="bg-[var(--background-secondary)] rounded-2xl border border-[var(--card-border)]/30 overflow-hidden animate-fade-in-up">
       {/* Header */}
-      <div className="p-4 border-b border-[var(--card-border)]/20">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-amber-500/20">
-              <Trophy className="h-5 w-5 text-amber-400" />
+      <div class="p-4 border-b border-[var(--card-border)]/20">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="p-2 rounded-lg bg-amber-500/20">
+              <Trophy class="h-5 w-5 text-amber-400" />
             </div>
             <div>
-              <h3 className="font-bold text-[var(--text-primary)]">Leaderboard</h3>
-              <p className="text-xs text-[var(--text-muted)]">
-                {getLeaderboardTypeLabel(activeType)}
+              <h3 class="font-bold text-[var(--text-primary)]">Leaderboard</h3>
+              <p class="text-xs text-[var(--text-muted)]">
+                {getLeaderboardTypeLabel(activeType())}
               </p>
             </div>
           </div>
 
           <button
             onClick={handleRefresh}
-            disabled={isLoading}
-            className={cn(
+            disabled={isLoading()}
+            class={cn(
               'p-2 rounded-lg transition-colors',
               'bg-[var(--background-primary)] hover:bg-[var(--background-primary)]/80',
-              isLoading && 'opacity-50 cursor-not-allowed'
+              isLoading() && 'opacity-50 cursor-not-allowed'
             )}
           >
-            <RefreshCw className={cn('h-4 w-4 text-[var(--text-muted)]', isLoading && 'animate-spin')} />
+            <RefreshCw class={cn('h-4 w-4 text-[var(--text-muted)]', isLoading() && 'animate-spin')} />
           </button>
         </div>
       </div>
 
       {/* Tabs */}
-      <Tabs value={activeType} onValueChange={handleTabChange}>
-        <TabsList className="w-full px-4 pt-4 bg-transparent">
-          <TabsTrigger value="weekly_agi" className="flex-1 text-xs">
-            <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+      <Tabs value={activeType()} onValueChange={handleTabChange}>
+        <TabsList class="w-full px-4 pt-4 bg-transparent">
+          <TabsTrigger value="weekly_agi" class="flex-1 text-xs">
+            <Sparkles class="h-3.5 w-3.5 mr-1.5" />
             Weekly AGI
           </TabsTrigger>
-          <TabsTrigger value="total_discoveries" className="flex-1 text-xs">
-            <Brain className="h-3.5 w-3.5 mr-1.5" />
+          <TabsTrigger value="total_discoveries" class="flex-1 text-xs">
+            <Brain class="h-3.5 w-3.5 mr-1.5" />
             Discoveries
           </TabsTrigger>
-          <TabsTrigger value="brain_level" className="flex-1 text-xs">
-            <Trophy className="h-3.5 w-3.5 mr-1.5" />
+          <TabsTrigger value="brain_level" class="flex-1 text-xs">
+            <Trophy class="h-3.5 w-3.5 mr-1.5" />
             Brain Level
           </TabsTrigger>
         </TabsList>
 
-        <div className="p-4">
+        <div class="p-4">
           {/* User's Rank Card */}
-          {activeLeaderboard && (
-            <div className="mb-4">
-              <UserRankCard
-                rank={activeLeaderboard.userRank}
-                score={activeLeaderboard.userScore}
-                type={activeType}
-              />
-            </div>
-          )}
+          <Show when={activeLeaderboard()}>
+            {(leaderboard) => (
+              <div class="mb-4">
+                <UserRankCard
+                  rank={leaderboard().userRank}
+                  score={leaderboard().userScore}
+                  type={activeType()}
+                />
+              </div>
+            )}
+          </Show>
 
           {/* Loading State */}
-          {isLoading && (
-            <div className="space-y-2">
-              {[...Array(5)].map((_, i) => (
-                <div
-                  key={i}
-                  className="h-14 rounded-xl bg-[var(--background-primary)] animate-pulse"
-                />
-              ))}
+          <Show when={isLoading()}>
+            <div class="space-y-2">
+              <For each={[...Array(5)]}>
+                {(_, i) => (
+                  <div class="h-14 rounded-xl bg-[var(--background-primary)] animate-pulse" />
+                )}
+              </For>
             </div>
-          )}
+          </Show>
 
           {/* Leaderboard Entries */}
-          {!isLoading && activeLeaderboard && (
-            <div className="space-y-2">
-              <AnimatePresence mode="popLayout">
-                {activeLeaderboard.entries.slice(0, 10).map((entry, index) => (
-                  <LeaderboardRow
-                    key={entry.userId}
-                    entry={entry}
-                    type={activeType}
-                    index={index}
-                  />
-                ))}
-              </AnimatePresence>
+          <Show when={!isLoading() && activeLeaderboard()}>
+            {(leaderboard) => (
+              <div class="space-y-2">
+                <For each={leaderboard().entries.slice(0, 10)}>
+                  {(entry, index) => (
+                    <LeaderboardRow
+                      entry={entry}
+                      type={activeType()}
+                      index={index()}
+                    />
+                  )}
+                </For>
 
-              {activeLeaderboard.entries.length === 0 && (
-                <div className="text-center py-8">
-                  <Trophy className="h-12 w-12 text-[var(--text-muted)] mx-auto mb-3 opacity-50" />
-                  <p className="text-[var(--text-muted)]">No rankings yet</p>
-                  <p className="text-xs text-[var(--text-muted)] mt-1">
-                    Be the first to explore and claim your spot!
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
+                <Show when={leaderboard().entries.length === 0}>
+                  <div class="text-center py-8">
+                    <Trophy class="h-12 w-12 text-[var(--text-muted)] mx-auto mb-3 opacity-50" />
+                    <p class="text-[var(--text-muted)]">No rankings yet</p>
+                    <p class="text-xs text-[var(--text-muted)] mt-1">
+                      Be the first to explore and claim your spot!
+                    </p>
+                  </div>
+                </Show>
+              </div>
+            )}
+          </Show>
 
           {/* Last Updated */}
-          {activeLeaderboard && (
-            <p className="text-xs text-[var(--text-muted)] text-center mt-4">
-              Updated {new Date(activeLeaderboard.lastUpdated).toLocaleTimeString()}
-            </p>
-          )}
+          <Show when={activeLeaderboard()}>
+            {(leaderboard) => (
+              <p class="text-xs text-[var(--text-muted)] text-center mt-4">
+                Updated {new Date(leaderboard().lastUpdated).toLocaleTimeString()}
+              </p>
+            )}
+          </Show>
         </div>
       </Tabs>
-    </motion.div>
+    </div>
   )
 }
 
@@ -292,74 +294,76 @@ export function LeaderboardPanel() {
  * LeaderboardMini - Compact leaderboard for sidebar
  */
 interface LeaderboardMiniProps {
-  className?: string
+  class?: string
   maxEntries?: number
 }
 
-export function LeaderboardMini({ className, maxEntries = 3 }: LeaderboardMiniProps) {
-  const activeLeaderboard = useRewardStore(selectActiveLeaderboard)
-  const activeType = useRewardStore(selectLeaderboardType)
-  const fetchLeaderboard = useRewardStore((state) => state.fetchLeaderboard)
+export const LeaderboardMini: Component<LeaderboardMiniProps> = (props) => {
+  const activeLeaderboard = () => rewardStore.activeLeaderboard
+  const activeType = () => rewardStore.leaderboardType
 
-  useEffect(() => {
-    fetchLeaderboard(activeType)
-  }, [])
+  onMount(() => {
+    rewardStore.fetchLeaderboard(activeType())
+  })
 
-  if (!activeLeaderboard || activeLeaderboard.entries.length === 0) {
-    return null
-  }
+  const maxEntries = () => props.maxEntries ?? 3
 
   return (
-    <div className={cn(
-      'p-3 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20',
-      className
-    )}>
-      <div className="flex items-center gap-2 mb-3">
-        <Trophy className="h-4 w-4 text-amber-400" />
-        <span className="text-sm font-medium text-[var(--text-primary)]">Top Explorers</span>
-      </div>
-
-      <div className="space-y-2">
-        {activeLeaderboard.entries.slice(0, maxEntries).map((entry, index) => (
-          <div
-            key={entry.userId}
-            className={cn(
-              'flex items-center justify-between py-1',
-              entry.isCurrentUser && 'text-[var(--brand-teal-1)]'
-            )}
-          >
-            <div className="flex items-center gap-2">
-              <span className={cn(
-                'text-xs font-bold w-5',
-                index === 0 ? 'text-amber-400' : 'text-[var(--text-muted)]'
-              )}>
-                #{entry.rank}
-              </span>
-              <span className="text-sm truncate max-w-[100px]">
-                {entry.userName}
-              </span>
-            </div>
-            <span className="text-sm font-medium tabular-nums">
-              {formatLeaderboardScore(activeType, entry.score)}
-            </span>
+    <Show when={activeLeaderboard() && activeLeaderboard()!.entries.length > 0}>
+      {(leaderboard) => (
+        <div class={cn(
+          'p-3 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)]/20',
+          props.class
+        )}>
+          <div class="flex items-center gap-2 mb-3">
+            <Trophy class="h-4 w-4 text-amber-400" />
+            <span class="text-sm font-medium text-[var(--text-primary)]">Top Explorers</span>
           </div>
-        ))}
-      </div>
 
-      {activeLeaderboard.userRank && activeLeaderboard.userRank > maxEntries && (
-        <div className="mt-2 pt-2 border-t border-[var(--card-border)]/20">
-          <div className="flex items-center justify-between text-[var(--brand-teal-1)]">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold w-5">#{activeLeaderboard.userRank}</span>
-              <span className="text-sm">You</span>
-            </div>
-            <span className="text-sm font-medium tabular-nums">
-              {activeLeaderboard.userScore !== null && formatLeaderboardScore(activeType, activeLeaderboard.userScore)}
-            </span>
+          <div class="space-y-2">
+            <For each={leaderboard().entries.slice(0, maxEntries())}>
+              {(entry, index) => (
+                <div
+                  class={cn(
+                    'flex items-center justify-between py-1',
+                    entry.isCurrentUser && 'text-[var(--brand-teal-1)]'
+                  )}
+                >
+                  <div class="flex items-center gap-2">
+                    <span class={cn(
+                      'text-xs font-bold w-5',
+                      index() === 0 ? 'text-amber-400' : 'text-[var(--text-muted)]'
+                    )}>
+                      #{entry.rank}
+                    </span>
+                    <span class="text-sm truncate max-w-[100px]">
+                      {entry.userName}
+                    </span>
+                  </div>
+                  <span class="text-sm font-medium tabular-nums">
+                    {formatLeaderboardScore(activeType(), entry.score)}
+                  </span>
+                </div>
+              )}
+            </For>
           </div>
+
+          <Show when={leaderboard().userRank && leaderboard().userRank! > maxEntries()}>
+            <div class="mt-2 pt-2 border-t border-[var(--card-border)]/20">
+              <div class="flex items-center justify-between text-[var(--brand-teal-1)]">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-bold w-5">#{leaderboard().userRank}</span>
+                  <span class="text-sm">You</span>
+                </div>
+                <span class="text-sm font-medium tabular-nums">
+                  {leaderboard().userScore !== null && formatLeaderboardScore(activeType(), leaderboard().userScore!)}
+                </span>
+              </div>
+            </div>
+          </Show>
         </div>
       )}
-    </div>
+    </Show>
   )
 }
 
@@ -368,28 +372,31 @@ export function LeaderboardMini({ className, maxEntries = 3 }: LeaderboardMiniPr
  */
 interface RankChangeProps {
   change: number
-  className?: string
+  class?: string
 }
 
-export function RankChange({ change, className }: RankChangeProps) {
-  if (change === 0) {
-    return <span className={cn('text-xs text-[var(--text-muted)]', className)}>-</span>
-  }
-
-  const isPositive = change > 0
-
+export const RankChange: Component<RankChangeProps> = (props) => {
   return (
-    <div className={cn(
-      'flex items-center gap-0.5 text-xs',
-      isPositive ? 'text-green-400' : 'text-red-400',
-      className
-    )}>
-      {isPositive ? (
-        <ChevronUp className="h-3 w-3" />
-      ) : (
-        <ChevronDown className="h-3 w-3" />
-      )}
-      <span className="font-medium">{Math.abs(change)}</span>
-    </div>
+    <Show
+      when={props.change !== 0}
+      fallback={<span class={cn('text-xs text-[var(--text-muted)]', props.class)}>-</span>}
+    >
+      {(() => {
+        const isPositive = () => props.change > 0
+
+        return (
+          <div class={cn(
+            'flex items-center gap-0.5 text-xs',
+            isPositive() ? 'text-green-400' : 'text-red-400',
+            props.class
+          )}>
+            <Show when={isPositive()} fallback={<ChevronDown class="h-3 w-3" />}>
+              <ChevronUp class="h-3 w-3" />
+            </Show>
+            <span class="font-medium">{Math.abs(props.change)}</span>
+          </div>
+        )
+      })()}
+    </Show>
   )
 }

@@ -1,45 +1,54 @@
-import { create } from 'zustand'
+import { createRoot } from 'solid-js'
+import { createStore } from 'solid-js/store'
 import { FUNCTIONAL_BRAIN_REGIONS, type BrainRegion } from '@/constants/brainRegions'
 
-interface BrainRegionStore {
+interface BrainRegionState {
   // Currently selected region index (-1 = none)
   selectedRegionIndex: number
-
   // Highlight intensity for animation (0-1)
   highlightIntensity: number
-
-  // Actions
-  selectRegion: (index: number) => void
-  clearSelection: () => void
-  setHighlightIntensity: (intensity: number) => void
-
-  // Computed
-  getSelectedRegion: () => BrainRegion | null
 }
 
-export const useBrainRegionStore = create<BrainRegionStore>((set, get) => ({
-  selectedRegionIndex: -1,
-  highlightIntensity: 0,
+function createBrainRegionStore() {
+  const [state, setState] = createStore<BrainRegionState>({
+    selectedRegionIndex: -1,
+    highlightIntensity: 0,
+  })
 
-  selectRegion: (index: number) => {
+  // Actions
+  const selectRegion = (index: number) => {
     if (index >= -1 && index < FUNCTIONAL_BRAIN_REGIONS.length) {
-      set({ selectedRegionIndex: index, highlightIntensity: 1.0 })
+      setState({ selectedRegionIndex: index, highlightIntensity: 1.0 })
     }
-  },
+  }
 
-  clearSelection: () => {
-    set({ selectedRegionIndex: -1, highlightIntensity: 0 })
-  },
+  const clearSelection = () => {
+    setState({ selectedRegionIndex: -1, highlightIntensity: 0 })
+  }
 
-  setHighlightIntensity: (intensity: number) => {
-    set({ highlightIntensity: Math.max(0, Math.min(1, intensity)) })
-  },
+  const setHighlightIntensity = (intensity: number) => {
+    setState({ highlightIntensity: Math.max(0, Math.min(1, intensity)) })
+  }
 
-  getSelectedRegion: () => {
-    const { selectedRegionIndex } = get()
-    if (selectedRegionIndex >= 0 && selectedRegionIndex < FUNCTIONAL_BRAIN_REGIONS.length) {
-      return FUNCTIONAL_BRAIN_REGIONS[selectedRegionIndex]
-    }
-    return null
-  },
-}))
+  return {
+    // Reactive getters
+    get selectedRegionIndex() {
+      return state.selectedRegionIndex
+    },
+    get highlightIntensity() {
+      return state.highlightIntensity
+    },
+    get selectedRegion(): BrainRegion | null {
+      if (state.selectedRegionIndex >= 0 && state.selectedRegionIndex < FUNCTIONAL_BRAIN_REGIONS.length) {
+        return FUNCTIONAL_BRAIN_REGIONS[state.selectedRegionIndex]
+      }
+      return null
+    },
+    // Actions
+    selectRegion,
+    clearSelection,
+    setHighlightIntensity,
+  }
+}
+
+export const brainRegionStore = createRoot(createBrainRegionStore)

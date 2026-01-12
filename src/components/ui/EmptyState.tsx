@@ -1,10 +1,10 @@
-import { motion } from 'framer-motion'
-import type { LucideIcon } from 'lucide-react'
-import { Rocket, Sparkles, Search, Target, Zap } from 'lucide-react'
+import type { Component } from 'solid-js'
+import { Show } from 'solid-js'
+import { Rocket, Sparkles, Search, Target, Zap } from 'lucide-solid'
 import { Button } from './button'
 
 interface EmptyStateProps {
-  icon?: LucideIcon
+  icon?: Component<{ class?: string }>
   title: string
   description: string
   actionLabel?: string
@@ -73,85 +73,70 @@ const sizeConfig = {
   },
 }
 
-export function EmptyState({
-  icon,
-  title,
-  description,
-  actionLabel,
-  onAction,
-  variant = 'default',
-  size = 'default',
-}: EmptyStateProps) {
-  const config = variantConfig[variant]
-  const sizes = sizeConfig[size]
-  const Icon = icon || config.icon
+export function EmptyState(props: EmptyStateProps) {
+  const variant = () => props.variant ?? 'default'
+  const size = () => props.size ?? 'default'
+  const config = () => variantConfig[variant()]
+  const sizes = () => sizeConfig[size()]
+  const Icon = () => props.icon ?? config().icon
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
-      className={`flex flex-col items-center justify-center text-center ${sizes.container}`}
+    <div
+      class={`flex flex-col items-center justify-center text-center empty-state-enter ${sizes().container}`}
     >
       {/* Animated icon with rings */}
-      <div className="relative mb-[var(--space-6)]">
+      <div class="relative mb-[var(--space-6)]">
         {/* Pulse rings */}
-        <motion.div
-          className={`absolute inset-0 rounded-full bg-gradient-to-r ${config.gradient} blur-xl`}
-          animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.5, 0.3] }}
-          transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+        <div
+          class={`absolute inset-0 rounded-full bg-gradient-to-r ${config().gradient} blur-xl pulse-ring`}
         />
 
         {/* Outer ring */}
-        <motion.div
-          className={`absolute -inset-[var(--space-3)] rounded-full border border-current ${config.iconColor} opacity-10`}
-          animate={{ scale: [1, 1.1, 1], opacity: [0.1, 0.2, 0.1] }}
-          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+        <div
+          class={`absolute -inset-[var(--space-3)] rounded-full border border-current ${config().iconColor} opacity-10 outer-ring-pulse`}
         />
 
         {/* Icon container */}
-        <motion.div
-          className={`relative ${sizes.iconWrapper} rounded-[var(--radius-2xl)] ${config.iconBg} border border-current/10 flex items-center justify-center shadow-lg`}
-          animate={{ rotate: [0, 5, 0, -5, 0] }}
-          transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+        <div
+          class={`relative ${sizes().iconWrapper} rounded-[var(--radius-2xl)] ${config().iconBg} border border-current/10 flex items-center justify-center shadow-lg icon-wiggle`}
         >
-          <Icon className={`${sizes.icon} ${config.iconColor}`} />
-        </motion.div>
+          <Icon class={`${sizes().icon} ${config().iconColor}`} />
+        </div>
       </div>
 
       {/* Title */}
-      <h3 className={`font-bold text-[var(--text-primary)] mb-[var(--space-3)] ${sizes.title}`}>
-        {title}
+      <h3 class={`font-bold text-[var(--text-primary)] mb-[var(--space-3)] ${sizes().title}`}>
+        {props.title}
       </h3>
 
       {/* Description */}
-      <p className={`text-[var(--text-tertiary)] leading-relaxed mb-[var(--space-6)] ${sizes.description}`}>
-        {description}
+      <p class={`text-[var(--text-tertiary)] leading-relaxed mb-[var(--space-6)] ${sizes().description}`}>
+        {props.description}
       </p>
 
       {/* Action button */}
-      {actionLabel && onAction && (
+      <Show when={props.actionLabel && props.onAction}>
         <Button
-          onClick={onAction}
-          className={`gap-[var(--space-2)] ${sizes.button}`}
+          onClick={props.onAction}
+          class={`gap-[var(--space-2)] ${sizes().button}`}
         >
-          <Zap className="h-[var(--space-4)] w-[var(--space-4)]" />
-          {actionLabel}
+          <Zap class="h-[var(--space-4)] w-[var(--space-4)]" />
+          {props.actionLabel}
         </Button>
-      )}
-    </motion.div>
+      </Show>
+    </div>
   )
 }
 
 // Preset variants for common empty states
-export function NoAgentsEmpty({ onCreate }: { onCreate?: () => void }) {
+export function NoAgentsEmpty(props: { onCreate?: () => void }) {
   return (
     <EmptyState
       variant="agents"
       title="No Agents Yet"
       description="Create your first agent to start exploring the neural network and earning rewards."
       actionLabel="Create Your First Agent"
-      onAction={onCreate}
+      onAction={props.onCreate}
     />
   )
 }
@@ -166,12 +151,12 @@ export function NoDiscoveriesEmpty() {
   )
 }
 
-export function NoSearchResultsEmpty({ query }: { query: string }) {
+export function NoSearchResultsEmpty(props: { query: string }) {
   return (
     <EmptyState
       variant="search"
       title="No Results Found"
-      description={`We couldn't find anything matching "${query}". Try adjusting your search or filters.`}
+      description={`We couldn't find anything matching "${props.query}". Try adjusting your search or filters.`}
       size="sm"
     />
   )
