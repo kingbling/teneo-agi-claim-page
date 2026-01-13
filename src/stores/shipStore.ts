@@ -3,16 +3,9 @@ import { createStore, produce } from 'solid-js/store'
 import type { SynapseType } from '@/types/game'
 import { userStore } from './userStore'
 
-// API Configuration
-const API_URL = import.meta.env.VITE_API_URL
-const WS_URL = import.meta.env.VITE_WS_URL
-
-if (!API_URL) {
-  throw new Error('VITE_API_URL environment variable is not set')
-}
-if (!WS_URL) {
-  throw new Error('VITE_WS_URL environment variable is not set')
-}
+// API Configuration - empty string means same-origin (App Platform deployment)
+const API_URL = import.meta.env.VITE_API_URL ?? ''
+const WS_URL = import.meta.env.VITE_WS_URL ?? ''
 
 // ============================================================================
 // MASTERPLAN 2026: SHIP STORE
@@ -69,7 +62,6 @@ export interface Ship {
   spacesDiscovered: number
   totalLoot: number
   totalAgiEarned: number
-  totalBrainXpEarned: number
   createdAt: number
 }
 
@@ -102,7 +94,6 @@ export interface Synapse {
 
   // Rewards
   agiReward: number
-  brainXpReward: number
 
   // Sector
   sectorId: string | null
@@ -249,7 +240,6 @@ export interface LootEvent {
   userId: string
   shipId: string
   agiAmount: number
-  brainXp: number
   isLotteryWin: boolean
   lotteryTicketsAwarded: number
   timestamp: number
@@ -357,6 +347,15 @@ const initialState: ShipStoreState = {
 function createShipStore() {
   const [state, setState] = createStore<ShipStoreState>({ ...initialState })
 
+  // Helper to safely get userShips array (guards against proxy/HMR issues)
+  const safeUserShips = (s: ShipStoreState): Ship[] =>
+    Array.isArray(s.userShips) ? s.userShips : []
+
+  // Helper to update a single ship in the userShips array
+  const updateShipInList = (s: ShipStoreState, updatedShip: Ship): void => {
+    s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+  }
+
   // ============ SERVER MESSAGE HANDLER ============
 
   function handleServerMessage(message: ServerMessage) {
@@ -404,11 +403,10 @@ function createShipStore() {
           s.recentLoot = [event, ...s.recentLoot].slice(0, 50)
         }))
 
-        // Update user's AGI and brain XP
+        // Update user's AGI (Masterplan 2026: Brain XP removed)
         const userId = userStore.userId
         if (event.userId === userId) {
           userStore.addAgi(event.agiAmount)
-          userStore.addBrainXP(event.brainXp)
           if (event.lotteryTicketsAwarded > 0) {
             userStore.addLotteryTickets(event.lotteryTicketsAwarded)
           }
@@ -418,15 +416,12 @@ function createShipStore() {
 
       case 'ships:update': {
         const updatedShips = message.data
+        if (!Array.isArray(updatedShips)) break
         setState(produce((s) => {
           // Update user's ships if any of them are in the update
-          s.userShips = s.userShips.map((ship) => {
+          s.userShips = safeUserShips(s).map((ship) => {
             const updated = updatedShips.find(u => u.id === ship.id)
-            if (updated) {
-              console.log(`Ship ${ship.name} updated:`, updated.state, `pos: (${updated.positionX.toFixed(2)}, ${updated.positionY.toFixed(2)}, ${updated.positionZ.toFixed(2)})`)
-              return updated
-            }
-            return ship
+            return updated || ship
           })
         }))
         break
@@ -445,8 +440,6 @@ function createShipStore() {
       }
 
       case 'lottery:winner': {
-        const { synapseId, winnerId, winnerShipId, reward } = message.data
-        console.log(`Lottery winner for synapse ${synapseId}: ${winnerId} (ship ${winnerShipId}) won ${reward} AGI!`)
         // Could trigger a notification UI here
         break
       }
@@ -466,7 +459,6 @@ function createShipStore() {
     const socket = new WebSocket(WS_URL)
 
     socket.onopen = () => {
-      console.log('WebSocket connected to server')
       setState({ isConnected: true, ws: socket })
     }
 
@@ -480,7 +472,6 @@ function createShipStore() {
     }
 
     socket.onclose = () => {
-      console.log('WebSocket disconnected')
       setState({ isConnected: false, ws: null })
 
       // Auto-reconnect after 3 seconds
@@ -532,11 +523,13 @@ function createShipStore() {
       const ship = result.ship
 
       setState(produce((s) => {
-        s.userShips = [...s.userShips, ship]
+        const currentShips = Array.isArray(s.userShips) ? s.userShips : []
+        s.userShips = [...currentShips, ship]
       }))
 
       // Update ship count in userStore
-      userStore.setCurrentShipCount(state.userShips.length)
+      const shipCount = Array.isArray(state.userShips) ? state.userShips.length : 0
+      userStore.setCurrentShipCount(shipCount)
 
       return ship
     } catch (err) {
@@ -584,10 +577,9 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip, synapse } = await response.json()
         setState(produce((s) => {
-          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          updateShipInList(s, updatedShip)
           s.currentExplorationSynapse = synapse
         }))
-        console.log(`Ship ${updatedShip.name} started exploring synapse ${synapseId} at ${pointsPerMin} pts/min`)
         return true
       }
 
@@ -617,11 +609,10 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          updateShipInList(s, updatedShip)
           s.currentExplorationSynapse = null
           s.currentExplorers = []
         }))
-        console.log(`Ship ${updatedShip.name} left exploration`)
         return true
       }
 
@@ -651,9 +642,8 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          updateShipInList(s, updatedShip)
         }))
-        console.log(`Ship ${updatedShip.name} spending rate updated to ${pointsPerMin} pts/min`)
         return true
       }
 
@@ -677,9 +667,8 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          updateShipInList(s, updatedShip)
         }))
-        console.log(`Ship autopilot ${enabled ? 'enabled' : 'disabled'}`)
         return true
       }
 
@@ -701,7 +690,7 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          updateShipInList(s, updatedShip)
         }))
         return true
       }
@@ -726,7 +715,7 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          updateShipInList(s, updatedShip)
         }))
         return true
       }
@@ -749,7 +738,7 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          updateShipInList(s, updatedShip)
         }))
         return true
       }
@@ -784,9 +773,8 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          updateShipInList(s, updatedShip)
         }))
-        console.log(`Ship ${updatedShip.name} deploying to (${targetX.toFixed(2)}, ${targetY.toFixed(2)}, ${targetZ.toFixed(2)})`)
         return true
       }
 
@@ -819,7 +807,7 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          s.userShips = s.userShips.map(ss => ss.id === updatedShip.id ? updatedShip : ss)
+          updateShipInList(s, updatedShip)
           s.currentExplorationSynapse = null
           s.currentExplorers = []
         }))
@@ -827,7 +815,7 @@ function createShipStore() {
     } catch (error) {
       // Fallback: update locally
       setState(produce((s) => {
-        s.userShips = s.userShips.map(ss =>
+        s.userShips = safeUserShips(s).map(ss =>
           ss.id === shipId ? { ...ss, state: 'idle' as const, currentSynapseId: null } : ss
         )
       }))
@@ -845,7 +833,9 @@ function createShipStore() {
       const response = await fetch(`${API_URL}/api/users/${userId}/ships`)
       if (!response.ok) throw new Error('Failed to fetch ships')
 
-      const ships = await response.json()
+      const data = await response.json()
+      // Ensure ships is always an array (API might return { ships: [...] } or [...])
+      const ships = Array.isArray(data) ? data : (Array.isArray(data?.ships) ? data.ships : [])
       setState({ userShips: ships, isLoadingShips: false })
 
       // Update ship count in userStore
@@ -877,8 +867,6 @@ function createShipStore() {
       const shipClustersLod0 = (world.shipClusters || []).filter((c: ShipCluster) => c.lodLevel === 0)
       const shipClustersLod1 = (world.shipClusters || []).filter((c: ShipCluster) => c.lodLevel === 1)
       const shipClustersLod2 = (world.shipClusters || []).filter((c: ShipCluster) => c.lodLevel === 2)
-
-      console.log(`DEBUG fetchWorldState: ${rawClusters.length} raw clusters, ${synapseClustersLod0.length} LOD0, ${synapseClustersLod1.length} LOD1, ${synapseClustersLod2.length} LOD2`)
 
       setState({
         synapseClusters: mappedClusters,
@@ -914,10 +902,11 @@ function createShipStore() {
 
   const fetchSynapseExplorers = async (synapseId: string): Promise<ExplorerInfo[]> => {
     try {
-      const response = await fetch(`${API_URL}/api/synapses/${synapseId}/explorers`)
+      const response = await fetch(`${API_URL}/api/synapses/${synapseId}`)
       if (!response.ok) return []
 
-      const explorers = await response.json()
+      const data = await response.json()
+      const explorers = data.synapse?.explorers || []
       setState({ currentExplorers: explorers })
       return explorers
     } catch (error) {
@@ -954,7 +943,9 @@ function createShipStore() {
   }
 
   const canCreateShip = () => {
-    return state.userShips.length < userStore.maxShips
+    const ships = state.userShips
+    if (!Array.isArray(ships)) return true
+    return ships.length < userStore.maxShips
   }
 
   return {
@@ -1001,13 +992,19 @@ function createShipStore() {
 
     // ============ COMPUTED SELECTORS ============
     get selectedShip() {
-      return state.userShips.find(s => s.id === state.selectedShipId) || null
+      const ships = state.userShips
+      if (!Array.isArray(ships)) return null
+      return ships.find(s => s.id === state.selectedShipId) || null
     },
     get exploringShips() {
-      return state.userShips.filter(s => s.state === 'exploring')
+      const ships = state.userShips
+      if (!Array.isArray(ships)) return []
+      return ships.filter(s => s.state === 'exploring')
     },
     get idleShips() {
-      return state.userShips.filter(s => s.state === 'idle')
+      const ships = state.userShips
+      if (!Array.isArray(ships)) return []
+      return ships.filter(s => s.state === 'idle')
     },
     get currentExploration() {
       return {
@@ -1059,17 +1056,34 @@ function createShipStore() {
     getSynapseClustersForLod,
     getShipClustersForLod,
     canCreateShip,
+
+    // Debug: Inject test ship for development
+    _debugInjectShip: (ship: Partial<Ship>) => {
+      const testShip: Ship = {
+        id: ship.id || `test-ship-${Date.now()}`,
+        ownerId: ship.ownerId || 'test-user',
+        name: ship.name || 'Test Ship',
+        state: ship.state || 'idle',
+        positionX: ship.positionX ?? 0,
+        positionY: ship.positionY ?? 0,
+        positionZ: ship.positionZ ?? 0,
+        currentSynapseId: ship.currentSynapseId || null,
+        travelStartTime: ship.travelStartTime || null,
+        travelDuration: ship.travelDuration || null,
+        autopilotEnabled: ship.autopilotEnabled || false,
+        equippedItems: ship.equippedItems || [],
+        currentPointsPerMin: ship.currentPointsPerMin || 0,
+        spacesDiscovered: ship.spacesDiscovered || 0,
+        totalLoot: ship.totalLoot || 0,
+        totalAgiEarned: ship.totalAgiEarned || 0,
+        createdAt: ship.createdAt || Date.now(),
+      }
+      setState(produce(s => {
+        s.userShips = [...safeUserShips(s), testShip]
+      }))
+      return testShip
+    },
   }
 }
 
 export const shipStore = createRoot(createShipStore)
-
-// ============ SELECTOR FUNCTIONS (for compatibility) ============
-
-export const selectUserShips = () => shipStore.userShips
-export const selectSelectedShip = () => shipStore.selectedShip
-export const selectExploringShips = () => shipStore.exploringShips
-export const selectIdleShips = () => shipStore.idleShips
-export const selectCurrentExploration = () => shipStore.currentExploration
-export const selectDiscoveryProgress = () => shipStore.discoveryProgress
-export const selectRecentLoot = () => shipStore.recentLoot

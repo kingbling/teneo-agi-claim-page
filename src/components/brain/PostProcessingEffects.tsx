@@ -64,7 +64,7 @@ const VignetteShader = {
  * via the EffectComposer instead of direct renderer.render() calls.
  */
 export function PostProcessingEffects(props: PostProcessingEffectsProps) {
-  const { gl, scene, camera, size, registerFrameCallback } = useThree()
+  const { gl, scene, camera, size, registerFrameCallback, setSkipDefaultRender } = useThree()
 
   let composer: EffectComposer | null = null
   let bloomPass: UnrealBloomPass | null = null
@@ -79,6 +79,9 @@ export function PostProcessingEffects(props: PostProcessingEffectsProps) {
       console.warn('PostProcessingEffects: Three.js not yet initialized')
       return
     }
+
+    // Take over rendering from ThreeContext
+    setSkipDefaultRender(true)
 
     const { width, height } = size()
 
@@ -97,9 +100,9 @@ export function PostProcessingEffects(props: PostProcessingEffectsProps) {
     // Parameters: resolution, strength, radius, threshold
     bloomPass = new UnrealBloomPass(
       new THREE.Vector2(width, height),
-      props.bloomIntensity ?? 0.4,  // strength: subtle glow
-      0.25,                          // radius: tight spread
-      0.9                            // threshold: very high = only brightest elements bloom
+      props.bloomIntensity ?? 0.08,  // strength: very subtle, keeps particles crisp
+      0.15,                          // radius: tight spread to reduce blur
+      0.95                           // threshold: only extremely bright elements bloom
     )
     composer.addPass(bloomPass)
 
@@ -122,6 +125,7 @@ export function PostProcessingEffects(props: PostProcessingEffectsProps) {
 
     onCleanup(() => {
       unregister()
+      setSkipDefaultRender(false)  // Restore default rendering
       if (composer) {
         composer.dispose()
         renderTarget.dispose()
@@ -132,7 +136,7 @@ export function PostProcessingEffects(props: PostProcessingEffectsProps) {
   // Update bloom intensity when prop changes
   createEffect(() => {
     if (bloomPass) {
-      bloomPass.strength = props.bloomIntensity ?? 1.4
+      bloomPass.strength = props.bloomIntensity ?? 0.35
     }
   })
 

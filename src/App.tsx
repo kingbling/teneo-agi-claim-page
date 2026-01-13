@@ -1,9 +1,11 @@
-import { createEffect, Show, onMount } from 'solid-js'
+import { Show, onMount } from 'solid-js'
 import { Router, Route } from '@solidjs/router'
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query'
 import { Landing } from './pages/Landing'
 import { DiscoveryDashboard } from './pages/DiscoveryDashboard'
 import { configStore } from './stores/configStore'
+import { authStore } from './stores/authStore'
+import { userStore } from './stores/userStore'
 
 // Create a client
 const queryClient = new QueryClient({
@@ -17,10 +19,34 @@ const queryClient = new QueryClient({
   },
 })
 
+/**
+ * Attempt auto-login with stored token and wallet address
+ */
+async function tryAutoLogin(walletAddress: string) {
+  const isValid = await authStore.verifyToken()
+  if (isValid) {
+    await userStore.loginUser(walletAddress)
+  }
+}
+
 function App() {
-  // Fetch game configuration on startup
-  onMount(() => {
+  // Initialize auth and game configuration on startup
+  onMount(async () => {
+    // Fetch game configuration
     configStore.fetchConfig()
+
+    // Set up callback for when wallet reconnects after init
+    authStore.setOnWalletReconnected((address) => {
+      tryAutoLogin(address)
+    })
+
+    // Initialize auth store (watches wallet connection, restores token)
+    const { token, walletAddress } = await authStore.init()
+
+    // Auto-login if both token and wallet are available immediately
+    if (token && walletAddress) {
+      await tryAutoLogin(walletAddress)
+    }
   })
 
   return (

@@ -385,6 +385,158 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 12,
+    name: 'add_auth_nonce_columns',
+    up: (db) => {
+      // Add auth nonce columns to users table for wallet signature verification
+      const tableInfo = db.prepare("PRAGMA table_info(users)").all() as { name: string }[]
+      const columnNames = tableInfo.map(c => c.name)
+
+      // Nonce for wallet signature verification (ephemeral, cleared after use)
+      if (!columnNames.includes('auth_nonce')) {
+        db.exec('ALTER TABLE users ADD COLUMN auth_nonce TEXT')
+      }
+      // Timestamp when nonce was generated (for expiry)
+      if (!columnNames.includes('auth_nonce_issued_at')) {
+        db.exec('ALTER TABLE users ADD COLUMN auth_nonce_issued_at INTEGER')
+      }
+    },
+  },
+  {
+    version: 13,
+    name: 'masterplan_2026_remove_brain_level_system',
+    up: (db) => {
+      // Masterplan 2026 Alignment: Single USDC-based level system
+      // Brain Level (248 XP-based levels) is DEPRECATED
+      //
+      // The following columns are no longer used but kept for data integrity:
+      // - users.brain_level, users.brain_xp, users.total_brain_xp
+      // - spaces.brain_xp_reward
+      // - agents.total_brain_xp_earned
+      //
+      // Synapse type unlocking is now gated by User Level (USDC-based):
+      // - Level 2 ($1+) -> Rare Synapses
+      // - Level 3 ($10+) -> Legendary Synapses
+      // - Level 4 ($100+) -> Unique Synapses
+      //
+      // Level Boost now multiplies points/min instead of reducing ETA
+
+      console.log('[Migration 13] Masterplan 2026: Brain Level system deprecated')
+      console.log('  - Synapse unlocking now uses User Level (USDC-based)')
+      console.log('  - Level multiplier now applies to points/min')
+      console.log('  - Brain XP columns remain in database but are no longer used')
+
+      // Reset brain levels to 1 (deprecated)
+      db.exec('UPDATE users SET brain_level = 1, brain_xp = 0')
+
+      // Reset brain XP rewards to 0 (deprecated)
+      db.exec('UPDATE spaces SET brain_xp_reward = 0')
+
+      // Reset ship brain XP earned to 0 (deprecated)
+      db.exec('UPDATE agents SET total_brain_xp_earned = 0')
+    },
+  },
+  {
+    version: 14,
+    name: 'add_raffle_system_tables',
+    up: (db) => {
+      // V1 Masterplan: Ticket-Based Raffle System
+      // Raffles are separate from regular synapses - points/tickets deducted immediately,
+      // one winner selected at end, bigger rewards
+
+      // Raffles table - defines each raffle instance
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS raffles (
+          id TEXT PRIMARY KEY,
+          tier TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'upcoming',
+
+          -- Prize Pool
+          agi_prize_pool INTEGER NOT NULL,
+          bonus_prizes TEXT,
+
+          -- Timing
+          starts_at INTEGER NOT NULL,
+          ends_at INTEGER NOT NULL,
+          drawn_at INTEGER,
+
+          -- Entry Tracking
+          total_entries INTEGER NOT NULL DEFAULT 0,
+          total_points_spent INTEGER NOT NULL DEFAULT 0,
+          total_tickets_spent INTEGER NOT NULL DEFAULT 0,
+          participant_count INTEGER NOT NULL DEFAULT 0,
+
+          -- Winner
+          winner_user_id TEXT,
+          winner_entries INTEGER,
+
+          -- Metadata
+          name TEXT,
+          description TEXT,
+          created_at INTEGER NOT NULL
+        )
+      `)
+
+      // Indexes for raffles
+      db.exec('CREATE INDEX IF NOT EXISTS idx_raffles_status ON raffles(status)')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_raffles_tier ON raffles(tier)')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_raffles_ends_at ON raffles(ends_at)')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_raffles_winner ON raffles(winner_user_id)')
+
+      // Raffle entries table - user participation
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS raffle_entries (
+          id TEXT PRIMARY KEY,
+          raffle_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+
+          -- Entry Details
+          entry_method TEXT NOT NULL,
+          amount_spent INTEGER NOT NULL,
+          entries_received INTEGER NOT NULL,
+
+          -- Timing
+          entered_at INTEGER NOT NULL,
+
+          FOREIGN KEY (raffle_id) REFERENCES raffles(id),
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+      `)
+
+      // Indexes for raffle_entries
+      db.exec('CREATE INDEX IF NOT EXISTS idx_raffle_entries_raffle ON raffle_entries(raffle_id)')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_raffle_entries_user ON raffle_entries(user_id)')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_raffle_entries_raffle_user ON raffle_entries(raffle_id, user_id)')
+
+      // Raffle winners history - for analytics and display
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS raffle_winners_history (
+          id TEXT PRIMARY KEY,
+          raffle_id TEXT NOT NULL,
+          winner_user_id TEXT NOT NULL,
+          tier TEXT NOT NULL,
+          agi_won INTEGER NOT NULL,
+          total_entries INTEGER NOT NULL,
+          winner_entries INTEGER NOT NULL,
+          participant_count INTEGER NOT NULL,
+          won_at INTEGER NOT NULL,
+
+          FOREIGN KEY (raffle_id) REFERENCES raffles(id),
+          FOREIGN KEY (winner_user_id) REFERENCES users(id)
+        )
+      `)
+
+      // Index for raffle history
+      db.exec('CREATE INDEX IF NOT EXISTS idx_raffle_history_user ON raffle_winners_history(winner_user_id)')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_raffle_history_date ON raffle_winners_history(won_at)')
+
+      console.log('[Migration 14] V1 Masterplan: Raffle system tables created')
+      console.log('  - raffles: Raffle instances with prize pools and timing')
+      console.log('  - raffle_entries: User participation with entry method and amounts')
+      console.log('  - raffle_winners_history: Historical record of winners')
+    },
+  },
 ]
 
 // Create migrations tracking table

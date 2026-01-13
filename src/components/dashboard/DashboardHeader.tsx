@@ -7,7 +7,7 @@
 
 import { type Component, Show } from 'solid-js'
 import { A } from '@solidjs/router'
-import { HelpCircle, Wallet, Zap, Coins, Ship, Calendar } from 'lucide-solid'
+import { HelpCircle, Wallet, Zap, Coins, Ship, Calendar, ShoppingBag } from 'lucide-solid'
 import { useWebSocketConnection } from '@/hooks'
 import { userStore, shipStore, eventStore } from '@/stores'
 import { formatPoints } from '@/types/game'
@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 
 export interface DashboardHeaderProps {
   onHelpClick: () => void
+  onShopClick?: () => void
 }
 
 export const DashboardHeader: Component<DashboardHeaderProps> = (props) => {
@@ -97,6 +98,16 @@ export const DashboardHeader: Component<DashboardHeaderProps> = (props) => {
               <span class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
             </A>
           </Show>
+
+          {/* Shop */}
+          <button
+            onClick={props.onShopClick}
+            class="w-7 h-7 rounded-lg flex items-center justify-center text-amber-400 hover:text-amber-300 hover:bg-amber-500/20 transition-colors relative"
+            title="Item Shop (S)"
+          >
+            <ShoppingBag class="w-4 h-4" />
+            <span class="absolute -top-0.5 -right-0.5 w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
+          </button>
 
           {/* Help */}
           <button

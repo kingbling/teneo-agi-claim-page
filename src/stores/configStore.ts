@@ -8,11 +8,8 @@
 import { createRoot } from 'solid-js'
 import { createStore } from 'solid-js/store'
 
-const API_URL = import.meta.env.VITE_API_URL
-
-if (!API_URL) {
-  throw new Error('VITE_API_URL environment variable is not set')
-}
+// API Configuration - empty string means same-origin (App Platform deployment)
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 // ============ TYPES ============
 
@@ -94,7 +91,6 @@ function createConfigStore() {
       }
       const config: GameConfig = await response.json()
       setState({ gameConfig: config, isLoaded: true, error: null })
-      console.log('Game config loaded:', config.version)
     } catch (error) {
       console.error('Failed to fetch game config:', error)
       setState({

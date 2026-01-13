@@ -27,13 +27,11 @@ import {
   calculateSolveProbability as configCalculateSolveProbability,
   calculateLootShare as configCalculateLootShare,
   calculateTranceDuration,
-  // Masterplan 2026
+  // V1 Masterplan: Single player, USDC-based level system
   SYNAPSE_CONFIG,
+  USER_LEVEL_CONFIG,
   calculateFinalETA,
-  runLotteryDistribution,
-  runFairShareDistribution,
-  getXPForLevel,
-  BRAIN_LEVEL_CONFIG,
+  calculateUserLevel,
   type SynapseType,
   type UserLevel,
 } from '../config/gameConfig.js'
@@ -92,8 +90,6 @@ export interface ExplorationProgressEvent {
 export interface UserLevelUpEvent {
   userId: string
   newLevel: UserLevel
-  newBrainLevel: number
-  brainXpEarned: number
   timestamp: number
 }
 
@@ -258,7 +254,7 @@ export function deployAgentToSearch(agentId: string, startPosition: { x: number;
   const agent = getAgent(agentId)
   if (!agent) return false
   if (agent.state !== 'idle') return false
-  if (agent.pointsBalance <= 0) return false
+  // Note: pointsBalance check removed - no fuel system in Masterplan 2026
 
   // Generate random initial wander direction
   const dir = randomDirection()
@@ -405,32 +401,39 @@ async function processTick() {
   const agentUpdates: (Partial<Agent> & { id: string })[] = []
 
   for (const agent of activeAgents) {
-    const burnRate = calculateBurnRate(agent.traits)
-    const pointsBurned = burnRate * deltaSeconds
-    let newBalance = agent.pointsBalance - pointsBurned
+    // Ships with pointsBurnRate 0 don't consume fuel (Masterplan 2026)
+    const hasFuelSystem = agent.pointsBurnRate !== 0
+    let newBalance = agent.pointsBalance
+    let pointsBurned = 0
 
-    if (newBalance <= 0) {
-      // Out of fuel - go idle and mark as needing repair
-      agentUpdates.push({
-        id: agent.id,
-        state: 'idle',
-        pointsBalance: 0,
-        totalPointsBurned: agent.totalPointsBurned + agent.pointsBalance,
-        targetSpaceId: null,
-        travelStartTime: null,
-        travelDuration: null,
-        needsRepair: true,  // Agent is exhausted and needs repair
-        // Return to center (home position)
-        positionX: 0,
-        positionY: 0,
-        positionZ: 0,
-      })
+    if (hasFuelSystem) {
+      const burnRate = calculateBurnRate(agent.traits)
+      pointsBurned = burnRate * deltaSeconds
+      newBalance = agent.pointsBalance - pointsBurned
 
-      // Remove from solvers if was solving
-      if (agent.state === 'solving' && agent.targetSpaceId) {
-        removeSpaceSolver(agent.targetSpaceId, agent.id)
+      if (newBalance <= 0) {
+        // Out of fuel - go idle and mark as needing repair
+        agentUpdates.push({
+          id: agent.id,
+          state: 'idle',
+          pointsBalance: 0,
+          totalPointsBurned: agent.totalPointsBurned + agent.pointsBalance,
+          targetSpaceId: null,
+          travelStartTime: null,
+          travelDuration: null,
+          needsRepair: true,  // Agent is exhausted and needs repair
+          // Return to center (home position)
+          positionX: 0,
+          positionY: 0,
+          positionZ: 0,
+        })
+
+        // Remove from solvers if was solving
+        if (agent.state === 'solving' && agent.targetSpaceId) {
+          removeSpaceSolver(agent.targetSpaceId, agent.id)
+        }
+        continue
       }
-      continue
     }
 
     switch (agent.state) {
@@ -904,9 +907,12 @@ async function updateSynapseProgress(synapseId: string, deltaSeconds: number) {
   const newAccumulated = synapse.points_accumulated + totalPointsThisTick
   const isCompleted = newAccumulated >= synapse.points_required
 
-  // Calculate current ETA
-  const userLevels = explorers.map(e => e.user_level as UserLevel)
-  const currentETA = calculateFinalETA(config.etaMinutes, explorers.length, userLevels)
+  // V1 Masterplan: Calculate ETA based on user level + items (single player)
+  // Get the single explorer's level and item effects
+  const explorer = explorers[0]
+  const userLevel = (explorer.user_level || 1) as UserLevel
+  const itemEffects = getShipItemEffects(explorer.ship_id)
+  const currentETA = calculateFinalETA(config.etaMinutes, userLevel, itemEffects.speedBoost)
 
   db.prepare(`
     UPDATE spaces
@@ -956,148 +962,55 @@ async function completeSynapse(
   const config = SYNAPSE_CONFIG[synapseType]
   const now = Date.now()
 
-  // Get live event multipliers
+  // Get live event multipliers (Masterplan 2026: single USDC-based level system, no brain XP)
   const eventMultipliers = getActiveEventMultipliers()
   const finalAgiReward = Math.floor(config.agiReward * eventMultipliers.rewardMultiplier)
-  const finalBrainXpBase = Math.floor(config.brainXpReward * eventMultipliers.xpMultiplier)
 
   if (eventMultipliers.eventName) {
-    console.log(`[Live Event] "${eventMultipliers.eventName}" active! Rewards: x${eventMultipliers.rewardMultiplier}, XP: x${eventMultipliers.xpMultiplier}`)
+    console.log(`[Live Event] "${eventMultipliers.eventName}" active! Rewards: x${eventMultipliers.rewardMultiplier}`)
   }
 
-  // Prepare explorer data for distribution
-  const explorerData = explorers.map(e => ({
-    userId: e.user_id,
-    shipId: e.ship_id,
-    pointsContributed: e.points_contributed,
-  }))
+  // V1 Masterplan: Single player - explorer gets 100% of reward
+  const singleExplorer = explorers[0]
+  const rewardDistribution: Array<{ userId: string; shipId: string; reward: number; isWinner?: boolean }> = [{
+    userId: singleExplorer.user_id,
+    shipId: singleExplorer.ship_id,
+    reward: finalAgiReward,
+    isWinner: true,
+  }]
 
-  let rewardDistribution: Array<{ userId: string; shipId: string; reward: number; isWinner?: boolean }>
-
-  if (config.distribution === 'lottery') {
-    // Lottery distribution - one winner takes all
-    // Apply luck_charm effect to boost each explorer's weighted contribution
-    const luckBoostedData = explorerData.map(e => {
-      const itemEffects = getShipItemEffects(e.shipId)
-      const luckMultiplier = 1 + itemEffects.luckBoost
-      return {
-        ...e,
-        pointsContributed: e.pointsContributed * luckMultiplier,
-      }
-    })
-
-    const result = runLotteryDistribution(luckBoostedData, finalAgiReward)
-
-    rewardDistribution = explorerData.map(e => ({
-      userId: e.userId,
-      shipId: e.shipId,
-      reward: e.userId === result.winnerId ? result.reward : 0,
-      isWinner: e.userId === result.winnerId,
-    }))
-
-    // Record lottery draw
-    db.prepare(`
-      INSERT INTO lottery_draws (id, synapse_id, synapse_type, winner_user_id, winner_ship_id,
-                                 reward_agi, total_participants, total_points_contributed,
-                                 winner_contribution, drawn_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      uuid(),
-      synapseId,
-      synapseType,
-      result.winnerId,
-      result.winnerShipId,
-      result.reward,
-      result.totalParticipants,
-      result.totalPoints,
-      explorerData.find(e => e.userId === result.winnerId)?.pointsContributed || 0,
-      now
-    )
-
-    // Give lottery tickets to non-winners
-    for (const explorer of explorerData) {
-      if (explorer.userId !== result.winnerId) {
-        db.prepare(`
-          UPDATE users SET lottery_tickets = lottery_tickets + 1 WHERE id = ?
-        `).run(explorer.userId)
-      }
-    }
-  } else {
-    // Fair share distribution
-    const shares = runFairShareDistribution(explorerData, finalAgiReward)
-    rewardDistribution = shares.map(s => ({
-      ...s,
-      isWinner: false,
-    }))
-  }
-
-  // Award rewards to users
+  // Award AGI rewards to users (Masterplan 2026: single USDC-based level system, no brain XP)
   for (const dist of rewardDistribution) {
-    // Get item effects for XP amplifier (stacks with event multiplier)
+    // Get AGI amplifier effect from items
     const itemEffects = getShipItemEffects(dist.shipId)
-    const xpItemMultiplier = 1 + itemEffects.xpMultiplier
-    const finalBrainXp = Math.floor(finalBrainXpBase * xpItemMultiplier)
+    const agiItemMultiplier = 1 + itemEffects.xpMultiplier  // Reusing xpMultiplier as AGI amplifier
+    const amplifiedReward = Math.floor(dist.reward * agiItemMultiplier)
 
-    if (dist.reward > 0) {
-      // Update user's AGI balance and brain XP (winner gets both)
+    if (amplifiedReward > 0) {
+      // Update user's AGI balance
       db.prepare(`
         UPDATE users
-        SET total_agi_earned = total_agi_earned + ?,
-            brain_xp = brain_xp + ?,
-            total_brain_xp = total_brain_xp + ?
+        SET total_agi_earned = total_agi_earned + ?
         WHERE id = ?
-      `).run(dist.reward, finalBrainXp, finalBrainXp, dist.userId)
+      `).run(amplifiedReward, dist.userId)
 
       // Update ship stats
       db.prepare(`
         UPDATE agents
         SET total_agi_earned = total_agi_earned + ?,
-            total_brain_xp_earned = total_brain_xp_earned + ?,
             spaces_discovered = spaces_discovered + 1
         WHERE id = ?
-      `).run(dist.reward, finalBrainXp, dist.shipId)
-    } else if (config.distribution === 'lottery') {
-      // For lottery losers, still award brain XP (with amplifier) but no AGI
-      db.prepare(`
-        UPDATE users
-        SET brain_xp = brain_xp + ?,
-            total_brain_xp = total_brain_xp + ?
-        WHERE id = ?
-      `).run(finalBrainXp, finalBrainXp, dist.userId)
-
-      // Update ship stats (XP only, no discovery increment since they didn't win)
-      db.prepare(`
-        UPDATE agents
-        SET total_brain_xp_earned = total_brain_xp_earned + ?
-        WHERE id = ?
-      `).run(finalBrainXp, dist.shipId)
+      `).run(amplifiedReward, dist.shipId)
     }
+    // Lottery losers get lottery tickets (already handled above) but no AGI
   }
 
   // ============ NFT MINTING FOR RARE SYNAPSES ============
-  // Mint NFT for first discoverer of Core, Legendary, or Unique synapses
+  // Mint NFT for discoverer of Core, Legendary, or Unique synapses
+  // V1 Masterplan: Single player - the explorer always gets the NFT
   const nftEligibleTypes: SynapseType[] = ['core', 'rare', 'legendary', 'unique']
   if (nftEligibleTypes.includes(synapseType)) {
-    // For lottery distribution, the winner gets the NFT
-    // For fair share, the highest contributor gets the NFT
-    let nftRecipient: { userId: string; shipId: string } | null = null
-
-    if (config.distribution === 'lottery') {
-      // Winner already determined in rewardDistribution
-      const winner = rewardDistribution.find(d => d.isWinner)
-      if (winner) {
-        nftRecipient = { userId: winner.userId, shipId: winner.shipId }
-      }
-    } else {
-      // Fair share - highest contributor gets NFT
-      const maxContributor = explorers.reduce((max, e) =>
-        e.points_contributed > max.points_contributed ? e : max
-      , explorers[0])
-      if (maxContributor) {
-        nftRecipient = { userId: maxContributor.user_id, shipId: maxContributor.ship_id }
-      }
-    }
-
+    const nftRecipient = { userId: singleExplorer.user_id, shipId: singleExplorer.ship_id }
     if (nftRecipient) {
       const nftId = uuid()
       const nftMetadata = JSON.stringify({
@@ -1149,66 +1062,9 @@ async function completeSynapse(
 
   console.log(`[Masterplan 2026] Synapse ${synapseId} (${synapseType}) completed! ${finalAgiReward} $AGI distributed via ${config.distribution}${eventMultipliers.eventName ? ` (${eventMultipliers.eventName} active)` : ''}`)
 
-  // Check for brain level-ups after awarding XP
-  // For lottery distributions, all explorers receive XP so check all of them
-  // For fair share, only those with reward > 0 receive XP
-  for (const dist of rewardDistribution) {
-    if (dist.reward > 0 || config.distribution === 'lottery') {
-      await checkBrainLevelUp(dist.userId)
-    }
-  }
-
   // Process autopilot for all ships that were exploring this synapse
   for (const explorer of explorers) {
     await processAutopilot(explorer.ship_id, explorer.user_id)
-  }
-}
-
-/**
- * Check if a user has earned enough XP to level up their brain
- * Emits user:levelup event when threshold is crossed
- */
-async function checkBrainLevelUp(userId: string): Promise<void> {
-  const user = db.prepare(`
-    SELECT brain_level, brain_xp, total_brain_xp FROM users WHERE id = ?
-  `).get(userId) as { brain_level: number; brain_xp: number; total_brain_xp: number } | undefined
-
-  if (!user) return
-
-  let currentLevel = user.brain_level
-  let currentXP = user.brain_xp
-  let levelsGained = 0
-
-  // Check for level ups (can level up multiple times)
-  while (currentLevel < BRAIN_LEVEL_CONFIG.maxLevel) {
-    const xpRequired = getXPForLevel(currentLevel + 1)
-    if (currentXP >= xpRequired) {
-      currentXP -= xpRequired
-      currentLevel++
-      levelsGained++
-    } else {
-      break
-    }
-  }
-
-  if (levelsGained > 0) {
-    // Update user's brain level
-    db.prepare(`
-      UPDATE users SET brain_level = ?, brain_xp = ? WHERE id = ?
-    `).run(currentLevel, currentXP, userId)
-
-    // Emit level-up event
-    if (userLevelUpCallback) {
-      userLevelUpCallback({
-        userId,
-        newLevel: 1 as UserLevel, // User level unchanged
-        newBrainLevel: currentLevel,
-        brainXpEarned: 0, // Already tracked
-        timestamp: Date.now(),
-      })
-    }
-
-    console.log(`[Masterplan 2026] User ${userId} brain leveled up to ${currentLevel}! (+${levelsGained} levels)`)
   }
 }
 
@@ -1231,15 +1087,14 @@ export function joinSynapseExploration(
 
   const config = SYNAPSE_CONFIG[synapse.synapse_type]
 
-  // Check explorer limit
-  if (config.maxExplorers > 0) {
-    const currentCount = db.prepare(`
-      SELECT COUNT(*) as count FROM synapse_explorers WHERE synapse_id = ?
-    `).get(synapseId) as { count: number }
+  // V1 Masterplan: Single player only - max 1 explorer per synapse
+  const currentCount = db.prepare(`
+    SELECT COUNT(*) as count FROM synapse_explorers WHERE synapse_id = ?
+  `).get(synapseId) as { count: number }
 
-    if (currentCount.count >= config.maxExplorers) {
-      return false
-    }
+  if (currentCount.count >= 1) {
+    // Synapse already occupied
+    return false
   }
 
   // Clamp points per minute to max allowed
@@ -1325,15 +1180,15 @@ export async function processAutopilot(shipId: string, userId: string): Promise<
     return false
   }
 
-  // Get user's brain level to determine accessible synapse types
+  // Get user's level (USDC-based) to determine accessible synapse types (Masterplan 2026)
   const user = db.prepare(`
-    SELECT brain_level FROM users WHERE id = ?
-  `).get(userId) as { brain_level: number } | undefined
+    SELECT usdc_spent FROM users WHERE id = ?
+  `).get(userId) as { usdc_spent: number } | undefined
 
-  const brainLevel = user?.brain_level || 1
+  const userLevel = calculateUserLevel(user?.usdc_spent || 0)
 
   // Find the next available synapse (prioritize by synapse type: minor < complex < deep etc.)
-  // Only show synapses the user can access based on brain level
+  // Only show synapses the user can access based on User Level
   const nextSynapse = db.prepare(`
     SELECT s.id, s.synapse_type, s.position_x, s.position_y, s.position_z
     FROM spaces s
@@ -1357,13 +1212,12 @@ export async function processAutopilot(shipId: string, userId: string): Promise<
     return false
   }
 
-  // Check brain level requirements for synapse type
-  const synapseUnlockLevels: Record<string, number> = {
-    minor: 1, complex: 5, deep: 20, core: 50, rare: 100, legendary: 175, unique: 248
-  }
-  const requiredLevel = synapseUnlockLevels[nextSynapse.synapse_type] || 1
-  if (brainLevel < requiredLevel) {
-    console.log(`[Autopilot] Ship ${shipId} owner brain level ${brainLevel} too low for ${nextSynapse.synapse_type} (needs ${requiredLevel})`)
+  // Check User Level requirements for synapse type (Masterplan 2026: USDC-based)
+  const config = SYNAPSE_CONFIG[nextSynapse.synapse_type as SynapseType]
+  const requiredLevel = config.unlockUserLevel
+  if (userLevel < requiredLevel) {
+    const requiredUSDC = USER_LEVEL_CONFIG[requiredLevel as UserLevel].minUSDC
+    console.log(`[Autopilot] Ship ${shipId} owner level ${userLevel} too low for ${nextSynapse.synapse_type} (needs level ${requiredLevel}, $${requiredUSDC}+ USDC)`)
     return false
   }
 

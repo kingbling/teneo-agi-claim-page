@@ -33,25 +33,6 @@ export type {
   ShipState,
 } from './shipStore'
 
-// Sector store - sectors/seasons with progress tracking
-export { sectorStore } from './sectorStore'
-export type {
-  Sector,
-  SectorStatus,
-  SectorReward,
-  SectorProgress,
-  SectorState,
-} from './sectorStore'
-
-// Exploration store - synapse exploration UI, spending controls, collaboration
-export { explorationStore } from './explorationStore'
-export type {
-  ExplorableSynapse,
-  Collaborator,
-  ExplorationDialogState,
-  ExplorationState,
-} from './explorationStore'
-
 // Event store - live events with multipliers and bonuses
 export { eventStore } from './eventStore'
 export type {
@@ -73,15 +54,5 @@ export type {
   ShopState,
 } from './shopStore'
 
-// Reward store - rewards, lottery, leaderboard
-export { rewardStore } from './rewardStore'
-export type {
-  RewardType,
-  RewardNotification,
-  LotteryParticipant,
-  LotteryResult,
-  LeaderboardEntry,
-  LeaderboardType,
-  LeaderboardData,
-  RewardState,
-} from './rewardStore'
+// UI store - local UI preferences and settings
+export { uiStore } from './uiStore'

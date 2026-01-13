@@ -8,21 +8,26 @@
 import { type Component, createSignal, createMemo, onMount, onCleanup, Show, For } from 'solid-js'
 import * as THREE from 'three'
 import { ThreeCanvas } from '@/three'
-import { DashboardHeader, BrainSceneMinimal, BrainMinimap, QualitySettings, type QualityPreset } from '@/components/dashboard'
+import { DashboardHeader, BrainSceneMinimal, BrainMinimap, QualitySettings, LoginOverlay, SynapseListPanel, type QualityPreset } from '@/components/dashboard'
+import { ItemShop } from '@/components/shop/ItemShop'
+import { ShipNavigator } from '@/components/ships/ShipNavigator'
+import { CreateShipDialog } from '@/components/ships/CreateShipDialog'
 import { RegionLegend } from '@/components/dashboard/RegionLegend'
 import type { RegionCamera, CameraUpdate } from '@/components/dashboard/BrainSceneMinimal'
-import { shipStore, userStore } from '@/stores'
+import { shipStore, userStore, uiStore } from '@/stores'
+import type { Ship } from '@/stores'
 import { useWebSocketConnection } from '@/hooks'
 import { FUNCTIONAL_BRAIN_REGIONS } from '@/constants/brainRegions'
+import { filterByRegion } from '@/lib/regionFilter'
 import {
   SYNAPSE_CONFIG,
   SYNAPSE_TYPE_COLORS,
-  SYNAPSE_UNLOCK_LEVELS,
   formatPoints,
   formatETA,
   getSynapseTypeLabel,
   type SynapseType,
 } from '@/types/game'
+import { BRAIN_SCALE } from '@/components/brain/core/brainConstants'
 
 // Helper to get dominant synapse type from cluster
 function getDominantSynapseType(typeCounts?: Record<SynapseType, number>): SynapseType {
@@ -74,6 +79,9 @@ export const DiscoveryDashboard: Component = () => {
   // Zoom animation state
   const [isZooming, setIsZooming] = createSignal(false)
 
+  // Ship zoom state - triggers close zoom for ship inspection
+  const [isShipZoom, setIsShipZoom] = createSignal(false)
+
   // Camera position for minimap
   const [cameraPosition, setCameraPosition] = createSignal({ x: 0, y: 0, z: 5 })
   const [cameraTarget, setCameraTarget] = createSignal({ x: 0, y: 0, z: 0 })
@@ -85,6 +93,18 @@ export const DiscoveryDashboard: Component = () => {
   const [qualityExpanded, setQualityExpanded] = createSignal(false)
   const [qualityPreset, setQualityPreset] = createSignal<QualityPreset>('high')
   const [postProcessingEnabled, setPostProcessingEnabled] = createSignal(true)
+
+  // Ship navigator expanded state
+  const [shipNavigatorExpanded, setShipNavigatorExpanded] = createSignal(true)
+
+  // Synapse list panel expanded state
+  const [synapseListExpanded, setSynapseListExpanded] = createSignal(false)
+
+  // Create ship dialog state
+  const [showCreateShipDialog, setShowCreateShipDialog] = createSignal(false)
+
+  // Shop panel state
+  const [showShop, setShowShop] = createSignal(false)
 
   // Handle camera updates from BrainScene
   const handleCameraUpdate = (update: CameraUpdate) => {
@@ -111,10 +131,22 @@ export const DiscoveryDashboard: Component = () => {
     }
   })
 
+  // Filter synapse clusters by selected region
+  const filteredSynapseClusters = createMemo(() =>
+    filterByRegion(shipStore.synapseClusters, selectedRegionIndex())
+  )
+
   // Keyboard handler for region navigation and shortcuts
   onMount(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
+
+      // DEV: Ctrl+Shift+D to bypass login for testing
+      if (e.ctrlKey && e.shiftKey && key === 'd') {
+        e.preventDefault()
+        userStore.loginUser('0xDEV0000000000000000000000000000000000001')
+        return
+      }
 
       // Number keys 1-9 for region selection
       if (key >= '1' && key <= '9') {
@@ -131,9 +163,17 @@ export const DiscoveryDashboard: Component = () => {
         setSelectedRegionIndex(-1)
         setHighlightIntensity(0)
         setShowHelp(false)
+        setShowShop(false)
         setDeployTarget(null)
         setPendingDeploy(null)
         setIsZooming(false)
+        setIsShipZoom(false)
+        return
+      }
+
+      // S for shop
+      if (key === 's') {
+        setShowShop((prev) => !prev)
         return
       }
 
@@ -148,6 +188,7 @@ export const DiscoveryDashboard: Component = () => {
         setZoomTarget(null)
         setSelectedRegionIndex(-1)
         setHighlightIntensity(0)
+        setIsShipZoom(false)
         return
       }
     }
@@ -162,6 +203,9 @@ export const DiscoveryDashboard: Component = () => {
     if (deployTarget()) {
       setDeployTarget(null)
     }
+
+    // Clear ship zoom mode when clicking a space
+    setIsShipZoom(false)
 
     // Store the pending deploy target
     const target = { cluster, position: position.clone() }
@@ -183,15 +227,45 @@ export const DiscoveryDashboard: Component = () => {
     }, 800)
   }
 
-  // Handle ship click
-  const handleShipClick = (ship: unknown) => {
-    console.log('Ship clicked:', ship)
+  // Handle synapse list navigation - just zoom to location without deploy dialog
+  const handleSynapseListNavigate = (cluster: unknown, position: THREE.Vector3) => {
+    setZoomTarget(position.clone())
+    setIsShipZoom(false)
+  }
+
+  // Handle ship click - zoom camera to ship position with close zoom
+  const handleShipClick = (ship: Ship) => {
+    // Select the ship (enables selection ring, fetches synapse details)
+    shipStore.selectShip(ship.id)
+
+    // Apply BRAIN_SCALE to match rendered ship positions
+    const pos = new THREE.Vector3(
+      ship.positionX * BRAIN_SCALE.x,
+      ship.positionY * BRAIN_SCALE.y,
+      ship.positionZ * BRAIN_SCALE.z
+    )
+    setZoomTarget(pos)
+    setIsShipZoom(true)  // Enable close zoom for ship inspection
+  }
+
+  // Login handler - called when user successfully authenticates
+  const handleLogin = () => {
+    // User is now logged in, the UI will update automatically
   }
 
   return (
     <div class="w-screen h-screen bg-black overflow-hidden">
+      {/* Login Overlay - shown when user is not logged in */}
+      <LoginOverlay
+        isOpen={!userStore.isLoggedIn}
+        onLogin={handleLogin}
+      />
+
       {/* Dashboard Header */}
-      <DashboardHeader onHelpClick={() => setShowHelp(true)} />
+      <DashboardHeader
+        onHelpClick={() => setShowHelp(true)}
+        onShopClick={() => setShowShop(true)}
+      />
 
       {/* 3D Brain Visualization */}
       <ThreeCanvas
@@ -207,7 +281,7 @@ export const DiscoveryDashboard: Component = () => {
         }}
       >
         <BrainSceneMinimal
-          spaceClusters={shipStore.synapseClusters}
+          spaceClusters={filteredSynapseClusters()}
           agentClusters={shipStore.shipClusters}
           userAgents={shipStore.userShips}
           recentDiscoveries={shipStore.recentDiscoveries}
@@ -219,6 +293,9 @@ export const DiscoveryDashboard: Component = () => {
           selectedRegionIndex={selectedRegionIndex()}
           highlightIntensity={highlightIntensity()}
           onCameraUpdate={handleCameraUpdate}
+          showIdleShips={uiStore.showIdleShips}
+          selectedShipId={shipStore.selectedShipId}
+          isShipZoom={isShipZoom()}
         />
       </ThreeCanvas>
 
@@ -251,15 +328,22 @@ export const DiscoveryDashboard: Component = () => {
           </div>
         </div>
 
-        {/* Stats cards */}
-        <div class="absolute top-16 left-4 flex flex-col gap-2">
-          {/* Ships status */}
-          <div class="pointer-events-auto px-3 py-2 rounded-lg bg-black/60 backdrop-blur-sm border border-teal-500/30">
-            <p class="text-xs text-gray-400">Active Ships</p>
-            <p class="text-lg font-bold text-teal-400">
-              {shipStore.userShips.filter((s: { status: string }) => s.status === 'exploring').length} / {shipStore.userShips.length}
-            </p>
-          </div>
+        {/* Stats cards, Ship Navigator, and Synapse List */}
+        <div class="absolute top-16 left-4 flex flex-col gap-2 w-56">
+          {/* Ship Navigator */}
+          <ShipNavigator
+            onFocusShip={handleShipClick}
+            onCreateShip={() => setShowCreateShipDialog(true)}
+            isExpanded={shipNavigatorExpanded()}
+            onToggle={() => setShipNavigatorExpanded(!shipNavigatorExpanded())}
+          />
+
+          {/* Synapse List Panel */}
+          <SynapseListPanel
+            onNavigate={handleSynapseListNavigate}
+            isExpanded={synapseListExpanded()}
+            onToggle={() => setSynapseListExpanded(!synapseListExpanded())}
+          />
 
           {/* Discoveries today */}
           <div class="pointer-events-auto px-3 py-2 rounded-lg bg-black/60 backdrop-blur-sm border border-purple-500/30">
@@ -295,6 +379,7 @@ export const DiscoveryDashboard: Component = () => {
           >
             <h2 class="text-xl font-bold text-white mb-4">Keyboard Shortcuts</h2>
             <div class="space-y-2 text-gray-300">
+              <p><kbd class="px-2 py-1 bg-gray-800 rounded text-xs">S</kbd> Toggle shop</p>
               <p><kbd class="px-2 py-1 bg-gray-800 rounded text-xs">H</kbd> Toggle help</p>
               <p><kbd class="px-2 py-1 bg-gray-800 rounded text-xs">R</kbd> Reset camera</p>
               <p><kbd class="px-2 py-1 bg-gray-800 rounded text-xs">1-9</kbd> Navigate regions</p>
@@ -310,6 +395,28 @@ export const DiscoveryDashboard: Component = () => {
         </div>
       </Show>
 
+      {/* Shop Panel - Slide-in from right */}
+      <Show when={showShop()}>
+        <div
+          class="absolute inset-0 bg-black/60 backdrop-blur-sm z-50"
+          onClick={() => setShowShop(false)}
+        >
+          <div
+            class="absolute right-0 top-0 bottom-0 w-full max-w-lg bg-[var(--background-secondary)] border-l border-[var(--card-border)] shadow-2xl animate-slide-in-right overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <button
+              onClick={() => setShowShop(false)}
+              class="absolute top-4 right-4 z-10 w-8 h-8 rounded-lg bg-gray-800/80 hover:bg-gray-700 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+            >
+              ✕
+            </button>
+            <ItemShop class="h-full" />
+          </div>
+        </div>
+      </Show>
+
       {/* Enhanced Ship Deployment Dialog */}
       <Show when={deployTarget()}>
         {(() => {
@@ -319,10 +426,10 @@ export const DiscoveryDashboard: Component = () => {
           const config = SYNAPSE_CONFIG[dominantType]
           const typeColor = SYNAPSE_TYPE_COLORS[dominantType]
           const regionName = getRegionFromPosition(cluster.positionX, cluster.positionY, cluster.positionZ)
-          const unlockLevel = SYNAPSE_UNLOCK_LEVELS[dominantType]
-          const userLevel = userStore.brainLevel ?? 1
+          const unlockLevel = SYNAPSE_CONFIG[dominantType].unlockUserLevel
+          const userLevel = userStore.userLevel
           const isLocked = userLevel < unlockLevel
-          const idleShips = shipStore.userShips.filter((s: { status: string }) => s.status === 'idle')
+          const idleShips = shipStore.idleShips
 
           return (
             <div
@@ -378,10 +485,6 @@ export const DiscoveryDashboard: Component = () => {
                       <span class="text-amber-400 font-bold">{formatPoints(config.agiReward)}</span>
                       <span class="text-xs text-gray-400 ml-1">$AGI</span>
                     </div>
-                    <div>
-                      <span class="text-purple-400 font-bold">{formatPoints(config.brainXpReward)}</span>
-                      <span class="text-xs text-gray-400 ml-1">Brain XP</span>
-                    </div>
                     <div class="px-2 py-1 rounded text-xs font-medium" classList={{
                       'bg-green-500/20 text-green-400': config.distribution === 'fair_share',
                       'bg-amber-500/20 text-amber-400': config.distribution === 'lottery',
@@ -395,7 +498,7 @@ export const DiscoveryDashboard: Component = () => {
                 <Show when={isLocked}>
                   <div class="p-3 rounded-lg bg-red-900/20 border border-red-500/30 mb-4">
                     <p class="text-sm text-red-400">
-                      🔒 Requires Brain Level {unlockLevel} (You: Lv.{userLevel})
+                      🔒 Requires User Level {unlockLevel} (You: L{userLevel})
                     </p>
                   </div>
                 </Show>
@@ -414,12 +517,15 @@ export const DiscoveryDashboard: Component = () => {
                   <button
                     class="flex-1 py-3 bg-teal-500 hover:bg-teal-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
                     disabled={idleShips.length === 0 || isLocked}
-                    onClick={() => {
-                      const idleShip = idleShips[0]
-                      if (idleShip) {
-                        console.log('Deploying ship', idleShip.id, 'to cluster', cluster.id)
+                    onClick={async () => {
+                      const ship = idleShips[0]
+                      const target = deployTarget()
+                      if (ship && target) {
+                        const success = await shipStore.deployShip(ship.id, target.x, target.y, target.z)
+                        if (success) {
+                          setDeployTarget(null)
+                        }
                       }
-                      setDeployTarget(null)
                     }}
                   >
                     {isLocked ? 'Locked' : 'Deploy Ship'}
@@ -475,11 +581,19 @@ export const DiscoveryDashboard: Component = () => {
               <p class="text-sm font-medium text-purple-300">
                 {FUNCTIONAL_BRAIN_REGIONS[selectedRegionIndex()]?.name ?? 'Unknown Region'}
               </p>
-              <p class="text-xs text-gray-400">Press 0 or Esc to clear</p>
+              <p class="text-xs text-gray-400">
+                {filteredSynapseClusters().length} clusters • Press 0 or Esc to clear
+              </p>
             </div>
           </div>
         </Show>
       </div>
+
+      {/* Create Ship Dialog */}
+      <CreateShipDialog
+        open={showCreateShipDialog()}
+        onOpenChange={setShowCreateShipDialog}
+      />
     </div>
   )
 }

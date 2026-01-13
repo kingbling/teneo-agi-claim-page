@@ -1,374 +1,450 @@
-import { useRef, useMemo, useCallback, useState, useEffect } from 'react'
-import { useFrame, useThree } from '@react-three/fiber'
-import { Html } from '@react-three/drei'
+import { onMount, onCleanup, createEffect, createMemo, createSignal, type Component } from 'solid-js'
 import * as THREE from 'three'
-import type { SpaceCluster, SpaceTier } from '@/types/agent'
-import { useAgentStore } from '@/stores/agentStore'
+import { useThree, useFrame } from '@/three/hooks'
+import type { SynapseType, UserLevel } from '@/types/game'
+import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG } from '@/types/game'
+import { BRAIN_SCALE, TRANCE_CONFIG, constrainToBrainShape } from './core/brainConstants'
+import type { SynapseCluster } from '@/stores/shipStore'
 
-// Brain coordinate scaling - applied to normalize cluster positions
-const BRAIN_SCALE = { x: 1.3, y: 1.0, z: 1.1 }
-
-// Tier colors based on CSS variables - maps to visual importance
-// Using RGB normalized values from CSS tier colors
-const TIER_COLORS: Record<SpaceTier, [number, number, number]> = {
-  common: [0.61, 0.64, 0.68],     // --tier-common #9ca3af
-  trait: [0.66, 0.55, 0.98],      // --tier-trait #a78bfa
-  team: [0.18, 0.83, 0.75],       // --tier-team #2dd4bf
-  legendary: [0.98, 0.75, 0.14],  // --tier-legendary #fbbf24
-  mythic: [0.96, 0.45, 0.71],     // --tier-mythic #f472b6
+// Synapse type priority for determining dominant type (rarity order)
+const SYNAPSE_TYPE_PRIORITY: Record<SynapseType, number> = {
+  minor: 1,
+  complex: 2,
+  deep: 3,
+  core: 4,
+  rare: 5,
+  legendary: 6,
+  unique: 7,
 }
 
-// Tier priority for determining dominant tier (higher = more important)
-const TIER_PRIORITY: Record<SpaceTier, number> = {
-  common: 1,
-  trait: 2,
-  team: 3,
-  legendary: 4,
-  mythic: 5,
+// Phase 2.3: Brightness multipliers by rarity - expanded range for visual hierarchy
+// rare/legendary/unique exceed bloom threshold (0.75) to trigger glow
+const SYNAPSE_BRIGHTNESS_MULTIPLIERS: Record<SynapseType, number> = {
+  minor: 0.5,       // Muted background
+  complex: 0.6,     // Slightly brighter
+  deep: 0.7,        // Noticeable step up
+  core: 0.85,       // Getting bright
+  rare: 1.0,        // Full brightness
+  legendary: 1.2,   // EXCEEDS 1.0 → triggers bloom!
+  unique: 1.5,      // DRAMATICALLY bright → definite bloom
 }
 
-// Get the dominant tier from tier counts
-function getDominantTier(tierCounts?: Record<SpaceTier, number>): SpaceTier {
-  if (!tierCounts) return 'common'
+// Size multipliers by synapse type - subtle visual hierarchy
+const SYNAPSE_SIZE_MULTIPLIERS: Record<SynapseType, number> = {
+  minor: 1.0,      // Base size
+  complex: 1.1,    // Slightly larger
+  deep: 1.2,       // A bit larger
+  core: 1.3,       // Noticeable
+  rare: 1.4,       // Slightly more
+  legendary: 1.5,  // Visible difference
+  unique: 1.6,     // Most prominent
+}
 
-  // Find the highest priority tier that has spaces
-  let dominantTier: SpaceTier = 'common'
-  let highestPriority = 0
+// Color mapping for 7 synapse types (RGB normalized from SYNAPSE_TYPE_COLORS)
+const SYNAPSE_COLOR_MAP: Record<SynapseType, [number, number, number]> = {
+  minor:     [SYNAPSE_TYPE_COLORS.minor.r, SYNAPSE_TYPE_COLORS.minor.g, SYNAPSE_TYPE_COLORS.minor.b],         // Blue
+  complex:   [SYNAPSE_TYPE_COLORS.complex.r, SYNAPSE_TYPE_COLORS.complex.g, SYNAPSE_TYPE_COLORS.complex.b],   // Purple
+  deep:      [SYNAPSE_TYPE_COLORS.deep.r, SYNAPSE_TYPE_COLORS.deep.g, SYNAPSE_TYPE_COLORS.deep.b],           // Teal
+  core:      [SYNAPSE_TYPE_COLORS.core.r, SYNAPSE_TYPE_COLORS.core.g, SYNAPSE_TYPE_COLORS.core.b],           // Gold
+  rare:      [SYNAPSE_TYPE_COLORS.rare.r, SYNAPSE_TYPE_COLORS.rare.g, SYNAPSE_TYPE_COLORS.rare.b],           // Red-pink
+  legendary: [SYNAPSE_TYPE_COLORS.legendary.r, SYNAPSE_TYPE_COLORS.legendary.g, SYNAPSE_TYPE_COLORS.legendary.b], // Bright magenta
+  unique:    [SYNAPSE_TYPE_COLORS.unique.r, SYNAPSE_TYPE_COLORS.unique.g, SYNAPSE_TYPE_COLORS.unique.b],     // Brilliant yellow
+}
 
-  for (const [tier, count] of Object.entries(tierCounts)) {
-    if (count > 0 && TIER_PRIORITY[tier as SpaceTier] > highestPriority) {
-      dominantTier = tier as SpaceTier
-      highestPriority = TIER_PRIORITY[tier as SpaceTier]
+function getDominantSynapseType(typeCounts?: Record<SynapseType, number>): SynapseType {
+  if (!typeCounts) return 'minor'
+
+  let dominantType: SynapseType = 'minor'
+  let highestCount = 0
+
+  // Return the type with the highest COUNT (most common in cluster)
+  for (const [type, count] of Object.entries(typeCounts)) {
+    if (count > highestCount) {
+      dominantType = type as SynapseType
+      highestCount = count
+    } else if (count === highestCount && count > 0) {
+      // Tie-breaker: prefer rarer types when counts are equal
+      if (SYNAPSE_TYPE_PRIORITY[type as SynapseType] > SYNAPSE_TYPE_PRIORITY[dominantType]) {
+        dominantType = type as SynapseType
+      }
     }
   }
 
-  return dominantTier
+  return dominantType
 }
 
-// Light Pillars component for legendary/mythic spaces
-interface LightPillarsProps {
-  clusters: SpaceCluster[]
-  opacity?: number
+// Vertex shader for synapse markers with state-based animation
+// Enhanced with dramatic type-based visual hierarchy and progress rings
+export const SYNAPSE_VERTEX_SHADER = `
+  attribute vec3 aColor;
+  attribute float aSize;
+  attribute float aState;
+  attribute float aSynapseType;
+  attribute float aProgress;  // 0.0-1.0 for exploration progress
+  attribute float aHovered;   // 1.0 if hovered, 0.0 otherwise
+
+  uniform float uTime;
+
+  varying vec3 vColor;
+  varying float vState;
+  varying float vSynapseType;
+  varying float vProgress;
+  varying float vHovered;
+
+  void main() {
+    vColor = aColor;
+    vState = aState;
+    vSynapseType = aSynapseType;
+    vProgress = aProgress;
+    vHovered = aHovered;
+
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+
+    float pulse = 1.0;
+    float sizeMultiplier = 1.0;
+
+    // State-based animation: 0=undiscovered, 1=exploring, 2=discovered
+    if (aState < 0.5) {
+      // Undiscovered: subtle breathing
+      pulse = 1.0 + sin(uTime * 1.5 + position.x * 4.0) * 0.05;
+      sizeMultiplier = 0.9;
+    } else if (aState < 1.5) {
+      // Being explored: gentle pulsing
+      pulse = 1.0 + sin(uTime * 3.0 + position.y * 4.0) * 0.1;
+      sizeMultiplier = 1.1;
+    } else {
+      // Discovered: stable
+      pulse = 1.0 + sin(uTime * 0.8) * 0.03;
+      sizeMultiplier = 1.0;
+    }
+
+    // Type-based animations - subtle effects for rarer types
+    // Core synapses (type 3) have subtle pulse
+    if (aSynapseType > 2.5 && aSynapseType < 3.5) {
+      pulse *= 1.0 + sin(uTime * 2.0 + position.z * 4.0) * 0.05;
+    }
+
+    // Rare synapses (type 4) have gentle shimmer
+    if (aSynapseType > 3.5 && aSynapseType < 4.5) {
+      pulse *= 1.0 + sin(uTime * 2.5 + position.z * 5.0) * 0.06;
+    }
+
+    // Legendary synapses (type 5) have soft shimmer
+    if (aSynapseType > 4.5 && aSynapseType < 5.5) {
+      pulse *= 1.0 + sin(uTime * 3.0) * 0.08;
+    }
+
+    // Unique synapses (type 6) have noticeable pulse
+    if (aSynapseType > 5.5) {
+      pulse *= 1.0 + sin(uTime * 3.0) * 0.1;
+    }
+
+    // HOVER EFFECT: Scale up when hovered
+    if (aHovered > 0.5) {
+      sizeMultiplier *= 1.8;  // Make hovered synapse larger
+      pulse *= 1.0 + sin(uTime * 6.0) * 0.15;  // Faster pulse when hovered
+    }
+
+    // Distance-based scaling for consistent appearance
+    float distScale = 80.0 / max(-mvPosition.z, 1.0);
+    gl_PointSize = clamp(aSize * pulse * sizeMultiplier * distScale, 2.0, 32.0);
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`
+
+// Fragment shader for synapse markers with distinct state visuals
+// Enhanced with dramatic type-based visual hierarchy and progress rings
+export const SYNAPSE_FRAGMENT_SHADER = `
+  uniform float uTime;
+
+  varying vec3 vColor;
+  varying float vState;
+  varying float vSynapseType;
+  varying float vProgress;
+  varying float vHovered;
+
+  // Helper: Calculate angle from center (0-1 normalized)
+  float getAngle(vec2 coord) {
+    float angle = atan(coord.y, coord.x);
+    return (angle + 3.14159) / (2.0 * 3.14159);  // Normalize to 0-1
+  }
+
+  void main() {
+    vec2 center = gl_PointCoord - vec2(0.5);
+    float dist = length(center);
+
+    // Soft circular falloff
+    float alpha = 1.0 - smoothstep(0.2, 0.5, dist);
+
+    vec3 finalColor = vColor;
+
+    // State-based visual treatment
+    if (vState < 0.5) {
+      // Undiscovered: muted, mysterious, inviting exploration
+      finalColor *= 0.6;
+      finalColor = mix(finalColor, vec3(0.3, 0.4, 0.55), 0.3);
+      alpha *= 0.7;
+      // Soft glow core
+      float dimCore = smoothstep(0.15, 0.0, dist) * 0.3;
+      finalColor += dimCore * vec3(0.5, 0.55, 0.7);
+    } else if (vState < 1.5) {
+      // Being explored: vibrant with PROGRESS RING
+      finalColor = mix(finalColor, vec3(1.0, 0.85, 0.3), 0.4);
+      alpha *= 1.2;
+
+      // Hot core (smaller to make room for progress ring)
+      float warmCore = smoothstep(0.12, 0.0, dist) * 0.6;
+      finalColor += warmCore * vec3(1.0, 0.75, 0.35);
+
+      // PROGRESS RING - animated sweeping arc
+      float ringInner = 0.32;
+      float ringOuter = 0.42;
+      float ringMask = smoothstep(ringInner - 0.02, ringInner, dist) * smoothstep(ringOuter + 0.02, ringOuter, dist);
+
+      // Calculate angle for progress visualization
+      float angle = getAngle(center);
+
+      // Animated rotation offset (clockwise sweep)
+      float rotationSpeed = 0.5;
+      float rotation = fract(uTime * rotationSpeed);
+
+      // Adjust angle with rotation
+      float adjustedAngle = fract(angle + rotation);
+
+      // Progress arc: filled from 0 to vProgress (simulated as 0.3-0.8 cycling animation if no real data)
+      float simulatedProgress = 0.5 + 0.4 * sin(uTime * 0.3);  // Cycles between 0.1 and 0.9
+      float effectiveProgress = max(vProgress, simulatedProgress);
+
+      // Progress fill with smooth edge
+      float progressFill = smoothstep(effectiveProgress + 0.02, effectiveProgress - 0.02, adjustedAngle);
+
+      // Colored progress ring: bright cyan filled, dim gray unfilled
+      vec3 progressColor = mix(vec3(0.2, 0.25, 0.3), vec3(0.3, 0.95, 1.0), progressFill);
+      progressColor *= ringMask * 1.2;
+
+      // Leading edge glow (bright spark at progress front)
+      float leadingEdge = smoothstep(0.05, 0.0, abs(adjustedAngle - effectiveProgress)) * ringMask;
+      progressColor += leadingEdge * vec3(1.0, 1.0, 1.0) * 1.5;
+
+      finalColor += progressColor;
+      alpha = max(alpha, ringMask * 0.95);
+
+      // Outer glow halo
+      float halo = smoothstep(0.48, 0.38, dist) * 0.4;
+      alpha += halo * 0.4;
+
+    } else {
+      // Discovered: triumphant, bright, accomplished
+      finalColor *= 1.3;
+      alpha *= 1.1;
+      // Bright white core
+      float whiteCore = smoothstep(0.12, 0.0, dist) * 0.6;
+      finalColor = mix(finalColor, vec3(1.0), whiteCore);
+      // Success ring (greenish tint)
+      float successRing = smoothstep(0.32, 0.38, dist) * smoothstep(0.48, 0.4, dist);
+      finalColor += successRing * vec3(0.4, 0.9, 0.5) * 0.5;
+    }
+
+    // Type-based enhancements - restored for visual hierarchy
+
+    // Core synapses (type 3): warm golden undertone
+    if (vSynapseType > 2.5 && vSynapseType < 3.5) {
+      float goldTint = smoothstep(0.3, 0.0, dist) * 0.25;
+      finalColor += goldTint * vec3(1.0, 0.85, 0.3);
+    }
+
+    // Rare synapses (type 4): sparkle effect + outer glow
+    if (vSynapseType > 3.5 && vSynapseType < 4.5) {
+      alpha *= 1.15;
+      float sparkle = smoothstep(0.08, 0.0, dist) * 0.4;
+      finalColor += sparkle * vec3(1.0, 0.9, 0.85);
+      // Red-ish outer ring
+      float rareRing = smoothstep(0.38, 0.42, dist) * smoothstep(0.5, 0.44, dist);
+      finalColor += rareRing * vec3(1.0, 0.5, 0.6) * 0.5;
+    }
+
+    // Legendary synapses (type 5): brilliant with magenta halo
+    if (vSynapseType > 4.5 && vSynapseType < 5.5) {
+      alpha *= 1.2;
+      float brilliance = smoothstep(0.06, 0.0, dist) * 0.5;
+      finalColor += brilliance * vec3(1.0, 1.0, 0.95);
+      // Magenta outer halo
+      float legendaryHalo = smoothstep(0.35, 0.45, dist) * smoothstep(0.55, 0.48, dist);
+      finalColor += legendaryHalo * vec3(1.0, 0.5, 1.0) * 0.6;
+    }
+
+    // Unique synapses (type 6): dramatic beacon with double ring
+    if (vSynapseType > 5.5) {
+      alpha *= 1.3;
+      // Brilliant white core
+      float beacon = smoothstep(0.04, 0.0, dist) * 0.6;
+      finalColor += beacon * vec3(1.0, 1.0, 0.9);
+      // Inner golden ring
+      float innerRing = smoothstep(0.2, 0.25, dist) * smoothstep(0.35, 0.28, dist);
+      finalColor += innerRing * vec3(1.0, 0.9, 0.4) * 0.6;
+      // Outer yellow halo
+      float outerHalo = smoothstep(0.4, 0.5, dist) * smoothstep(0.6, 0.52, dist);
+      finalColor += outerHalo * vec3(1.0, 1.0, 0.5) * 0.5;
+    }
+
+    // HOVER HIGHLIGHT: Bright cyan glow ring when hovered
+    if (vHovered > 0.5) {
+      // Brighten the whole synapse
+      finalColor *= 1.4;
+
+      // Add bright cyan outer ring
+      float hoverRing = smoothstep(0.35, 0.42, dist) * smoothstep(0.5, 0.44, dist);
+      finalColor += hoverRing * vec3(0.3, 1.0, 1.0) * 1.5;
+
+      // Add inner white glow
+      float hoverCore = smoothstep(0.15, 0.0, dist) * 0.5;
+      finalColor += hoverCore * vec3(1.0, 1.0, 1.0);
+
+      // Boost alpha for visibility
+      alpha = max(alpha, 0.95);
+    }
+
+    // Allow rarer types to exceed 1.0 for bloom effect
+    finalColor = min(finalColor, vec3(1.5));
+    gl_FragColor = vec4(finalColor, alpha);
+  }
+`
+
+interface SynapseMarkersProps {
+  clusters: SynapseCluster[]
+  userLevel?: UserLevel  // For showing locked synapse types (Masterplan 2026: USDC-based level)
+  onSynapseClick?: (cluster: SynapseCluster, position: THREE.Vector3) => void
 }
 
-function LightPillars({ clusters, opacity = 1 }: LightPillarsProps) {
-  const pillarMaterialRef = useRef<THREE.ShaderMaterial>(null)
-  const brainScale = useMemo(() => BRAIN_SCALE, [])
+export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
+  const { scene, gl, camera } = useThree()
 
-  // Get scaled time for trance effect
-  const TRANCE_TIME_SCALE = 0.05  // Slow down time during trance
-  const NORMAL_TIME_SCALE = 1.0   // Normal time progression
-  const userAgents = useAgentStore((state) => state.userAgents)
-  const timeScale = userAgents.some(a => a.tranceActive) ? TRANCE_TIME_SCALE : NORMAL_TIME_SCALE
-  const scaledTimeRef = useRef(0)
-  const lastTimeRef = useRef(0)
+  // Three.js objects (imperative refs)
+  let pointsObject: THREE.Points | null = null
+  let geometry: THREE.BufferGeometry | null = null
+  let material: THREE.ShaderMaterial | null = null
 
-  // Find legendary and mythic clusters
-  const pillarData = useMemo(() => {
-    const pillars: {
-      position: THREE.Vector3
-      tier: SpaceTier
-      height: number
-      color: [number, number, number]
-    }[] = []
+  // Raycaster for click/hover detection
+  let raycaster: THREE.Raycaster | null = null
+  let pointer = new THREE.Vector2()
 
-    clusters.forEach(cluster => {
-      const dominantTier = getDominantTier(cluster.tierCounts)
+  // Track cluster positions for raycasting
+  let clusterPositions: THREE.Vector3[] = []
 
-      // Only create pillars for legendary (tier 3) and mythic (tier 4)
-      if (dominantTier === 'legendary' || dominantTier === 'mythic') {
-        const x = cluster.positionX * brainScale.x
-        const y = cluster.positionY * brainScale.y
-        const z = cluster.positionZ * brainScale.z
+  // Hover attribute buffer (updated each frame)
+  let hoveredAttrBuffer: Float32Array | null = null
+  let hoveredAttr: THREE.BufferAttribute | null = null
 
-        // Height based on tier and space count
-        const MYTHIC_BASE_HEIGHT = 1.5
-        const LEGENDARY_BASE_HEIGHT = 0.8
-        const HEIGHT_SCALE_FACTOR = 0.2
-        const baseHeight = dominantTier === 'mythic' ? MYTHIC_BASE_HEIGHT : LEGENDARY_BASE_HEIGHT
-        const height = baseHeight + Math.log10(Math.max(1, cluster.spaceCount)) * HEIGHT_SCALE_FACTOR
+  // Track drag state
+  let pointerDownPos: { x: number; y: number } | null = null
+  let isDragging = false
+  const DRAG_THRESHOLD = 5
 
-        pillars.push({
-          position: new THREE.Vector3(x, y, z),
-          tier: dominantTier,
-          height,
-          color: TIER_COLORS[dominantTier]
-        })
-      }
-    })
+  // Time tracking for scaled time (trance mode)
+  let scaledTime = 0
+  let lastRealTime = 0
 
-    return pillars
-  }, [clusters, brainScale])
+  // Hover state signal for tooltip
+  const [hoveredIndex, setHoveredIndex] = createSignal<number | null>(null)
+  const [tooltipPosition, setTooltipPosition] = createSignal<{ x: number; y: number } | null>(null)
 
-  useFrame(({ clock }) => {
-    const realTime = clock.getElapsedTime()
-    const deltaTime = realTime - lastTimeRef.current
-    lastTimeRef.current = realTime
-    scaledTimeRef.current += deltaTime * timeScale
-    const time = scaledTimeRef.current
+  // Build geometry data from clusters
+  const geometryData = createMemo(() => {
+    const clusters = props.clusters
+    const userLevel = props.userLevel ?? 1 as UserLevel
 
-    if (pillarMaterialRef.current) {
-      pillarMaterialRef.current.uniforms.uTime.value = time
-      pillarMaterialRef.current.uniforms.uOpacity.value = opacity
-    }
-  })
-
-  if (pillarData.length === 0) return null
-
-  return (
-    <group>
-      {pillarData.map((pillar, i) => {
-        const MYTHIC_TIER_VALUE = 4
-        const LEGENDARY_TIER_VALUE = 3
-        const MYTHIC_WIDTH = 0.12
-        const LEGENDARY_WIDTH = 0.08
-        const tierValue = pillar.tier === 'mythic' ? MYTHIC_TIER_VALUE : LEGENDARY_TIER_VALUE
-        const width = pillar.tier === 'mythic' ? MYTHIC_WIDTH : LEGENDARY_WIDTH
-
-        return (
-          <mesh
-            key={`pillar-${i}`}
-            position={[pillar.position.x, pillar.position.y + pillar.height / 2, pillar.position.z]}
-          >
-            <planeGeometry args={[width, pillar.height, 1, 32]} />
-            <shaderMaterial
-              ref={i === 0 ? pillarMaterialRef : undefined}
-              uniforms={{
-                uTime: { value: 0 },
-                uOpacity: { value: opacity },
-              }}
-              vertexShader={`
-                uniform float uTime;
-                varying vec2 vUv;
-                varying float vTier;
-
-                void main() {
-                  vUv = uv;
-                  vTier = ${tierValue.toFixed(1)};
-
-                  // Billboard effect - always face camera
-                  vec4 mvPosition = modelViewMatrix * vec4(0.0, position.y, 0.0, 1.0);
-                  mvPosition.xy += position.xy;
-
-                  gl_Position = projectionMatrix * mvPosition;
-                }
-              `}
-              fragmentShader={`
-                uniform float uTime;
-                uniform float uOpacity;
-
-                varying vec2 vUv;
-                varying float vTier;
-
-                void main() {
-                  // Fade from bottom (bright) to top (transparent)
-                  float heightFade = 1.0 - vUv.y;
-                  heightFade = pow(heightFade, 0.5);
-
-                  // Radial fade from center
-                  float radialDist = abs(vUv.x - 0.5) * 2.0;
-                  float radialFade = 1.0 - pow(radialDist, 2.0);
-
-                  // Energy flow animation
-                  float flow = sin(vUv.y * 20.0 - uTime * 4.0) * 0.5 + 0.5;
-                  float flowPulse = sin(uTime * 2.5 + vUv.y * 5.0) * 0.3 + 0.7;
-
-                  // Core brightness
-                  float core = smoothstep(0.5, 0.0, radialDist);
-
-                  // Base color
-                  vec3 color = vec3(${pillar.color[0].toFixed(3)}, ${pillar.color[1].toFixed(3)}, ${pillar.color[2].toFixed(3)});
-
-                  // Mythic rainbow shimmer
-                  if (vTier >= 4.0) {
-                    float hue = fract(vUv.y * 2.0 + uTime * 0.5);
-                    vec3 rainbow = vec3(
-                      0.5 + 0.5 * sin(hue * 6.28318),
-                      0.5 + 0.5 * sin(hue * 6.28318 + 2.094),
-                      0.5 + 0.5 * sin(hue * 6.28318 + 4.188)
-                    );
-                    float shimmer = 0.8 + 0.2 * sin(uTime * 8.0 + vUv.y * 30.0);
-                    color = mix(color, rainbow, 0.3 * shimmer);
-                  }
-
-                  // Energy flow brightness
-                  color = mix(color, vec3(1.0), flow * 0.2 * core);
-                  color = mix(color, vec3(1.0), core * 0.4);
-
-                  // Final alpha
-                  float alpha = heightFade * radialFade * flowPulse * uOpacity;
-                  alpha *= (0.2 + core * 0.6);
-
-                  gl_FragColor = vec4(color, alpha * 0.5);
-                }
-              `}
-              transparent
-              side={THREE.DoubleSide}
-              depthWrite={false}
-              blending={THREE.AdditiveBlending}
-            />
-          </mesh>
-        )
-      })}
-    </group>
-  )
-}
-
-interface SpaceMarkersProps {
-  clusters: SpaceCluster[]
-  onSpaceClick?: (cluster: SpaceCluster, position: THREE.Vector3) => void
-  opacity?: number
-  hideTooltip?: boolean
-  agents?: { positionX: number; positionY: number; positionZ: number; state: string }[]
-}
-
-export function SpaceMarkers({
-  clusters,
-  onSpaceClick,
-  opacity = 1,
-  hideTooltip = false,
-  agents = [],
-}: SpaceMarkersProps) {
-  const pointsRef = useRef<THREE.Points>(null)
-  const materialRef = useRef<THREE.ShaderMaterial>(null)
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
-  const { camera, raycaster, pointer, gl } = useThree()
-
-  // Track drag state to prevent click after dragging
-  const pointerDownPos = useRef<{ x: number; y: number } | null>(null)
-  const isDragging = useRef(false)
-  const DRAG_THRESHOLD = 5 // pixels - minimum movement to be considered a drag
-
-  useEffect(() => {
-    const canvas = gl.domElement
-
-    const handlePointerDown = (e: PointerEvent) => {
-      pointerDownPos.current = { x: e.clientX, y: e.clientY }
-      isDragging.current = false
+    if (clusters.length === 0) {
+      return null
     }
 
-    const handlePointerMove = (e: PointerEvent) => {
-      if (pointerDownPos.current) {
-        const dx = e.clientX - pointerDownPos.current.x
-        const dy = e.clientY - pointerDownPos.current.y
-        if (Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD) {
-          isDragging.current = true
-        }
-      }
-    }
-
-    const handlePointerUp = () => {
-      pointerDownPos.current = null
-    }
-
-    canvas.addEventListener('pointerdown', handlePointerDown)
-    canvas.addEventListener('pointermove', handlePointerMove)
-    canvas.addEventListener('pointerup', handlePointerUp)
-
-    return () => {
-      canvas.removeEventListener('pointerdown', handlePointerDown)
-      canvas.removeEventListener('pointermove', handlePointerMove)
-      canvas.removeEventListener('pointerup', handlePointerUp)
-    }
-  }, [gl])
-
-  const brainScale = useMemo(() => BRAIN_SCALE, [])
-
-  // Build positions, colors, sizes based on cluster state and tier
-  const { positions, colors, sizes, states, tiers, clusterPositions } = useMemo(() => {
     const positions = new Float32Array(clusters.length * 3)
     const colors = new Float32Array(clusters.length * 3)
     const sizes = new Float32Array(clusters.length)
-    const states = new Float32Array(clusters.length)  // 0=undiscovered, 1=being_solved, 2=discovered
-    const tiers = new Float32Array(clusters.length)   // 0=common, 1=trait, 2=team, 3=legendary, 4=mythic
-    const clusterPositions: THREE.Vector3[] = []
+    const states = new Float32Array(clusters.length)
+    const synapseTypes = new Float32Array(clusters.length)
+    const progress = new Float32Array(clusters.length)  // Exploration progress 0-1
+    const clusterPositionsArray: THREE.Vector3[] = []
 
     clusters.forEach((cluster, i) => {
-      // Position already in brain space from server
-      const x = cluster.positionX * brainScale.x
-      const y = cluster.positionY * brainScale.y
-      const z = cluster.positionZ * brainScale.z
+      // Apply brain shape constraint to keep synapses INSIDE the brain volume
+      const [x, y, z] = constrainToBrainShape(
+        cluster.positionX,
+        cluster.positionY,
+        cluster.positionZ
+      )
 
       positions[i * 3] = x
       positions[i * 3 + 1] = y
       positions[i * 3 + 2] = z
-      clusterPositions.push(new THREE.Vector3(x, y, z))
+      clusterPositionsArray.push(new THREE.Vector3(x, y, z))
 
-      // Calculate discovery ratio
-      const discoveryRatio = cluster.discoveredCount / Math.max(1, cluster.spaceCount)
-      const solvingRatio = cluster.beingSolvedCount / Math.max(1, cluster.spaceCount)
+      // Discovery ratios
+      const discoveryRatio = cluster.discoveredCount / Math.max(1, cluster.synapseCount)
+      const exploringRatio = cluster.beingExploredCount / Math.max(1, cluster.synapseCount)
 
-      // Get dominant tier from cluster
-      const dominantTier = getDominantTier(cluster.tierCounts)
+      // Get dominant synapse type
+      const dominantType = getDominantSynapseType(cluster.typeCounts)
+      const typeIndex = SYNAPSE_TYPE_PRIORITY[dominantType] - 1  // 0-6 for shader
+      synapseTypes[i] = typeIndex
 
-      // Tier encoding for shader
-      const tierMap: Record<SpaceTier, number> = {
-        common: 0, trait: 1, team: 2, legendary: 3, mythic: 4
-      }
-      tiers[i] = tierMap[dominantTier]
+      // Check if this synapse type is locked for the user (Masterplan 2026: USDC-based level gating)
+      const unlockLevel = SYNAPSE_CONFIG[dominantType].unlockUserLevel
+      const isLocked = userLevel < unlockLevel
 
-      // Size based on space count and tier importance
-      const BASE_SIZE = 6.0
-      const SIZE_SCALE_FACTOR = 0.4
-      const TIER_BOOST_FACTOR = 0.15
-      const weightScale = 1.0 + Math.log10(Math.max(1, cluster.spaceCount)) * SIZE_SCALE_FACTOR
-      const tierBoost = 1.0 + (TIER_PRIORITY[dominantTier] - 1) * TIER_BOOST_FACTOR  // Higher tiers are slightly larger
-      sizes[i] = BASE_SIZE * weightScale * tierBoost
+      // Size based on synapse count and type rarity - tiny clean markers
+      const baseSize = 2.5  // Tiny base for clean look
+      const weightScale = 1.0 + Math.log10(Math.max(1, cluster.synapseCount)) * 0.05  // Very subtle scaling
+      const typeMultiplier = SYNAPSE_SIZE_MULTIPLIERS[dominantType]
+      sizes[i] = baseSize * weightScale * typeMultiplier
 
-      // State encoding for shader
-      const DISCOVERY_THRESHOLD = 0.5
-      const SOLVING_THRESHOLD = 0.1
-      const STATE_DISCOVERED = 2.0
-      const STATE_SOLVING = 1.0
-      const STATE_UNDISCOVERED = 0.0
-
-      if (discoveryRatio > DISCOVERY_THRESHOLD) {
-        states[i] = STATE_DISCOVERED  // Mostly discovered
-      } else if (solvingRatio > SOLVING_THRESHOLD || discoveryRatio > 0) {
-        states[i] = STATE_SOLVING  // Being solved / partially discovered
+      // State: 0=undiscovered, 1=exploring, 2=discovered
+      if (discoveryRatio > 0.5) {
+        states[i] = 2.0
+        progress[i] = 1.0  // Fully complete
+      } else if (exploringRatio > 0.1 || discoveryRatio > 0) {
+        states[i] = 1.0
+        // Progress based on discovery + exploring ratio (0.0-0.99)
+        // Use 0.0 to let the shader animate a sweeping progress if no real data
+        progress[i] = Math.min(0.99, discoveryRatio + exploringRatio * 0.5)
       } else {
-        states[i] = STATE_UNDISCOVERED  // Undiscovered
+        states[i] = 0.0
+        progress[i] = 0.0
       }
 
-      // Colors based on tier (with state modulation)
-      const COLOR_BRIGHTNESS_DISCOVERED = 1.3
-      const COLOR_BRIGHTNESS_UNDISCOVERED = 0.4
-      const tierColor = TIER_COLORS[dominantTier]
+      // Colors based on synapse type and state
+      const typeColor = SYNAPSE_COLOR_MAP[dominantType]
 
-      if (states[i] === STATE_DISCOVERED) {
-        // Discovered - brighten tier color
-        colors[i * 3] = Math.min(1.0, tierColor[0] * COLOR_BRIGHTNESS_DISCOVERED)
-        colors[i * 3 + 1] = Math.min(1.0, tierColor[1] * COLOR_BRIGHTNESS_DISCOVERED)
-        colors[i * 3 + 2] = Math.min(1.0, tierColor[2] * COLOR_BRIGHTNESS_DISCOVERED)
-      } else if (states[i] === STATE_SOLVING) {
-        // Being solved - use tier color at full saturation
-        colors[i * 3] = tierColor[0]
-        colors[i * 3 + 1] = tierColor[1]
-        colors[i * 3 + 2] = tierColor[2]
-      } else {
-        // Undiscovered - dim tier color
-        colors[i * 3] = tierColor[0] * COLOR_BRIGHTNESS_UNDISCOVERED
-        colors[i * 3 + 1] = tierColor[1] * COLOR_BRIGHTNESS_UNDISCOVERED
-        colors[i * 3 + 2] = tierColor[2] * COLOR_BRIGHTNESS_UNDISCOVERED
+      // Phase 2.3: Brightness based on rarity tier + state modifier
+      const rarityBrightness = SYNAPSE_BRIGHTNESS_MULTIPLIERS[dominantType]
+      const stateModifier = states[i] === 2 ? 1.2 : states[i] === 1 ? 1.0 : 0.75
+      let brightness = rarityBrightness * stateModifier
+
+      if (isLocked) {
+        brightness *= 0.5  // More visible than before (was 0.3), with desaturation in shader
       }
+
+      colors[i * 3] = Math.min(1.0, typeColor[0] * brightness)
+      colors[i * 3 + 1] = Math.min(1.0, typeColor[1] * brightness)
+      colors[i * 3 + 2] = Math.min(1.0, typeColor[2] * brightness)
     })
 
-    return { positions, colors, sizes, states, tiers, clusterPositions }
-  }, [clusters, brainScale])
+    return { positions, colors, sizes, states, synapseTypes, progress, clusterPositions: clusterPositionsArray }
+  })
 
-  // Find closest cluster to ray - shared logic
-  const findClosestCluster = useCallback(() => {
-    if (clusters.length === 0) return null
+  // Find closest cluster to pointer for hover/click
+  const findClosestCluster = (): number | null => {
+    const sceneObj = scene()
+    const cam = camera()
+    if (!raycaster || !cam || props.clusters.length === 0) return null
 
-    const RAYCAST_THRESHOLD = 0.35 // Increased threshold for easier selection
-
-    raycaster.setFromCamera(pointer, camera)
+    const threshold = 0.35
+    raycaster.setFromCamera(pointer, cam)
 
     let closestIndex: number | null = null
-    let closestDist = RAYCAST_THRESHOLD
+    let closestDist = threshold
 
     clusterPositions.forEach((pos, i) => {
-      const dist = raycaster.ray.distanceToPoint(pos)
+      const dist = raycaster!.ray.distanceToPoint(pos)
       if (dist < closestDist) {
         closestDist = dist
         closestIndex = i
@@ -376,373 +452,262 @@ export function SpaceMarkers({
     })
 
     return closestIndex
-  }, [raycaster, pointer, camera, clusterPositions, clusters.length])
+  }
 
-  // Raycasting for hover detection
-  const handlePointerMove = useCallback(() => {
-    if (!pointsRef.current) return
+  // Handle click on synapse cluster - only trigger if actually hovering one
+  const handleClick = () => {
+    if (isDragging) return
 
-    const closestIndex = findClosestCluster()
-
-    if (closestIndex !== hoveredIndex) {
-      setHoveredIndex(closestIndex)
-      document.body.style.cursor = closestIndex !== null ? 'pointer' : 'auto'
+    // Use the tracked hover state instead of finding closest at click time
+    // This prevents accidental clicks when looking around
+    const currentHovered = hoveredIndex()
+    if (currentHovered !== null && props.onSynapseClick) {
+      const cluster = props.clusters[currentHovered]
+      const pos = clusterPositions[currentHovered]
+      props.onSynapseClick(cluster, pos)
     }
-  }, [findClosestCluster, hoveredIndex])
+  }
 
-  const handleClick = useCallback(() => {
-    // Don't trigger click if user was dragging to rotate camera
-    if (isDragging.current) {
+  onMount(() => {
+    const sceneObj = scene()
+    const renderer = gl()
+    const cam = camera()
+
+    if (!sceneObj || !renderer) {
+      console.warn('SynapseMarkersNew: Scene or renderer not available')
       return
     }
 
-    // Re-check on click in case hover wasn't tracked properly
-    const closestIndex = findClosestCluster()
+    // Initialize raycaster
+    raycaster = new THREE.Raycaster()
 
-    if (closestIndex !== null && onSpaceClick) {
-      const cluster = clusters[closestIndex]
-      const position = clusterPositions[closestIndex]
-      onSpaceClick(cluster, position)
+    // Create geometry
+    geometry = new THREE.BufferGeometry()
+
+    // Create shader material - using normal blending to prevent bloom blowout
+    material = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 } },
+      vertexShader: SYNAPSE_VERTEX_SHADER,
+      fragmentShader: SYNAPSE_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending,  // Changed from Additive to prevent massive glow
+    })
+
+    // Create points object
+    pointsObject = new THREE.Points(geometry, material)
+    pointsObject.frustumCulled = false
+
+    // Add to scene
+    sceneObj.add(pointsObject)
+
+    // Canvas event listeners for drag detection
+    const canvas = renderer.domElement
+
+    const handlePointerDown = (e: PointerEvent) => {
+      pointerDownPos = { x: e.clientX, y: e.clientY }
+      isDragging = false
     }
-  }, [findClosestCluster, clusters, clusterPositions, onSpaceClick])
 
-  // Scaled time for trance effect
-  const TRANCE_TIME_SCALE = 0.05  // Slow down time during trance
-  const NORMAL_TIME_SCALE = 1.0   // Normal time progression
-  const userAgents = useAgentStore((state) => state.userAgents)
-  const timeScale = userAgents.some(a => a.tranceActive) ? TRANCE_TIME_SCALE : NORMAL_TIME_SCALE
-  const scaledTimeRef = useRef(0)
-  const lastTimeRef = useRef(0)
+    const handlePointerMove = (e: PointerEvent) => {
+      // Update pointer for raycasting
+      const rect = canvas.getBoundingClientRect()
+      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
+      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
 
-  useFrame(({ clock }) => {
-    // Calculate scaled time for trance slowdown
-    const realTime = clock.getElapsedTime()
-    const deltaTime = realTime - lastTimeRef.current
-    lastTimeRef.current = realTime
-    scaledTimeRef.current += deltaTime * timeScale
-    const time = scaledTimeRef.current
-
-    if (materialRef.current) {
-      materialRef.current.uniforms.uTime.value = time
-      materialRef.current.uniforms.uHoveredIndex.value = hoveredIndex ?? -1
-      materialRef.current.uniforms.uCameraPosition.value.copy(camera.position)
-      materialRef.current.uniforms.uOpacity.value = opacity
+      // Check for drag
+      if (pointerDownPos) {
+        const dx = e.clientX - pointerDownPos.x
+        const dy = e.clientY - pointerDownPos.y
+        if (Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD) {
+          isDragging = true
+        }
+      }
     }
-    handlePointerMove()
+
+    const handlePointerUp = (e: PointerEvent) => {
+      if (!isDragging) {
+        handleClick()
+      }
+      pointerDownPos = null
+    }
+
+    canvas.addEventListener('pointerdown', handlePointerDown)
+    canvas.addEventListener('pointermove', handlePointerMove)
+    canvas.addEventListener('pointerup', handlePointerUp)
+
+    onCleanup(() => {
+      canvas.removeEventListener('pointerdown', handlePointerDown)
+      canvas.removeEventListener('pointermove', handlePointerMove)
+      canvas.removeEventListener('pointerup', handlePointerUp)
+
+      // Remove from scene and dispose
+      if (pointsObject && sceneObj) {
+        sceneObj.remove(pointsObject)
+      }
+      if (geometry) {
+        geometry.dispose()
+      }
+      if (material) {
+        material.dispose()
+      }
+
+      // Reset cursor
+      document.body.style.cursor = 'auto'
+    })
   })
 
-  const hoveredCluster = hoveredIndex !== null ? clusters[hoveredIndex] : null
-  const hoveredPosition = hoveredIndex !== null ? clusterPositions[hoveredIndex] : null
+  // Update geometry when clusters change
+  createEffect(() => {
+    const data = geometryData()
+    if (!data || !geometry) return
 
-  if (clusters.length === 0) return null
+    // Update cluster positions for raycasting
+    clusterPositions = data.clusterPositions
 
-  return (
-    <group onClick={handleClick}>
-      {/* Light pillars for legendary/mythic spaces - visible from across the brain */}
-      <LightPillars clusters={clusters} opacity={opacity} />
+    // Initialize hovered attribute buffer (all zeros = not hovered)
+    hoveredAttrBuffer = new Float32Array(props.clusters.length)
+    hoveredAttr = new THREE.BufferAttribute(hoveredAttrBuffer, 1)
+    hoveredAttr.setUsage(THREE.DynamicDrawUsage)  // Will be updated frequently
 
-      <points ref={pointsRef} frustumCulled={false}>
-        <bufferGeometry>
-          <bufferAttribute
-            attach="attributes-position"
-            args={[positions, 3]}
-          />
-          <bufferAttribute
-            attach="attributes-aColor"
-            args={[colors, 3]}
-          />
-          <bufferAttribute
-            attach="attributes-aSize"
-            args={[sizes, 1]}
-          />
-          <bufferAttribute
-            attach="attributes-aState"
-            args={[states, 1]}
-          />
-          <bufferAttribute
-            attach="attributes-aTier"
-            args={[tiers, 1]}
-          />
-        </bufferGeometry>
-        <shaderMaterial
-          ref={materialRef}
-          uniforms={{
-            uTime: { value: 0 },
-            uHoveredIndex: { value: -1 },
-            uCameraPosition: { value: new THREE.Vector3(0, 0, 3) },
-            uOpacity: { value: opacity },
-          }}
-          vertexShader={`
-            attribute vec3 aColor;
-            attribute float aSize;
-            attribute float aState;
-            attribute float aTier;
+    // Update geometry attributes
+    geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
+    geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3))
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
+    geometry.setAttribute('aState', new THREE.BufferAttribute(data.states, 1))
+    geometry.setAttribute('aSynapseType', new THREE.BufferAttribute(data.synapseTypes, 1))
+    geometry.setAttribute('aProgress', new THREE.BufferAttribute(data.progress, 1))
+    geometry.setAttribute('aHovered', hoveredAttr)
+    geometry.computeBoundingSphere()
+  })
 
-            uniform float uTime;
-            uniform float uHoveredIndex;
-            uniform vec3 uCameraPosition;
-            uniform float uOpacity;
+  // Animation frame for hover detection and time updates
+  useFrame(({ elapsed, clock, camera: cam }) => {
+    // Update scaled time (trance mode deprecated - always normal scale)
+    const timeScale = TRANCE_CONFIG.normalScale
 
-            varying vec3 vColor;
-            varying float vState;
-            varying float vTier;
-            varying float vHovered;
-            varying float vDistScale;
+    const realTime = clock.getElapsedTime()
+    const delta = realTime - lastRealTime
+    lastRealTime = realTime
+    scaledTime += delta * timeScale
 
-            void main() {
-              vColor = aColor;
-              vState = aState;
-              vTier = aTier;
+    // Update shader time uniform for animations
+    if (material) {
+      material.uniforms.uTime.value = scaledTime
+    }
 
-              float vertexIndex = float(gl_VertexID);
-              vHovered = abs(vertexIndex - uHoveredIndex) < 0.5 ? 1.0 : 0.0;
+    // Hover detection
+    const closestIndex = findClosestCluster()
+    const currentHovered = hoveredIndex()
 
-              vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-              float distToCamera = distance(position, uCameraPosition);
+    if (closestIndex !== currentHovered) {
+      setHoveredIndex(closestIndex)
+      document.body.style.cursor = closestIndex !== null ? 'pointer' : 'auto'
 
-              // Match camera range (1.5 to 6.0) - more aggressive scaling when zoomed in
-              float distScale = smoothstep(6.0, 1.5, distToCamera);
-
-              // Discovered and being-solved states get MINIMUM visibility
-              float minScale = aState > 0.5 ? 0.5 : 0.15;
-              // Higher tiers stay visible from further away
-              minScale = max(minScale, aTier * 0.1);
-              vDistScale = max(minScale, distScale);
-
-              // Pulsing based on state AND tier
-              float pulse = 1.0;
-              if (aState == 1.0) {
-                // Being solved - fast pulse
-                pulse = 1.0 + 0.35 * sin(uTime * 4.0 + float(gl_VertexID) * 0.5);
-              } else if (aState == 2.0) {
-                // Discovered - gentle pulse
-                pulse = 1.0 + 0.15 * sin(uTime * 2.0 + position.x * 5.0);
-              }
-
-              // Tier-specific effects
-              if (aTier >= 2.0) {
-                // Team spaces (tier 2) - sync pulse
-                pulse += 0.15 * sin(uTime * 3.0);
-              }
-              if (aTier >= 3.0) {
-                // Legendary spaces (tier 3+) - dramatic pulse
-                pulse += 0.25 * sin(uTime * 2.5) * (0.5 + 0.5 * sin(uTime * 0.5));
-              }
-              if (aTier >= 4.0) {
-                // Mythic spaces (tier 4) - golden shimmer
-                pulse += 0.3 * (0.5 + 0.5 * sin(uTime * 5.0 + position.y * 10.0));
-              }
-
-              // Hover boost
-              float hoverScale = mix(1.0, 1.5, vHovered);
-
-              // Minimum size based on tier (legendary/mythic always visible)
-              float minSize = aState > 0.5 ? 6.0 : 3.0;
-              minSize = max(minSize, aTier * 3.0);  // Higher tiers get larger min size
-
-              gl_PointSize = max(minSize, aSize * vDistScale * pulse * hoverScale);
-              gl_Position = projectionMatrix * mvPosition;
-            }
-          `}
-          fragmentShader={`
-            uniform float uTime;
-            uniform float uOpacity;
-
-            varying vec3 vColor;
-            varying float vState;
-            varying float vTier;
-            varying float vHovered;
-            varying float vDistScale;
-
-            void main() {
-              vec2 center = gl_PointCoord - vec2(0.5);
-              float dist = length(center);
-
-              if (dist > 0.5) discard;
-
-              float core = smoothstep(0.25, 0.0, dist);
-              float glow = smoothstep(0.5, 0.1, dist);
-              float ring = smoothstep(0.5, 0.4, dist) * smoothstep(0.3, 0.38, dist);
-              float outerRing = smoothstep(0.5, 0.45, dist) * smoothstep(0.4, 0.42, dist);
-
-              vec3 color = vColor;
-
-              // Undiscovered: dim with subtle pulse
-              if (vState < 0.5) {
-                float dimPulse = 0.25 + 0.1 * sin(uTime * 0.5);
-                color *= dimPulse;
-              }
-              // Being solved: bright pulse effect with ring
-              else if (vState < 1.5) {
-                float solvePulse = 0.7 + 0.3 * sin(uTime * 4.0);
-                color = mix(color, vec3(1.0), solvePulse * 0.4);
-                color += ring * vColor * solvePulse * 0.5;
-              }
-              // Discovered: bright glow with ring
-              else {
-                color = mix(color, vec3(1.0, 1.0, 0.9), core * 0.6);
-                float rPulse = 0.5 + 0.5 * sin(uTime * 2.5);
-                color += ring * vColor * rPulse * 0.4;
-              }
-
-              // Tier-specific visual effects
-              // Team tier (2): pulsing teal outer ring
-              if (vTier >= 1.5 && vTier < 2.5) {
-                float teamPulse = 0.5 + 0.5 * sin(uTime * 3.0);
-                color += outerRing * vec3(0.18, 0.83, 0.75) * teamPulse * 0.6;
-              }
-              // Legendary tier (3): golden glow with dual rings
-              else if (vTier >= 2.5 && vTier < 3.5) {
-                float legendPulse = 0.6 + 0.4 * sin(uTime * 2.5);
-                color = mix(color, vec3(1.0, 0.85, 0.3), core * 0.3 * legendPulse);
-                color += ring * vec3(1.0, 0.75, 0.14) * legendPulse * 0.5;
-                color += outerRing * vec3(1.0, 0.9, 0.5) * legendPulse * 0.4;
-              }
-              // Mythic tier (4): pink/magenta with shimmer
-              else if (vTier >= 3.5) {
-                float mythicPulse = 0.5 + 0.5 * sin(uTime * 5.0 + dist * 10.0);
-                float shimmer = 0.5 + 0.5 * sin(uTime * 8.0 + center.x * 20.0);
-                color = mix(color, vec3(1.0, 0.6, 0.85), core * 0.4 * mythicPulse);
-                color += ring * vec3(0.96, 0.45, 0.71) * mythicPulse * 0.6;
-                color += outerRing * vec3(1.0, 0.8, 0.95) * shimmer * 0.4;
-                float sparkle = pow(shimmer, 8.0) * step(0.85, shimmer);
-                color += vec3(1.0) * sparkle * 0.5;
-              }
-
-              // Enhanced hover effect with pulsing glow
-              float hoverPulse = vHovered * (0.35 + 0.15 * sin(uTime * 6.0));
-              color = mix(color, vec3(1.0), hoverPulse);
-
-              // Add animated ring effect on hover
-              if (vHovered > 0.5) {
-                float hoverRing = smoothstep(0.48, 0.42, dist) * smoothstep(0.35, 0.40, dist);
-                float hRingPulse = 0.6 + 0.4 * sin(uTime * 8.0);
-                color += hoverRing * vec3(0.3, 0.8, 1.0) * hRingPulse;
-              }
-
-              // Scale alpha with distance, lower minimums for discovered states
-              float minAlpha = vState > 0.5 ? 0.35 : 0.1;
-              minAlpha = max(minAlpha, vTier * 0.12);
-              float alpha = glow * 0.7 * max(0.25, vDistScale);
-              alpha = max(minAlpha, max(alpha, core * 0.8 * max(0.3, vDistScale)));
-
-              gl_FragColor = vec4(color, alpha * uOpacity);
-            }
-          `}
-          transparent
-          depthWrite={false}
-          blending={THREE.AdditiveBlending}
-        />
-      </points>
-
-      {/* Tooltip for hovered space cluster */}
-      {hoveredCluster && hoveredPosition && !hideTooltip && (() => {
-        const dominantTier = getDominantTier(hoveredCluster.tierCounts)
-        // Using Tailwind color classes that map to tier CSS variables
-        const tierColors: Record<SpaceTier, { glow: string; border: string; dot: string; badge: string }> = {
-          common: { glow: 'bg-[hsl(var(--state-idle))]', border: 'via-[hsl(var(--state-idle))]', dot: 'bg-[hsl(var(--state-idle))] ring-[hsl(var(--state-idle))]/30', badge: 'text-[hsl(var(--state-idle))] bg-[hsl(var(--state-idle))]/10' },
-          trait: { glow: 'bg-[hsl(var(--tier-trait))]', border: 'via-[hsl(var(--tier-trait))]', dot: 'bg-[hsl(var(--tier-trait))] ring-[hsl(var(--tier-trait))]/30', badge: 'text-[hsl(var(--tier-trait))] bg-[hsl(var(--tier-trait))]/10' },
-          team: { glow: 'bg-[hsl(var(--tier-team))]', border: 'via-[hsl(var(--tier-team))]', dot: 'bg-[hsl(var(--tier-team))] ring-[hsl(var(--tier-team))]/30 animate-pulse', badge: 'text-[hsl(var(--tier-team))] bg-[hsl(var(--tier-team))]/10' },
-          legendary: { glow: 'bg-[hsl(var(--tier-legendary))]', border: 'via-[hsl(var(--tier-legendary))]', dot: 'bg-[hsl(var(--tier-legendary))] ring-[hsl(var(--tier-legendary))]/30 animate-pulse', badge: 'text-[hsl(var(--tier-legendary))] bg-[hsl(var(--tier-legendary))]/10' },
-          mythic: { glow: 'bg-[hsl(var(--tier-mythic))]', border: 'via-[hsl(var(--tier-mythic))]', dot: 'bg-[hsl(var(--tier-mythic))] ring-[hsl(var(--tier-mythic))]/30 animate-pulse', badge: 'text-[hsl(var(--tier-mythic))] bg-[hsl(var(--tier-mythic))]/10' },
+      // Update hovered attribute for shader highlight
+      if (hoveredAttrBuffer && hoveredAttr) {
+        // Clear previous hover
+        if (currentHovered !== null && currentHovered < hoveredAttrBuffer.length) {
+          hoveredAttrBuffer[currentHovered] = 0.0
         }
-        const tierStyle = tierColors[dominantTier]
+        // Set new hover
+        if (closestIndex !== null && closestIndex < hoveredAttrBuffer.length) {
+          hoveredAttrBuffer[closestIndex] = 1.0
+        }
+        hoveredAttr.needsUpdate = true
+      }
 
-        const TOOLTIP_Y_OFFSET = 0.18
-        return (
-          <Html
-            position={[hoveredPosition.x, hoveredPosition.y + TOOLTIP_Y_OFFSET, hoveredPosition.z]}
-            center
-            style={{ pointerEvents: 'none', zIndex: 10 }}
-          >
-            <div className="relative">
-              {/* Tier-based glow effect */}
-              <div className={`absolute -inset-1 rounded-xl blur-md opacity-40 ${tierStyle.glow}`} />
+      // Update tooltip position if hovering
+      if (closestIndex !== null && clusterPositions[closestIndex]) {
+        const pos = clusterPositions[closestIndex].clone()
+        pos.project(cam)
 
-              <div className="relative rounded-xl border border-[var(--card-border)] bg-[var(--background-secondary)]/95 backdrop-blur-lg shadow-2xl whitespace-nowrap min-w-[160px] p-3 px-4">
-                {/* Tier-based gradient top border */}
-                <div className={`absolute top-0 h-[2px] rounded-full bg-gradient-to-r from-transparent ${tierStyle.border} to-transparent left-4 right-4`} />
+        const renderer = gl()
+        if (renderer) {
+          const rect = renderer.domElement.getBoundingClientRect()
+          const x = (pos.x * 0.5 + 0.5) * rect.width + rect.left
+          const y = (-pos.y * 0.5 + 0.5) * rect.height + rect.top
+          setTooltipPosition({ x, y })
+        }
+      } else {
+        setTooltipPosition(null)
+      }
+    } else if (closestIndex !== null && clusterPositions[closestIndex]) {
+      // Update tooltip position while hovering (in case of camera movement)
+      const pos = clusterPositions[closestIndex].clone()
+      pos.project(cam)
 
-                {/* Header with tier badge */}
-                <div className="flex items-center justify-between border-b border-[var(--card-border)]/50 gap-2 mb-2 pb-2">
-                  <div className="flex items-center gap-2">
-                    <div className={`rounded-full ring-2 ring-offset-1 ring-offset-[var(--background-secondary)] ${tierStyle.dot} h-2.5 w-2.5`} />
-                    <span className="text-sm font-semibold text-[var(--text-primary)]">Space Cluster</span>
-                  </div>
-                  <span className={`text-[9px] font-bold uppercase tracking-wider rounded px-2 py-0.5 ${tierStyle.badge}`}>
-                    {dominantTier}
-                  </span>
-                </div>
+      const renderer = gl()
+      if (renderer) {
+        const rect = renderer.domElement.getBoundingClientRect()
+        const x = (pos.x * 0.5 + 0.5) * rect.width + rect.left
+        const y = (-pos.y * 0.5 + 0.5) * rect.height + rect.top
+        setTooltipPosition({ x, y })
+      }
+    }
+  })
 
-                {/* Active agents nearby indicator */}
-                {(() => {
-                  // Count agents within a certain distance of this cluster
-                  const NEARBY_DISTANCE = 0.3
-                  const nearbyAgents = agents.filter(agent => {
-                    if (agent.state === 'idle') return false
-                    const dx = agent.positionX - hoveredCluster.positionX
-                    const dy = agent.positionY - hoveredCluster.positionY
-                    const dz = agent.positionZ - hoveredCluster.positionZ
-                    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
-                    return dist < NEARBY_DISTANCE
-                  })
-                  if (nearbyAgents.length > 0) {
-                    return (
-                      <div className="rounded-lg bg-[var(--brand-teal-1)]/10 border border-[var(--brand-teal-1)]/30 flex items-center justify-between mb-2 px-3 py-2.5">
-                        <span className="text-[10px] font-semibold text-[var(--brand-teal-1)] uppercase tracking-wide">Agents Here</span>
-                        <span className="text-sm font-bold text-[var(--brand-teal-1)]">{nearbyAgents.length}</span>
-                      </div>
-                    )
-                  }
-                  return null
-                })()}
+  // Get hovered cluster for tooltip
+  const hoveredCluster = createMemo(() => {
+    const idx = hoveredIndex()
+    return idx !== null ? props.clusters[idx] : null
+  })
 
-                {/* Stats grid */}
-                <div className="grid grid-cols-2 text-[11px]" style={{ gap: 'var(--space-3) var(--space-1)' }}>
-                  <div className="flex justify-between items-center">
-                    <span className="text-[var(--text-tertiary)]">Spaces</span>
-                    <span className="font-medium text-[var(--text-primary)]">{hoveredCluster.spaceCount.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-[var(--text-tertiary)]">Discovered</span>
-                    <span className="font-medium text-[var(--state-solving)]">{hoveredCluster.discoveredCount.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-[var(--text-tertiary)]">Solving</span>
-                    <span className="font-medium text-[var(--state-limping)]">{hoveredCluster.beingSolvedCount.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-[var(--text-tertiary)]">Avg Loot</span>
-                    <span className="font-medium text-[var(--brand-teal-1)]">{Math.round(hoveredCluster.avgLootPool)} AGI</span>
-                  </div>
-                </div>
+  const hoveredDominantType = createMemo(() => {
+    const cluster = hoveredCluster()
+    return cluster ? getDominantSynapseType(cluster.typeCounts) : null
+  })
 
-                {/* Tier breakdown if available */}
-                {hoveredCluster.tierCounts && (
-                  <div className="border-t border-[var(--card-border)]/50" style={{ marginTop: 'var(--space-2)', paddingTop: 'var(--space-2)' }}>
-                    <div className="flex items-center text-[9px]" style={{ gap: 'var(--space-1)' }}>
-                      {hoveredCluster.tierCounts.legendary > 0 && (
-                        <span className="font-medium text-[var(--tier-legendary)]">{hoveredCluster.tierCounts.legendary} leg</span>
-                      )}
-                      {hoveredCluster.tierCounts.team > 0 && (
-                        <span className="font-medium text-[var(--tier-team)]">{hoveredCluster.tierCounts.team} team</span>
-                      )}
-                      {hoveredCluster.tierCounts.trait > 0 && (
-                        <span className="font-medium text-[var(--tier-trait)]">{hoveredCluster.tierCounts.trait} trait</span>
-                      )}
-                    </div>
-                  </div>
-                )}
+  const hoveredIsLocked = createMemo(() => {
+    const dominantType = hoveredDominantType()
+    const userLevel = props.userLevel ?? 1 as UserLevel
+    return dominantType ? userLevel < SYNAPSE_CONFIG[dominantType].unlockUserLevel : false
+  })
 
-                {/* Click hint */}
-                <div className="border-t border-[var(--card-border)]/50 text-center" style={{ marginTop: 'var(--space-2)', paddingTop: 'var(--space-2)' }}>
-                  <span className="text-[10px] text-[var(--text-tertiary)]">Click to deploy agent</span>
-                </div>
-              </div>
+  // Return tooltip JSX (rendered as SolidJS component)
+  // Note: This tooltip is a DOM overlay, not part of the Three.js scene
+  return (
+    <>
+      {hoveredCluster() && tooltipPosition() && (
+        <div
+          class="fixed pointer-events-none z-50"
+          style={{
+            left: `${tooltipPosition()!.x}px`,
+            top: `${tooltipPosition()!.y}px`,
+            transform: 'translate(-50%, -100%) translateY(-8px)',
+          }}
+        >
+          <div class="bg-[var(--card-bg)]/95 backdrop-blur-sm border border-[var(--card-border)] rounded-lg px-3 py-2 text-xs whitespace-nowrap">
+            <div class="font-medium text-[var(--text-primary)]">
+              {hoveredCluster()!.synapseCount} synapses
             </div>
-          </Html>
-        )
-      })()}
-    </group>
+            {hoveredDominantType() && (
+              <div class="text-[var(--text-secondary)] capitalize">
+                {hoveredDominantType()} type
+                {hoveredIsLocked() && (
+                  <span class="text-red-400 ml-1">(Locked - Lvl {SYNAPSE_CONFIG[hoveredDominantType()!].unlockUserLevel})</span>
+                )}
+              </div>
+            )}
+            <div class="text-[var(--text-secondary)]">
+              {hoveredCluster()!.discoveredCount} discovered
+            </div>
+            {hoveredCluster()!.beingExploredCount > 0 && (
+              <div class="text-yellow-400">
+                {hoveredCluster()!.beingExploredCount} exploring
+              </div>
+            )}
+            {hoveredCluster()!.explorerCount !== undefined && hoveredCluster()!.explorerCount! > 0 && (
+              <div class="text-cyan-400">
+                {hoveredCluster()!.explorerCount} explorers
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   )
 }
+
+// Re-export for backward compatibility
+export { SynapseMarkers as SpaceMarkers }

@@ -10,6 +10,39 @@ import { db } from '../db/index.js'
 
 const router = Router()
 
+// Helper: Determine sector state based on timestamps
+function getSectorState(startTime: number, endTime: number): 'upcoming' | 'active' | 'completed' {
+  const now = Date.now()
+  if (now < startTime) return 'upcoming'
+  if (now > endTime) return 'completed'
+  return 'active'
+}
+
+// Helper: Get top explorers for a sector
+function getTopExplorersBySector(sectorId: string, limit: number): SectorExplorer[] {
+  const stmt = db.prepare(`
+    SELECT
+      u.id as userId,
+      u.wallet as username,
+      COUNT(DISTINCT ld.synapse_id) as synapsesCompleted,
+      COALESCE(SUM(ld.reward_agi), 0) as agiEarned,
+      0 as brainXpEarned
+    FROM users u
+    LEFT JOIN lottery_draws ld ON ld.winner_user_id = u.id
+    LEFT JOIN spaces s ON s.id = ld.synapse_id
+    WHERE s.sector_id = ?
+    GROUP BY u.id
+    HAVING synapsesCompleted > 0
+    ORDER BY agiEarned DESC
+    LIMIT ?
+  `)
+  const rows = stmt.all(sectorId, limit) as any[]
+  return rows.map((e, index) => ({
+    ...e,
+    rank: index + 1,
+  }))
+}
+
 // Type for sector response
 interface SectorResponse {
   id: string
@@ -60,7 +93,6 @@ interface RecentCompletion {
 router.get('/', (req: Request, res: Response) => {
   try {
     const { state, region, limit } = req.query
-    const now = Date.now()
 
     let query = 'SELECT * FROM sectors WHERE 1=1'
     const params: any[] = []
@@ -80,31 +112,20 @@ router.get('/', (req: Request, res: Response) => {
     const stmt = db.prepare(query)
     const rows = stmt.all(...params) as any[]
 
-    const sectors: SectorResponse[] = rows.map(row => {
-      let sectorState: 'upcoming' | 'active' | 'completed'
-      if (now < row.start_time) {
-        sectorState = 'upcoming'
-      } else if (now > row.end_time) {
-        sectorState = 'completed'
-      } else {
-        sectorState = 'active'
-      }
-
-      return {
-        id: row.id,
-        name: row.name,
-        description: row.description || '',
-        region: row.region,
-        startTime: row.start_time,
-        endTime: row.end_time,
-        state: sectorState,
-        totalSynapses: row.total_synapses || 0,
-        completedSynapses: row.completed_synapses || 0,
-        totalAgiRewards: row.total_agi_rewards || 0,
-        distributedAgiRewards: row.distributed_agi_rewards || 0,
-        participantCount: row.participant_count || 0,
-      }
-    })
+    const sectors: SectorResponse[] = rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      description: row.description || '',
+      region: row.region,
+      startTime: row.start_time,
+      endTime: row.end_time,
+      state: getSectorState(row.start_time, row.end_time),
+      totalSynapses: row.total_synapses || 0,
+      completedSynapses: row.completed_synapses || 0,
+      totalAgiRewards: row.total_agi_rewards || 0,
+      distributedAgiRewards: row.distributed_agi_rewards || 0,
+      participantCount: row.participant_count || 0,
+    }))
 
     // Filter by state if requested
     let filteredSectors = sectors
@@ -142,29 +163,7 @@ router.get('/active', (req: Request, res: Response) => {
       })
     }
 
-    // Get top explorers for this sector by aggregating from lottery_draws and synapse_explorers
-    const explorersStmt = db.prepare(`
-      SELECT
-        u.id as userId,
-        u.wallet as username,
-        COUNT(DISTINCT ld.synapse_id) as synapsesCompleted,
-        COALESCE(SUM(ld.reward_agi), 0) as agiEarned,
-        0 as brainXpEarned
-      FROM users u
-      LEFT JOIN lottery_draws ld ON ld.winner_user_id = u.id
-      LEFT JOIN spaces s ON s.id = ld.synapse_id
-      WHERE s.sector_id = ?
-      GROUP BY u.id
-      HAVING synapsesCompleted > 0
-      ORDER BY agiEarned DESC
-      LIMIT 10
-    `)
-    const explorers = explorersStmt.all(row.id) as any[]
-
-    const topExplorers: SectorExplorer[] = explorers.map((e, index) => ({
-      ...e,
-      rank: index + 1,
-    }))
+    const topExplorers = getTopExplorersBySector(row.id, 10)
 
     const sector: SectorResponse = {
       id: row.id,
@@ -173,7 +172,7 @@ router.get('/active', (req: Request, res: Response) => {
       region: row.region,
       startTime: row.start_time,
       endTime: row.end_time,
-      state: 'active',
+      state: getSectorState(row.start_time, row.end_time),
       totalSynapses: row.total_synapses || 0,
       completedSynapses: row.completed_synapses || 0,
       totalAgiRewards: row.total_agi_rewards || 0,
@@ -196,7 +195,6 @@ router.get('/active', (req: Request, res: Response) => {
 router.get('/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params
-    const now = Date.now()
 
     const stmt = db.prepare('SELECT * FROM sectors WHERE id = ?')
     const row = stmt.get(id) as any
@@ -205,38 +203,7 @@ router.get('/:id', (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Sector not found' })
     }
 
-    let sectorState: 'upcoming' | 'active' | 'completed'
-    if (now < row.start_time) {
-      sectorState = 'upcoming'
-    } else if (now > row.end_time) {
-      sectorState = 'completed'
-    } else {
-      sectorState = 'active'
-    }
-
-    // Get top explorers by aggregating from lottery_draws and synapse_explorers
-    const explorersStmt = db.prepare(`
-      SELECT
-        u.id as userId,
-        u.wallet as username,
-        COUNT(DISTINCT ld.synapse_id) as synapsesCompleted,
-        COALESCE(SUM(ld.reward_agi), 0) as agiEarned,
-        0 as brainXpEarned
-      FROM users u
-      LEFT JOIN lottery_draws ld ON ld.winner_user_id = u.id
-      LEFT JOIN spaces s ON s.id = ld.synapse_id
-      WHERE s.sector_id = ?
-      GROUP BY u.id
-      HAVING synapsesCompleted > 0
-      ORDER BY agiEarned DESC
-      LIMIT 20
-    `)
-    const explorers = explorersStmt.all(id) as any[]
-
-    const topExplorers: SectorExplorer[] = explorers.map((e, index) => ({
-      ...e,
-      rank: index + 1,
-    }))
+    const topExplorers = getTopExplorersBySector(id, 20)
 
     const sector: SectorResponse = {
       id: row.id,
@@ -245,7 +212,7 @@ router.get('/:id', (req: Request, res: Response) => {
       region: row.region,
       startTime: row.start_time,
       endTime: row.end_time,
-      state: sectorState,
+      state: getSectorState(row.start_time, row.end_time),
       totalSynapses: row.total_synapses || 0,
       completedSynapses: row.completed_synapses || 0,
       totalAgiRewards: row.total_agi_rewards || 0,

@@ -78,7 +78,7 @@ export function UserLevelBadge(props: UserLevelBadgeProps) {
       </Show>
       <Show when={showMultiplier()}>
         <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-current/20">
-          {userStore.rewardMultiplier}x
+          {userStore.pointsPerMinMultiplier}x
         </span>
       </Show>
     </div>
@@ -134,7 +134,7 @@ export function UserLevelCard() {
           class="px-3 py-1.5 rounded-lg text-sm font-bold"
           style={{ "background-color": `${color()}20`, color: color() }}
         >
-          {userStore.rewardMultiplier}x Rewards
+          {userStore.pointsPerMinMultiplier}x Pts/Min
         </div>
       </div>
 
@@ -157,16 +157,10 @@ export function UserLevelCard() {
       </Show>
 
       {/* Benefits */}
-      <div class="grid grid-cols-3 gap-2 text-center">
+      <div class="grid grid-cols-2 gap-2 text-center">
         <div class="p-2 rounded-lg bg-[var(--background-primary)]/50">
-          <p class="text-xs text-[var(--text-muted)]">Multiplier</p>
-          <p class="font-bold" style={{ color: color() }}>{userStore.rewardMultiplier}x</p>
-        </div>
-        <div class="p-2 rounded-lg bg-[var(--background-primary)]/50">
-          <p class="text-xs text-[var(--text-muted)]">ETA Boost</p>
-          <p class="font-bold" style={{ color: color() }}>
-            {(config().etaBoost * 100).toFixed(0)}%
-          </p>
+          <p class="text-xs text-[var(--text-muted)]">Pts/Min Boost</p>
+          <p class="font-bold" style={{ color: color() }}>{userStore.pointsPerMinMultiplier}x</p>
         </div>
         <div class="p-2 rounded-lg bg-[var(--background-primary)]/50">
           <p class="text-xs text-[var(--text-muted)]">Max Ships</p>

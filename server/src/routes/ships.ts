@@ -15,7 +15,7 @@ import {
   getUser,
 } from '../db/index.js'
 import { deployAgentToSearch, recallAgent } from '../simulation/engine.js'
-import { WORLD, getMaxShipsForBrainLevel } from '../config/gameConfig.js'
+import { WORLD, USER_LEVEL_CONFIG, calculateUserLevel } from '../config/gameConfig.js'
 import type { Agent } from '../types/index.js'
 import {
   asyncHandler,
@@ -75,7 +75,10 @@ function agentToShip(agent: Agent): ShipResponse {
     id: agent.id,
     ownerId: agent.ownerId,
     name: agent.name,
-    state: agent.state === 'solving' ? 'exploring' : agent.state,
+    // Map server states to frontend states: searching/solving -> exploring, traveling -> deploying
+    state: (agent.state === 'solving' || agent.state === 'searching') ? 'exploring'
+         : agent.state === 'traveling' ? 'deploying'
+         : agent.state,
     positionX: agent.positionX,
     positionY: agent.positionY,
     positionZ: agent.positionZ,
@@ -118,14 +121,13 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     return
   }
 
-  // Check ship limit based on brain level
-  // Use minimum of level 25 for development (allows 3 ships)
+  // Check ship limit based on user level (USDC-based, Masterplan 2026)
   const existingShips = getAgentsByOwner(userId)
-  const brainLevel = Math.max(user.brain_level ?? 1, 25)
-  const maxShips = getMaxShipsForBrainLevel(brainLevel)
+  const userLevel = calculateUserLevel(user.usdc_spent ?? 0)
+  const maxShips = USER_LEVEL_CONFIG[userLevel]?.maxShips ?? 1
 
   if (existingShips.length >= maxShips) {
-    sendError(res, 400, `Ship limit reached (${maxShips} ships at brain level ${brainLevel})`)
+    sendError(res, 400, `Ship limit reached (${maxShips} ships at user level ${userLevel})`)
     return
   }
 

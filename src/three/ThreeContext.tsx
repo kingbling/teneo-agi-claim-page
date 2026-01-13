@@ -43,6 +43,8 @@ export interface ThreeContextValue {
   size: Accessor<{ width: number; height: number }>
   registerFrameCallback: (cb: FrameCallback, priority?: number) => () => void
   invalidate: () => void
+  /** Set to true to skip the default renderer.render() call (used by PostProcessingEffects) */
+  setSkipDefaultRender: (skip: boolean) => void
 }
 
 // ============ CONTEXT ============
@@ -80,6 +82,7 @@ export const ThreeProvider: ParentComponent<ThreeProviderProps> = (props) => {
   // Frame callbacks with priority (lower = runs first)
   const frameCallbacks = new Map<FrameCallback, number>()
   let sortedCallbacks: FrameCallback[] = []
+  let skipDefaultRender = false  // Set by PostProcessingEffects to take over rendering
 
   const updateSortedCallbacks = () => {
     sortedCallbacks = [...frameCallbacks.entries()]
@@ -158,7 +161,10 @@ export const ThreeProvider: ParentComponent<ThreeProviderProps> = (props) => {
         })
       }
 
-      renderer.render(scene, camera)
+      // Only render directly if PostProcessingEffects hasn't taken over
+      if (!skipDefaultRender) {
+        renderer.render(scene, camera)
+      }
     }
     animate()
 
@@ -186,6 +192,9 @@ export const ThreeProvider: ParentComponent<ThreeProviderProps> = (props) => {
     },
     invalidate: () => {
       // For on-demand rendering (not used in continuous game loop)
+    },
+    setSkipDefaultRender: (skip: boolean) => {
+      skipDefaultRender = skip
     },
   }
 

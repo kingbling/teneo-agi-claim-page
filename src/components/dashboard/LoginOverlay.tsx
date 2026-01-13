@@ -1,21 +1,20 @@
 /**
  * LoginOverlay - SolidJS Version
  *
- * Login form for wallet authentication.
+ * Login screen with MetaMask wallet connection.
  */
 
 import { type Component, Show, For } from 'solid-js'
 import { Users, Sparkles } from 'lucide-solid'
+import { ConnectWallet } from '@/components/auth/ConnectWallet'
 
 export interface LoginOverlayProps {
   isOpen: boolean
-  walletInput: string
-  onWalletInputChange: (value: string) => void
   onLogin: () => void
 }
 
 /**
- * LoginOverlay - Login form for wallet authentication
+ * LoginOverlay - Login screen with MetaMask wallet connection
  */
 export const LoginOverlay: Component<LoginOverlayProps> = (props) => {
   return (
@@ -70,32 +69,12 @@ export const LoginOverlay: Component<LoginOverlayProps> = (props) => {
                 </p>
               </div>
 
-              {/* Input section */}
+              {/* Wallet connection section */}
               <div class="space-y-4">
-                <div>
-                  <label class="text-xs text-[var(--text-primary)] font-semibold mb-2 block uppercase tracking-wider">
-                    Wallet Address
-                  </label>
-                  <div class="relative">
-                    <input
-                      type="text"
-                      value={props.walletInput}
-                      onInput={(e) => props.onWalletInputChange(e.currentTarget.value)}
-                      placeholder="0x..."
-                      class="w-full px-4 py-3 rounded-xl bg-[var(--background-primary)] border border-[var(--card-border)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--brand-teal-1)]/50 focus:ring-1 focus:ring-[var(--brand-teal-1)]/20 transition-all"
-                      onKeyDown={(e) => e.key === 'Enter' && props.onLogin()}
-                    />
-                    <div class="absolute right-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-[var(--brand-teal-1)]/50" />
-                  </div>
-                </div>
-
-                <button
-                  onClick={props.onLogin}
-                  disabled={!props.walletInput.trim()}
-                  class="w-full py-3 rounded-xl bg-gradient-to-r from-[var(--brand-teal-1)] to-[var(--brand-blue-2)] text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-[var(--brand-teal-1)]/20 hover:shadow-xl hover:shadow-[var(--brand-teal-1)]/30 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                >
-                  Enter Discovery Portal
-                </button>
+                <ConnectWallet
+                  class="w-full"
+                  onAuthSuccess={() => props.onLogin()}
+                />
               </div>
 
               {/* Footer info */}

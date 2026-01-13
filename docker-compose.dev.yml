@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile.dev
     ports:
       - "4444:4444"   # Server
-      - "5175:5175"   # Frontend (Vite)
+      - "5176:5176"   # Frontend (Vite)
     volumes:
       # Mount source code for hot reload
       - .:/app

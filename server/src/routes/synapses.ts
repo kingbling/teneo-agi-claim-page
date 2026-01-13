@@ -13,7 +13,7 @@ import {
   leaveSynapseExploration,
   updateExplorationRate,
 } from '../simulation/engine.js'
-import { SYNAPSE_CONFIG, type SynapseType } from '../config/gameConfig.js'
+import { SYNAPSE_CONFIG, USER_LEVEL_CONFIG, calculateUserLevel, type SynapseType, type UserLevel } from '../config/gameConfig.js'
 
 const router = Router()
 
@@ -33,7 +33,6 @@ interface SynapseResponse {
   explorerCount: number
   maxExplorers: number
   agiReward: number
-  brainXpReward: number
   sectorId: string | null
   explorers?: ExplorerInfo[]
 }
@@ -103,7 +102,6 @@ router.get('/:id', (req: Request, res: Response) => {
       explorerCount: explorers.length,
       maxExplorers: config.maxExplorers,
       agiReward: extended.agi_reward || config.agiReward,
-      brainXpReward: extended.brain_xp_reward || config.brainXpReward,
       sectorId: extended.sector_id || null,
       explorers,
     }
@@ -160,17 +158,37 @@ router.post('/:id/explore', (req: Request, res: Response) => {
     const synapseType = (extended?.synapse_type || 'minor') as SynapseType
     const config = getSynapseConfig(synapseType)
 
-    // Validate and cap points per minute
-    const requestedRate = pointsPerMin || 100
-    const cappedRate = Math.min(requestedRate, config.maxPerMin)
+    // Check User Level requirement (Masterplan 2026: USDC-based level gating)
+    const userStmt = db.prepare('SELECT usdc_spent FROM users WHERE id = ?')
+    const user = userStmt.get(userId) as { usdc_spent: number } | undefined
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' })
+    }
+    const userLevel = calculateUserLevel(user.usdc_spent)
+    const requiredLevel = config.unlockUserLevel
 
-    // Check explorer limit
+    if (userLevel < requiredLevel) {
+      const requiredUSDC = USER_LEVEL_CONFIG[requiredLevel as UserLevel].minUSDC
+      return res.status(403).json({
+        error: `User level ${userLevel} too low for ${synapseType} synapse (requires level ${requiredLevel}, $${requiredUSDC}+ USDC spent)`
+      })
+    }
+
+    // Apply level multiplier to points per minute (Masterplan 2026: Level Boost)
+    const levelMultiplier = USER_LEVEL_CONFIG[userLevel].multiplier
+
+    // Validate and cap points per minute (after applying level boost)
+    const requestedRate = pointsPerMin || 100
+    const boostedRate = Math.floor(requestedRate * levelMultiplier)
+    const cappedRate = Math.min(boostedRate, config.maxPerMin)
+
+    // V1 Masterplan: Single player only - max 1 explorer per synapse
     const explorerCountStmt = db.prepare('SELECT COUNT(*) as count FROM synapse_explorers WHERE synapse_id = ?')
     const { count } = explorerCountStmt.get(id) as { count: number }
 
-    if (config.maxExplorers !== -1 && count >= config.maxExplorers) {
+    if (count >= 1) {
       return res.status(400).json({
-        error: `Synapse has reached maximum explorers (${config.maxExplorers})`
+        error: 'Synapse is already being explored. Try a different synapse or wait for it to complete.'
       })
     }
 

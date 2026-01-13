@@ -7,12 +7,8 @@ import {
 } from '@/types/game'
 import { userStore } from './userStore'
 
-// API Configuration
-const API_URL = import.meta.env.VITE_API_URL
-
-if (!API_URL) {
-  throw new Error('VITE_API_URL environment variable is not set')
-}
+// API Configuration - empty string means same-origin (App Platform deployment)
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 // ============================================================================
 // MASTERPLAN 2026: SHOP STORE
@@ -179,7 +175,10 @@ function createShopStore() {
         throw new Error('Failed to fetch user items')
       }
 
-      const items: UserItem[] = await response.json()
+      const data = await response.json()
+
+      // Handle both array response and object with items property
+      const items: UserItem[] = Array.isArray(data) ? data : (data?.items ?? [])
 
       // Filter out expired items
       const validItems = items.filter(
