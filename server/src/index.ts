@@ -47,6 +47,22 @@ import { mountMasterplanRoutes } from './routes/index.js'
 
 const PORT = process.env.PORT
 
+// Helper to get all LOD clusters (reduces duplication)
+function getAllClusters() {
+  return {
+    synapseClusters: [
+      ...getSpaceClusters(0),
+      ...getSpaceClusters(1),
+      ...getSpaceClusters(2),
+    ],
+    shipClusters: [
+      ...getAgentClusters(0),
+      ...getAgentClusters(1),
+      ...getAgentClusters(2),
+    ],
+  }
+}
+
 if (!PORT) {
   throw new Error('PORT environment variable is not set')
 }
@@ -352,16 +368,7 @@ app.get('/api/world', (req, res) => {
   const stats = getDiscoveryStats()
 
   const worldState: WorldState = {
-    synapseClusters: [
-      ...getSpaceClusters(0),
-      ...getSpaceClusters(1),
-      ...getSpaceClusters(2),
-    ],
-    shipClusters: [
-      ...getAgentClusters(0),
-      ...getAgentClusters(1),
-      ...getAgentClusters(2),
-    ],
+    ...getAllClusters(),
     userShips: [],  // Will be populated per-user via WebSocket
     discoveryProgress: stats,
   }
@@ -390,16 +397,7 @@ wss.on('connection', (ws) => {
   const initialState: ServerMessage = {
     type: 'state:sync',
     data: {
-      synapseClusters: [
-        ...getSpaceClusters(0),
-        ...getSpaceClusters(1),
-        ...getSpaceClusters(2),
-      ],
-      shipClusters: [
-        ...getAgentClusters(0),
-        ...getAgentClusters(1),
-        ...getAgentClusters(2),
-      ],
+      ...getAllClusters(),
       userShips: [],
       discoveryProgress: stats,
     },
@@ -483,8 +481,7 @@ setInterval(() => {
   broadcast({
     type: 'state:sync',
     data: {
-      synapseClusters: getSpaceClusters(0),  // Just LOD 0 for periodic updates
-      shipClusters: getAgentClusters(0),
+      ...getAllClusters(),
       userShips: [],
       discoveryProgress: stats,
     },

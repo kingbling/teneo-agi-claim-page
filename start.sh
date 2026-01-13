@@ -64,7 +64,7 @@ case "${1:-docker-dev}" in
         init_database
 
         print_status "Starting server on port 4000..."
-        print_status "Starting frontend on port 5175..."
+        print_status "Starting frontend on port 5176..."
         echo ""
 
         # Start both in parallel
@@ -80,8 +80,8 @@ case "${1:-docker-dev}" in
 
         echo ""
         print_status "Server: http://localhost:4000"
-        print_status "Frontend: http://localhost:5175"
-        print_status "Discovery: http://localhost:5175/discovery"
+        print_status "Frontend: http://localhost:5176"
+        print_status "Discovery: http://localhost:5176/discovery"
         print_status "Health check: http://localhost:4000/health"
         echo ""
         print_warning "Press Ctrl+C to stop"
@@ -180,7 +180,7 @@ case "${1:-docker-dev}" in
 
         # Kill any processes on our ports
         lsof -ti:4444 | xargs kill -9 2>/dev/null
-        lsof -ti:5175 | xargs kill -9 2>/dev/null
+        lsof -ti:5176 | xargs kill -9 2>/dev/null
 
         # Clean up dangling images to avoid cache issues
         docker image prune -f 2>/dev/null
@@ -192,13 +192,13 @@ case "${1:-docker-dev}" in
         echo ""
         print_status "Container started with hot reload!"
         print_status "Server: http://localhost:4444"
-        print_status "Frontend: http://localhost:5175"
+        print_status "Frontend: http://localhost:5176"
         echo ""
         print_warning "Split view layout:"
         echo "  ┌─────────────────────────┐"
         echo "  │  SERVER (port 4444)     │"
         echo "  ├─────────────────────────┤"
-        echo "  │  FRONTEND (port 5175)   │"
+        echo "  │  FRONTEND (port 5176)   │"
         echo "  └─────────────────────────┘"
         echo ""
         print_warning "Tmux shortcuts:"

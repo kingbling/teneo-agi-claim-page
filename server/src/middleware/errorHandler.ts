@@ -74,22 +74,3 @@ export function sendError(
   }
   return res.status(status).json(response)
 }
-
-/**
- * Global error handler middleware - should be mounted last
- */
-export function globalErrorHandler(
-  err: Error,
-  _req: Request,
-  res: Response,
-  _next: NextFunction
-): void {
-  console.error('Unhandled error:', err)
-
-  // Don't expose internal errors in production
-  const message = process.env.NODE_ENV === 'production'
-    ? 'Internal server error'
-    : err.message
-
-  res.status(500).json({ error: message })
-}

@@ -12,19 +12,6 @@ export const BRAIN_SCALE = {
   z: 1.1,
 } as const
 
-// DEPRECATED: Fuel system removed in Masterplan 2026
-// Keeping for backwards compatibility during migration
-export const FUEL_THRESHOLDS = {
-  LOW: 500,
-  CRITICAL: 100,
-} as const
-
-// DEPRECATED: Fuel system removed in Masterplan 2026
-export const FUEL_PERCENT_THRESHOLDS = {
-  CRITICAL: 20,
-  LOW: 50,
-} as const
-
 // Masterplan 2026: Synapse type colors
 export const SYNAPSE_TYPE_COLORS = {
   minor: '#60A5FA',     // Blue

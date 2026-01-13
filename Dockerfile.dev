@@ -37,7 +37,7 @@ RUN echo '#!/bin/bash' > /start.sh && \
     echo 'tmux send-keys -t teneo:dev.0 "cd /app/server && echo \"=== SERVER (port 4444) ===\" && PORT=4444 npm run dev 2>&1 | tee -a /app/logs/server.log" C-m' >> /start.sh && \
     echo '' >> /start.sh && \
     echo '# Bottom pane: Frontend (pane 1) - with tee to log' >> /start.sh && \
-    echo 'tmux send-keys -t teneo:dev.1 "cd /app && echo \"=== FRONTEND (port 5175) ===\" && npm run dev -- --host 0.0.0.0 2>&1 | tee -a /app/logs/frontend.log" C-m' >> /start.sh && \
+    echo 'tmux send-keys -t teneo:dev.1 "cd /app && echo \"=== FRONTEND (port 5176) ===\" && npm run dev -- --host 0.0.0.0 2>&1 | tee -a /app/logs/frontend.log" C-m' >> /start.sh && \
     echo '' >> /start.sh && \
     echo '# Select top pane by default' >> /start.sh && \
     echo 'tmux select-pane -t teneo:dev.0' >> /start.sh && \
@@ -47,6 +47,6 @@ RUN echo '#!/bin/bash' > /start.sh && \
     chmod +x /start.sh
 
 # Expose ports
-EXPOSE 4444 5175
+EXPOSE 4444 5176
 
 CMD ["/start.sh"]

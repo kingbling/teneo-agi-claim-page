@@ -5,20 +5,13 @@ import {
   type SynapseType,
   calculateUserLevel,
   getUserLevelConfig,
-  getXPForLevel,
-  getTotalXPForLevel,
-  getLevelFromTotalXP,
-  getMaxShipsForBrainLevel,
+  getMaxShipsForUserLevel,
   getUnlockedSynapseTypes,
-  BRAIN_LEVEL_CONFIG,
 } from '@/types/game'
+import { authStore } from './authStore'
 
-// API Configuration
-const API_URL = import.meta.env.VITE_API_URL
-
-if (!API_URL) {
-  throw new Error('VITE_API_URL environment variable is not set')
-}
+// API Configuration - empty string means same-origin (App Platform deployment)
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 // localStorage keys
 const STORAGE_KEY_WALLET = 'teneo_wallet'
@@ -63,16 +56,10 @@ export interface UserState {
   userTier: string
 
   // Masterplan 2026: User Level (1-5 based on USDC spent)
+  // Single level system - Brain Level (XP-based) has been removed
   userLevel: UserLevel
   usdcSpent: number
-  rewardMultiplier: number
-
-  // Masterplan 2026: Brain Level (1-248 with XP progression)
-  brainLevel: number
-  brainXP: number                    // XP towards next level
-  totalBrainXP: number               // Lifetime XP
-  xpToNextLevel: number              // XP needed for next level
-  xpProgress: number                 // Progress percentage (0-100)
+  pointsPerMinMultiplier: number     // Level Boost: multiplier for points/min spending
 
   // Masterplan 2026: Token Balances
   agenticBalance: number             // $AGENTIC for shop purchases
@@ -84,7 +71,7 @@ export interface UserState {
   nftCount: number
 
   // Masterplan 2026: Ship Management
-  maxShips: number                   // Max ships allowed (from user level + brain level)
+  maxShips: number                   // Max ships allowed (from user level)
   currentShipCount: number           // Current ships owned
 
   // Masterplan 2026: Unlocked Content
@@ -104,17 +91,10 @@ const initialState: UserState = {
   userPoints: 0,
   userTier: 'free',
 
-  // User Level
+  // User Level (Masterplan 2026: Single USDC-based level system)
   userLevel: 1,
   usdcSpent: 0,
-  rewardMultiplier: 1.0,
-
-  // Brain Level
-  brainLevel: 1,
-  brainXP: 0,
-  totalBrainXP: 0,
-  xpToNextLevel: getXPForLevel(1),
-  xpProgress: 0,
+  pointsPerMinMultiplier: 1.0,
 
   // Tokens
   agenticBalance: 0,
@@ -126,11 +106,11 @@ const initialState: UserState = {
   nftCount: 0,
 
   // Ships
-  maxShips: 3,  // Default to 3 (brain level 25)
+  maxShips: 1,  // L1 starts with 1 ship
   currentShipCount: 0,
 
   // Unlocks
-  unlockedSynapseTypes: ['minor'],
+  unlockedSynapseTypes: ['minor', 'complex', 'deep', 'core'],  // L1 unlocks all non-lottery types
 
   // UI State
   isLoading: false,
@@ -148,7 +128,10 @@ function createUserStore() {
     try {
       const response = await fetch(`${API_URL}/api/users`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...authStore.getAuthHeader(),
+        },
         body: JSON.stringify({ wallet }),
       })
 
@@ -158,16 +141,9 @@ function createUserStore() {
 
       const user = await response.json()
 
-      // Calculate derived state
+      // Calculate derived state (Masterplan 2026: Single USDC-based level system)
       const userLevel = calculateUserLevel(user.usdc_spent || 0)
       const levelConfig = getUserLevelConfig(userLevel)
-      const brainLevel = user.brain_level || 1
-      const totalBrainXP = user.total_brain_xp || 0
-      const xpToNextLevel = getXPForLevel(brainLevel)
-      const xpAtCurrentLevel = getTotalXPForLevel(brainLevel)
-      const xpProgress = xpToNextLevel > 0
-        ? Math.min(100, ((totalBrainXP - xpAtCurrentLevel) / xpToNextLevel) * 100)
-        : 100
 
       // Save wallet to localStorage for persistence
       saveWalletToStorage(wallet)
@@ -178,17 +154,10 @@ function createUserStore() {
         userPoints: user.points || 0,
         userTier: user.tier || 'free',
 
-        // User Level
+        // User Level (Masterplan 2026)
         userLevel,
         usdcSpent: user.usdc_spent || 0,
-        rewardMultiplier: levelConfig.multiplier,
-
-        // Brain Level
-        brainLevel,
-        brainXP: user.brain_xp || 0,
-        totalBrainXP,
-        xpToNextLevel,
-        xpProgress,
+        pointsPerMinMultiplier: levelConfig.multiplier,
 
         // Tokens
         agenticBalance: user.agentic_balance || 0,
@@ -199,12 +168,12 @@ function createUserStore() {
         lotteryTickets: user.lottery_tickets || 0,
         nftCount: user.nft_count || 0,
 
-        // Ships
-        maxShips: Math.max(levelConfig.maxShips, getMaxShipsForBrainLevel(brainLevel)),
+        // Ships (from User Level only)
+        maxShips: getMaxShipsForUserLevel(userLevel),
         currentShipCount: 0, // Will be set by shipStore
 
-        // Unlocks
-        unlockedSynapseTypes: getUnlockedSynapseTypes(brainLevel),
+        // Unlocks (from User Level)
+        unlockedSynapseTypes: getUnlockedSynapseTypes(userLevel),
 
         isLoading: false,
       })
@@ -219,6 +188,7 @@ function createUserStore() {
 
   const logout = () => {
     clearWalletFromStorage()
+    authStore.clearAuth()
     setState({ ...initialState })
   }
 
@@ -239,7 +209,10 @@ function createUserStore() {
     try {
       const response = await fetch(`${API_URL}/api/users/${state.userId}/usdc-spent`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...authStore.getAuthHeader(),
+        },
         body: JSON.stringify({ amount }),
       })
 
@@ -254,45 +227,15 @@ function createUserStore() {
       setState({
         usdcSpent: newTotal,
         userLevel: newLevel,
-        rewardMultiplier: levelConfig.multiplier,
-        maxShips: Math.max(levelConfig.maxShips, getMaxShipsForBrainLevel(state.brainLevel)),
+        pointsPerMinMultiplier: levelConfig.multiplier,
+        maxShips: getMaxShipsForUserLevel(newLevel),
+        unlockedSynapseTypes: getUnlockedSynapseTypes(newLevel),
       })
 
       return true
     } catch (error) {
       console.error('Failed to record USDC spent:', error)
       return false
-    }
-  }
-
-  // ============ BRAIN XP ============
-
-  const addBrainXP = (xp: number) => {
-    const newTotalXP = state.totalBrainXP + xp
-    const newBrainLevel = getLevelFromTotalXP(newTotalXP)
-    const xpToNextLevel = getXPForLevel(newBrainLevel)
-    const xpAtCurrentLevel = getTotalXPForLevel(newBrainLevel)
-    const xpProgress = xpToNextLevel > 0
-      ? Math.min(100, ((newTotalXP - xpAtCurrentLevel) / xpToNextLevel) * 100)
-      : 100
-
-    const levelConfig = getUserLevelConfig(state.userLevel)
-    const previousBrainLevel = state.brainLevel
-
-    setState({
-      brainXP: newTotalXP - xpAtCurrentLevel,
-      totalBrainXP: newTotalXP,
-      brainLevel: newBrainLevel,
-      xpToNextLevel,
-      xpProgress,
-      unlockedSynapseTypes: getUnlockedSynapseTypes(newBrainLevel),
-      maxShips: Math.max(levelConfig.maxShips, getMaxShipsForBrainLevel(newBrainLevel)),
-    })
-
-    // Check for level up
-    if (newBrainLevel > previousBrainLevel) {
-      console.log(`Brain Level Up! ${previousBrainLevel} -> ${newBrainLevel}`)
-      // Could emit event here for UI notification
     }
   }
 
@@ -356,13 +299,6 @@ function createUserStore() {
     return `L${state.userLevel} ${config.label}`
   }
 
-  const getBrainLevelLabel = (): string => {
-    if (state.brainLevel >= BRAIN_LEVEL_CONFIG.maxLevel) {
-      return `Brain Level MAX (${BRAIN_LEVEL_CONFIG.maxLevel})`
-    }
-    return `Brain Level ${state.brainLevel}`
-  }
-
   return {
     // ============ REACTIVE GETTERS ============
     // Identity
@@ -373,17 +309,10 @@ function createUserStore() {
     get userPoints() { return state.userPoints },
     get userTier() { return state.userTier },
 
-    // User Level
+    // User Level (Masterplan 2026: Single USDC-based level system)
     get userLevel() { return state.userLevel },
     get usdcSpent() { return state.usdcSpent },
-    get rewardMultiplier() { return state.rewardMultiplier },
-
-    // Brain Level
-    get brainLevel() { return state.brainLevel },
-    get brainXP() { return state.brainXP },
-    get totalBrainXP() { return state.totalBrainXP },
-    get xpToNextLevel() { return state.xpToNextLevel },
-    get xpProgress() { return state.xpProgress },
+    get pointsPerMinMultiplier() { return state.pointsPerMinMultiplier },
 
     // Tokens
     get agenticBalance() { return state.agenticBalance },
@@ -417,9 +346,6 @@ function createUserStore() {
     // USDC Spending
     recordUSDCSpent,
 
-    // Brain XP
-    addBrainXP,
-
     // Token Management
     addAgentic,
     spendAgentic,
@@ -440,7 +366,6 @@ function createUserStore() {
     // Utility
     refreshUserState,
     getUserLevelLabel,
-    getBrainLevelLabel,
   }
 }
 

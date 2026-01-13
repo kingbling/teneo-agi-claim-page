@@ -1,12 +1,8 @@
 import { createRoot } from 'solid-js'
 import { createStore, produce } from 'solid-js/store'
 
-// API Configuration
-const API_URL = import.meta.env.VITE_API_URL
-
-if (!API_URL) {
-  throw new Error('VITE_API_URL environment variable is not set')
-}
+// API Configuration - empty string means same-origin (App Platform deployment)
+const API_URL = import.meta.env.VITE_API_URL ?? ''
 
 // ============================================================================
 // MASTERPLAN 2026: EVENT STORE

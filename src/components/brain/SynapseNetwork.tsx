@@ -1,102 +1,118 @@
-import { useRef, useMemo, memo } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { onMount, onCleanup, createEffect, createMemo, type Component } from 'solid-js'
 import * as THREE from 'three'
-import type { SpaceCluster, NetworkConnection } from '@/types/agent'
-import { useAgentStore } from '@/stores/agentStore'
-import { NETWORK_SPEEDS, getNetworkSpeedMultiplier } from '@/types/agent'
-
-const BRAIN_SCALE = { x: 1.3, y: 1.0, z: 1.1 }
-const CURVE_SEGMENTS = 24  // Segments per bezier curve
+import { useThree, useFrame } from '@/three/hooks'
+import type { SynapseType, UserLevel } from '@/types/game'
+import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG, SYNAPSE_TYPE_ORDER } from '@/types/game'
+import { TRANCE_CONFIG, constrainToBrainShape } from './core/brainConstants'
+import type { SynapseCluster } from '@/stores/shipStore'
 
 interface SynapseNetworkProps {
-  spaceClusters: SpaceCluster[]
-  maxConnectionDistance?: number
-  particlesPerConnection?: number
-  opacity?: number
-}
-
-interface Connection {
-  from: THREE.Vector3
-  to: THREE.Vector3
-  midpoint: THREE.Vector3  // For bezier curve
-  distance: number
-  fromRatio: number
-  toRatio: number
-  useCount: number
-  speedMultiplier: number
-  brightness: number
+  synapseClusters: SynapseCluster[]
+  userLevel?: UserLevel  // For showing locked connections (Masterplan 2026: USDC-based level)
+  shipPosition?: THREE.Vector3 | null  // Ship world position when zoomed
+  isShipZoom?: boolean  // Enable depth-based visibility
 }
 
 interface DiscoveredNode {
   position: THREE.Vector3
   discoveryRatio: number
-  spaceCount: number
+  dominantType: SynapseType
+  isLocked: boolean
 }
 
-// Build network with curved bezier midpoints
-// Now shows ALL synapses, not just discovered ones - undiscovered appear dimmer
+interface Connection {
+  from: THREE.Vector3
+  to: THREE.Vector3
+  brightness: number
+  dominantType: SynapseType
+  isLocked: boolean
+}
+
+// Get dominant synapse type from type counts
+function getDominantSynapseType(typeCounts?: Record<SynapseType, number>): SynapseType {
+  if (!typeCounts) return 'minor'
+
+  let dominantType: SynapseType = 'minor'
+  let highestCount = 0
+
+  for (const type of SYNAPSE_TYPE_ORDER) {
+    const count = typeCounts[type] || 0
+    if (count > highestCount) {
+      dominantType = type
+      highestCount = count
+    }
+  }
+
+  return dominantType
+}
+
+// Build network of connections between discovered synapse clusters
 function buildNetwork(
-  clusters: SpaceCluster[],
-  networkConnections: NetworkConnection[],
-  maxDistance: number
+  clusters: SynapseCluster[],
+  userLevel: UserLevel
 ): { nodes: DiscoveredNode[]; connections: Connection[] } {
-  // Use all clusters, not just discovered ones
-  const nodes: DiscoveredNode[] = clusters.map(c => ({
-    position: new THREE.Vector3(
-      c.positionX * BRAIN_SCALE.x,
-      c.positionY * BRAIN_SCALE.y,
-      c.positionZ * BRAIN_SCALE.z
-    ),
-    discoveryRatio: c.discoveredCount / Math.max(1, c.spaceCount),
-    spaceCount: c.spaceCount
-  }))
+  // Filter to clusters with discoveries
+  const discovered = clusters.filter(c => c.discoveredCount > 0)
 
-  if (clusters.length < 2) return { nodes, connections: [] }
-
-  const networkMap = new Map<string, NetworkConnection>()
-  networkConnections.forEach(nc => {
-    networkMap.set(`${nc.fromSpaceId}-${nc.toSpaceId}`, nc)
-    networkMap.set(`${nc.toSpaceId}-${nc.fromSpaceId}`, nc)
+  const nodes: DiscoveredNode[] = discovered.map(c => {
+    const dominantType = getDominantSynapseType(c.typeCounts)
+    const unlockLevel = SYNAPSE_CONFIG[dominantType].unlockUserLevel
+    // Use same position transform as SpaceMarkers for alignment
+    const [x, y, z] = constrainToBrainShape(c.positionX, c.positionY, c.positionZ)
+    return {
+      position: new THREE.Vector3(x, y, z),
+      discoveryRatio: c.discoveredCount / Math.max(1, c.synapseCount),
+      dominantType,
+      isLocked: userLevel < unlockLevel
+    }
   })
+
+  if (discovered.length < 2) return { nodes, connections: [] }
 
   const connections: Connection[] = []
   const connectionSet = new Set<string>()
 
+  // Connect each node to its nearest neighbor only (chain-like structure)
   for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const distance = nodes[i].position.distanceTo(nodes[j].position)
+    let nearestIdx = -1
+    let nearestDist = Infinity
 
-      if (distance <= maxDistance) {
-        const key = `${i}-${j}`
-        if (!connectionSet.has(key)) {
-          connectionSet.add(key)
+    // Find nearest neighbor
+    for (let j = 0; j < nodes.length; j++) {
+      if (i === j) continue
+      const dist = nodes[i].position.distanceTo(nodes[j].position)
+      if (dist < nearestDist) {
+        nearestDist = dist
+        nearestIdx = j
+      }
+    }
 
-          const avgDiscoveryRatio = (nodes[i].discoveryRatio + nodes[j].discoveryRatio) / 2
-          const simulatedUseCount = Math.floor(avgDiscoveryRatio * NETWORK_SPEEDS.USE_COUNT_FOR_MAX * 0.5)
-          const speedMultiplier = getNetworkSpeedMultiplier(simulatedUseCount)
-          // Undiscovered connections are dimmer (0.15 base), discovered get brighter (up to 1.0)
-          const baseBrightness = avgDiscoveryRatio > 0 ? 0.3 : 0.15
-          const brightness = baseBrightness + (speedMultiplier - 1.0) / (NETWORK_SPEEDS.ON_NETWORK_MAX - 1.0) * 0.7
+    if (nearestIdx !== -1) {
+      // Normalize key to avoid duplicate connections (A->B same as B->A)
+      const key = i < nearestIdx ? `${i}-${nearestIdx}` : `${nearestIdx}-${i}`
+      if (!connectionSet.has(key)) {
+        connectionSet.add(key)
 
-          // Calculate curved midpoint - push outward from brain center
-          const midpoint = nodes[i].position.clone().add(nodes[j].position).multiplyScalar(0.5)
-          const direction = midpoint.clone().normalize()
-          // Curve amount based on distance - longer connections curve more
-          const curveAmount = 0.08 + distance * 0.05
-          midpoint.add(direction.multiplyScalar(curveAmount))
+        const nodeA = nodes[i]
+        const nodeB = nodes[nearestIdx]
 
-          connections.push({
-            from: nodes[i].position.clone(),
-            to: nodes[j].position.clone(),
-            midpoint,
-            distance,
-            fromRatio: nodes[i].discoveryRatio,
-            toRatio: nodes[j].discoveryRatio,
-            useCount: simulatedUseCount,
-            speedMultiplier,
-            brightness
-          })
-        }
+        // Brightness based on discovery ratio
+        const avgRatio = (nodeA.discoveryRatio + nodeB.discoveryRatio) / 2
+        const brightness = 0.3 + avgRatio * 0.7
+
+        // Use the rarer type for connection color
+        const type1Index = SYNAPSE_TYPE_ORDER.indexOf(nodeA.dominantType)
+        const type2Index = SYNAPSE_TYPE_ORDER.indexOf(nodeB.dominantType)
+        const dominantType = type1Index > type2Index ? nodeA.dominantType : nodeB.dominantType
+        const isLocked = nodeA.isLocked || nodeB.isLocked
+
+        connections.push({
+          from: nodeA.position.clone(),
+          to: nodeB.position.clone(),
+          brightness,
+          dominantType,
+          isLocked
+        })
       }
     }
   }
@@ -104,584 +120,522 @@ function buildNetwork(
   return { nodes, connections }
 }
 
-// Vertex shader for glowing bezier curves with animated dash
-const CURVE_VERTEX_SHADER = `
-  attribute float aProgress;
-  attribute float aBrightness;
-  attribute float aSpeedMultiplier;
-  attribute float aConnectionIndex;
-
-  uniform float uTime;
-
-  varying float vProgress;
-  varying float vBrightness;
-  varying float vSpeedMultiplier;
-  varying float vConnectionIndex;
-
-  void main() {
-    vProgress = aProgress;
-    vBrightness = aBrightness;
-    vSpeedMultiplier = aSpeedMultiplier;
-    vConnectionIndex = aConnectionIndex;
-
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`
-
-// Fragment shader for glowing animated dash pattern - like electric synapses
-const CURVE_FRAGMENT_SHADER = `
-  uniform float uTime;
-  uniform float uOpacity;
-
-  varying float vProgress;
-  varying float vBrightness;
-  varying float vSpeedMultiplier;
-  varying float vConnectionIndex;
-
-  void main() {
-    // Animated dash pattern - scrolling electricity effect
-    float dashSpeed = 0.8 + vSpeedMultiplier * 0.3;
-    float dashFreq = 12.0 + vBrightness * 8.0;  // More dashes on bright paths
-    float phase = vConnectionIndex * 1.37;  // Unique phase per connection
-
-    // Create flowing dash animation
-    float dashPattern = sin((vProgress - uTime * dashSpeed + phase) * dashFreq * 3.14159);
-    float dash = smoothstep(-0.2, 0.5, dashPattern);
-
-    // Add secondary faster dash for sparkle effect
-    float sparkle = sin((vProgress - uTime * dashSpeed * 2.5 + phase) * dashFreq * 2.0 * 3.14159);
-    float sparkleMask = smoothstep(0.3, 0.8, sparkle) * 0.3;
-
-    // Color gradient: cyan core → blue edges, brighter with usage
-    vec3 cyanCore = vec3(0.46, 0.9, 0.92);     // Bright cyan
-    vec3 blueEdge = vec3(0.0, 0.27, 1.0);      // Deep blue
-    vec3 whiteCore = vec3(0.9, 1.0, 1.0);      // Almost white for hot paths
-
-    // Mix based on progress along line for gradient effect
-    vec3 baseColor = mix(cyanCore, blueEdge, vProgress);
-
-    // Brighten based on usage (Death Stranding style)
-    baseColor = mix(baseColor, whiteCore, vBrightness * 0.5);
-
-    // Add sparkle highlights
-    baseColor += sparkleMask * vec3(0.3, 0.5, 0.5) * vBrightness;
-
-    // Pulsing glow effect
-    float pulse = 0.7 + 0.3 * sin(uTime * (2.0 + vSpeedMultiplier) + vConnectionIndex);
-
-    // Alpha based on dash pattern and brightness - increased for visibility
-    float alpha = dash * (0.25 + vBrightness * 0.45) * pulse;
-
-    // Constant glow layer for visibility even without dash
-    float constantGlow = 0.08 + vBrightness * 0.12;
-    alpha = max(alpha, constantGlow);
-
-    gl_FragColor = vec4(baseColor * pulse, alpha * uOpacity);
-  }
-`
-
-// Vertex shader for discovered node markers (gold) - enhanced glow
+// Node marker vertex shader
 const NODE_VERTEX_SHADER = `
-  attribute float aDiscoveryRatio;
-  attribute float aSpaceCount;
+  attribute float aSize;
+  attribute vec3 aColor;
 
-  uniform float uTime;
-  uniform vec3 uCameraPosition;
+  uniform vec3 uShipPosition;
+  uniform int uIsShipZoom;
 
-  varying float vDiscoveryRatio;
-  varying float vDistScale;
+  varying vec3 vColor;
+  varying float vBehindShip;
 
   void main() {
-    vDiscoveryRatio = aDiscoveryRatio;
+    vColor = aColor;
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+
+    // Depth-based visibility for ship zoom mode
+    if (uIsShipZoom == 1) {
+      vec4 shipViewPos = modelViewMatrix * vec4(uShipPosition, 1.0);
+      float shipDepth = shipViewPos.z;
+      float particleDepth = mvPosition.z;
+      vBehindShip = particleDepth < (shipDepth + 0.05) ? 1.0 : 0.0;
+    } else {
+      vBehindShip = 1.0;
+    }
+
+    gl_PointSize = aSize;
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`
+
+// Node marker fragment shader (sharp circles)
+const NODE_FRAGMENT_SHADER = `
+  varying vec3 vColor;
+  varying float vBehindShip;
+
+  void main() {
+    // Discard particles in front of ship when in ship zoom mode
+    if (vBehindShip < 0.5) discard;
+
+    vec2 center = gl_PointCoord - vec2(0.5);
+    float dist = length(center);
+
+    // Hard edge circle
+    if (dist > 0.4) discard;
+
+    gl_FragColor = vec4(vColor, 0.85);
+  }
+`
+
+// Line vertex shader
+const LINE_VERTEX_SHADER = `
+  attribute vec3 aColor;
+  attribute float aOpacity;
+
+  uniform vec3 uShipPosition;
+  uniform int uIsShipZoom;
+
+  varying vec3 vColor;
+  varying float vOpacity;
+  varying float vBehindShip;
+
+  void main() {
+    vColor = aColor;
+    vOpacity = aOpacity;
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+
+    // Depth-based visibility for ship zoom mode
+    if (uIsShipZoom == 1) {
+      vec4 shipViewPos = modelViewMatrix * vec4(uShipPosition, 1.0);
+      float shipDepth = shipViewPos.z;
+      float particleDepth = mvPosition.z;
+      vBehindShip = particleDepth < (shipDepth + 0.05) ? 1.0 : 0.0;
+    } else {
+      vBehindShip = 1.0;
+    }
+
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`
+
+// Line fragment shader
+const LINE_FRAGMENT_SHADER = `
+  varying vec3 vColor;
+  varying float vOpacity;
+  varying float vBehindShip;
+
+  void main() {
+    // Discard lines in front of ship when in ship zoom mode
+    if (vBehindShip < 0.5) discard;
+
+    // Boost brightness for visibility
+    gl_FragColor = vec4(vColor * 2.5, vOpacity);
+  }
+`
+
+// Sparkle particle vertex shader (flowing river style - no pulsing)
+const SPARKLE_VERTEX_SHADER = `
+  attribute float aSize;
+  attribute vec3 aColor;
+  attribute float aOffset;  // Position offset along connection
+
+  uniform float uTime;
+  uniform vec3 uShipPosition;
+  uniform int uIsShipZoom;
+
+  varying vec3 vColor;
+  varying float vAlpha;
+  varying float vBehindShip;
+
+  void main() {
+    vColor = aColor;
+
+    // Smooth flow - no pulsing for calm river effect
+    vAlpha = 0.5;
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-    float distToCamera = distance(position, uCameraPosition);
 
-    // Match camera range (1.5 to 6.0) - allow full scaling when zoomed in
-    float distScale = smoothstep(6.0, 1.5, distToCamera);
-    vDistScale = distScale;
+    // Depth-based visibility for ship zoom mode
+    if (uIsShipZoom == 1) {
+      vec4 shipViewPos = modelViewMatrix * vec4(uShipPosition, 1.0);
+      float shipDepth = shipViewPos.z;
+      float particleDepth = mvPosition.z;
+      vBehindShip = particleDepth < (shipDepth + 0.05) ? 1.0 : 0.0;
+    } else {
+      vBehindShip = 1.0;
+    }
 
-    // Stronger pulse for discovered nodes
-    float pulse = 1.0 + 0.3 * sin(uTime * 3.0 + position.x * 10.0);
-
-    // Larger base size for better visibility
-    float baseSize = 14.0 + aDiscoveryRatio * 20.0 + log(aSpaceCount + 1.0) * 3.0;
-
-    gl_PointSize = baseSize * max(0.1, vDistScale) * pulse;
+    gl_PointSize = clamp(aSize * (100.0 / -mvPosition.z), 1.0, 8.0);
     gl_Position = projectionMatrix * mvPosition;
   }
 `
 
-// Fragment shader for discovered node markers - enhanced gold glow
-const NODE_FRAGMENT_SHADER = `
-  uniform float uTime;
-  uniform float uOpacity;
-
-  varying float vDiscoveryRatio;
-  varying float vDistScale;
+// Sparkle particle fragment shader (bright visible dots)
+const SPARKLE_FRAGMENT_SHADER = `
+  varying vec3 vColor;
+  varying float vAlpha;
+  varying float vBehindShip;
 
   void main() {
+    // Discard sparkles in front of ship when in ship zoom mode
+    if (vBehindShip < 0.5) discard;
+
     vec2 center = gl_PointCoord - vec2(0.5);
     float dist = length(center);
-    if (dist > 0.5) discard;
 
-    // Core and glow layers
-    float core = smoothstep(0.15, 0.0, dist);
-    float glow = smoothstep(0.5, 0.0, dist);
-    float ring = smoothstep(0.5, 0.35, dist) * smoothstep(0.25, 0.32, dist);
-    float outerGlow = smoothstep(0.5, 0.3, dist);
+    // Hard edge - discard pixels outside radius
+    if (dist > 0.4) discard;
 
-    // Gold/amber color gradient - more vibrant
-    vec3 whiteCore = vec3(1.0, 1.0, 0.95);    // Bright white-gold center
-    vec3 goldCore = vec3(1.0, 0.9, 0.5);      // Bright gold
-    vec3 amber = vec3(1.0, 0.6, 0.1);         // Amber glow
-    vec3 orangeGlow = vec3(0.9, 0.4, 0.05);   // Outer orange
-
-    // Mix based on distance from center
-    vec3 color = mix(goldCore, whiteCore, core);
-    color = mix(amber, color, glow);
-    color = mix(orangeGlow, color, outerGlow);
-
-    // Brighter for higher discovery ratio
-    color = mix(color, vec3(1.0, 1.0, 0.9), vDiscoveryRatio * core * 0.7);
-
-    // Pulsing ring effect - only for discovered nodes
-    float ringPulse = 0.5 + 0.5 * sin(uTime * 4.0);
-    color += ring * vec3(1.0, 0.85, 0.3) * ringPulse * 0.8 * vDiscoveryRatio;
-
-    // Scale alpha with distance to prevent overexposure when zoomed in
-    float alpha = glow * (0.15 + vDiscoveryRatio * 0.35) * max(0.2, vDistScale);
-    alpha = max(alpha, 0.02);  // Tiny minimum to prevent complete invisibility
-
-    gl_FragColor = vec4(color, alpha * uOpacity);
+    // Bright dot with glow
+    gl_FragColor = vec4(vColor * 1.5, 1.0);
   }
 `
 
-// Vertex shader for electron particles flowing along curves
-const ELECTRON_VERTEX_SHADER = `
-  attribute float aConnectionIndex;
-  attribute float aParticleIndex;
-  attribute vec3 aStartPos;
-  attribute vec3 aMidPos;
-  attribute vec3 aEndPos;
-  attribute float aSpeedMultiplier;
-  attribute float aBrightness;
+// Sparkle configuration - with nearest-neighbor connections we can have more sparkles
+const SPARKLES_PER_CONNECTION = 3  // Multiple particles per connection for visible flow
+const SPARKLE_CONNECTION_RATIO = 1.0  // All connections get sparkles (fewer connections now)
 
-  uniform float uTime;
-  uniform vec3 uCameraPosition;
+export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
+  const { scene, gl, camera } = useThree()
 
-  varying float vAlpha;
-  varying float vProgress;
-  varying float vDistScale;
-  varying float vBrightness;
-  varying float vSpeedMultiplier;
+  // Three.js objects (imperative refs)
+  let pointsObject: THREE.Points | null = null
+  let linesObject: THREE.LineSegments | null = null
+  let sparklesObject: THREE.Points | null = null
+  let pointsGeometry: THREE.BufferGeometry | null = null
+  let linesGeometry: THREE.BufferGeometry | null = null
+  let sparklesGeometry: THREE.BufferGeometry | null = null
+  let pointsMaterial: THREE.ShaderMaterial | null = null
+  let linesMaterial: THREE.ShaderMaterial | null = null
+  let sparklesMaterial: THREE.ShaderMaterial | null = null
 
-  // Quadratic bezier interpolation
-  vec3 bezier(vec3 p0, vec3 p1, vec3 p2, float t) {
-    float t1 = 1.0 - t;
-    return t1 * t1 * p0 + 2.0 * t1 * t * p1 + t * t * p2;
-  }
+  // Sparkle animation data
+  let sparklePositions: Float32Array | null = null
+  let sparkleConnections: Connection[] = []
+  let sparkleOffsets: Float32Array | null = null
 
-  void main() {
-    float phase = aConnectionIndex * 0.37 + aParticleIndex * 0.23;
+  // Time tracking for scaled time (trance mode)
+  let scaledTime = 0
+  let lastRealTime = 0
 
-    // Speed scales with usage
-    float baseSpeed = 0.5;
-    float speed = baseSpeed * aSpeedMultiplier;
-    float progress = fract(uTime * speed + phase);
+  // Build network
+  const networkData = createMemo(() => {
+    const userLevel = props.userLevel ?? 1 as UserLevel
+    return buildNetwork(props.synapseClusters, userLevel)
+  })
 
-    // Bidirectional flow
-    float direction = mod(aParticleIndex, 2.0) < 1.0 ? 1.0 : -1.0;
-    if (direction < 0.0) {
-      progress = 1.0 - progress;
-    }
+  // Node marker geometry with synapse type colors
+  const nodeGeometryData = createMemo(() => {
+    const { nodes } = networkData()
+    if (nodes.length === 0) return null
 
-    // Position along bezier curve
-    vec3 pos = bezier(aStartPos, aMidPos, aEndPos, progress);
+    const positions = new Float32Array(nodes.length * 3)
+    const sizes = new Float32Array(nodes.length)
+    const colors = new Float32Array(nodes.length * 3)
 
-    // Add perpendicular wave motion
-    vec3 tangent = normalize(2.0 * (1.0 - progress) * (aMidPos - aStartPos) + 2.0 * progress * (aEndPos - aMidPos));
-    vec3 up = vec3(0.0, 1.0, 0.0);
-    vec3 perp = normalize(cross(tangent, up));
-    if (length(perp) < 0.1) {
-      perp = normalize(cross(tangent, vec3(1.0, 0.0, 0.0)));
-    }
-
-    float waveAmount = 0.015 + 0.01 * aSpeedMultiplier;
-    float wave = sin(progress * 6.28318 * 3.0 + uTime * 5.0 + phase * 10.0) * waveAmount;
-    pos += perp * wave;
-
-    vProgress = progress;
-    vBrightness = aBrightness;
-    vSpeedMultiplier = aSpeedMultiplier;
-
-    // Match camera range (1.5 to 6.0) - allow full scaling when zoomed in
-    float distToCamera = distance(pos, uCameraPosition);
-    float distScale = smoothstep(6.0, 1.5, distToCamera);
-    vDistScale = distScale;
-
-    // Fade at ends
-    float fadeIn = smoothstep(0.0, 0.12, progress);
-    float fadeOut = smoothstep(1.0, 0.88, progress);
-    vAlpha = fadeIn * fadeOut;
-
-    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
-
-    // Scale particles with distance to prevent overexposure when zoomed in
-    float usageScale = 1.0 + (aSpeedMultiplier - 1.0) * 0.4;
-    float size = (6.0 + sin(progress * 3.14159) * 3.0) * max(0.15, vDistScale) * usageScale;
-    gl_PointSize = size;
-
-    gl_Position = projectionMatrix * mvPosition;
-  }
-`
-
-// Fragment shader for electron particles - bright cyan glow
-const ELECTRON_FRAGMENT_SHADER = `
-  uniform float uOpacity;
-  uniform float uTime;
-
-  varying float vAlpha;
-  varying float vProgress;
-  varying float vDistScale;
-  varying float vBrightness;
-  varying float vSpeedMultiplier;
-
-  void main() {
-    vec2 center = gl_PointCoord - vec2(0.5);
-    float dist = length(center);
-    if (dist > 0.5) discard;
-
-    // Bright core with soft glow
-    float core = smoothstep(0.2, 0.0, dist);
-    float glow = smoothstep(0.5, 0.0, dist);
-    float ring = smoothstep(0.5, 0.35, dist) * smoothstep(0.2, 0.3, dist);
-
-    // Pulse effect
-    float pulseSpeed = 3.0 + vSpeedMultiplier;
-    float pulse = 0.7 + 0.3 * sin(uTime * pulseSpeed + vProgress * 6.28318);
-
-    // Bright cyan to white gradient based on usage
-    vec3 cyanGlow = vec3(0.3, 0.9, 1.0);
-    vec3 whiteCore = vec3(0.95, 1.0, 1.0);
-    vec3 blueOuter = vec3(0.1, 0.4, 0.8);
-
-    vec3 color = mix(blueOuter, cyanGlow, glow);
-    color = mix(color, whiteCore, core * vBrightness);
-
-    // Ring highlight
-    color += ring * vec3(0.3, 0.7, 1.0) * pulse * 0.5;
-
-    // Shimmer effect
-    float shimmer = 0.85 + 0.15 * sin(uTime * 6.0 + vProgress * 12.56637);
-    color *= shimmer;
-
-    // Scale alpha with distance to prevent overexposure when zoomed in
-    float alpha = glow * vAlpha * uOpacity * (0.2 + vBrightness * 0.2) * pulse * max(0.15, vDistScale);
-    alpha = max(alpha, 0.01);  // Tiny minimum
-
-    gl_FragColor = vec4(color, alpha);
-  }
-`
-
-export const SynapseNetwork = memo(function SynapseNetwork({
-  spaceClusters,
-  maxConnectionDistance = 2.0,
-  particlesPerConnection = 16,
-  opacity = 1
-}: SynapseNetworkProps) {
-  const nodeMaterialRef = useRef<THREE.ShaderMaterial>(null)
-  const curveMaterialRef = useRef<THREE.ShaderMaterial>(null)
-  const electronMaterialRef = useRef<THREE.ShaderMaterial>(null)
-
-  const networkConnections = useAgentStore((state) => state.networkConnections)
-
-  const network = useMemo(() => {
-    return buildNetwork(spaceClusters, networkConnections, maxConnectionDistance)
-  }, [spaceClusters, networkConnections, maxConnectionDistance])
-
-  // Generate bezier curve geometry for all connections
-  const curveData = useMemo(() => {
-    if (network.connections.length === 0) return null
-
-    const totalVertices = network.connections.length * CURVE_SEGMENTS
-    const positions = new Float32Array(totalVertices * 3)
-    const progresses = new Float32Array(totalVertices)
-    const brightnesses = new Float32Array(totalVertices)
-    const speedMultipliers = new Float32Array(totalVertices)
-    const connectionIndices = new Float32Array(totalVertices)
-    const indices: number[] = []
-
-    let vertexIdx = 0
-    network.connections.forEach((conn, connIdx) => {
-      const curve = new THREE.QuadraticBezierCurve3(conn.from, conn.midpoint, conn.to)
-      const points = curve.getPoints(CURVE_SEGMENTS - 1)
-
-      const startVertexIdx = vertexIdx
-      points.forEach((point, i) => {
-        positions[vertexIdx * 3] = point.x
-        positions[vertexIdx * 3 + 1] = point.y
-        positions[vertexIdx * 3 + 2] = point.z
-        progresses[vertexIdx] = i / (CURVE_SEGMENTS - 1)
-        brightnesses[vertexIdx] = conn.brightness
-        speedMultipliers[vertexIdx] = conn.speedMultiplier
-        connectionIndices[vertexIdx] = connIdx
-
-        // Create line segments
-        if (i > 0) {
-          indices.push(startVertexIdx + i - 1, startVertexIdx + i)
-        }
-        vertexIdx++
-      })
-    })
-
-    return {
-      positions,
-      progresses,
-      brightnesses,
-      speedMultipliers,
-      connectionIndices,
-      indices: new Uint32Array(indices),
-      count: totalVertices
-    }
-  }, [network.connections])
-
-  // Generate node marker data
-  const nodeData = useMemo(() => {
-    if (network.nodes.length === 0) return null
-
-    const positions = new Float32Array(network.nodes.length * 3)
-    const discoveryRatios = new Float32Array(network.nodes.length)
-    const spaceCounts = new Float32Array(network.nodes.length)
-
-    network.nodes.forEach((node, i) => {
+    nodes.forEach((node, i) => {
       positions[i * 3] = node.position.x
       positions[i * 3 + 1] = node.position.y
       positions[i * 3 + 2] = node.position.z
-      discoveryRatios[i] = node.discoveryRatio
-      spaceCounts[i] = node.spaceCount
+
+      // Color based on synapse type
+      const typeColor = SYNAPSE_TYPE_COLORS[node.dominantType]
+      let brightness = 0.6 + node.discoveryRatio * 0.4
+
+      // Dim locked nodes
+      if (node.isLocked) {
+        brightness *= 0.3
+      }
+
+      colors[i * 3] = typeColor.r * brightness
+      colors[i * 3 + 1] = typeColor.g * brightness
+      colors[i * 3 + 2] = typeColor.b * brightness
+
+      sizes[i] = 8.0 + node.discoveryRatio * 4.0
     })
 
-    return { positions, discoveryRatios, spaceCounts, count: network.nodes.length }
-  }, [network.nodes])
+    return { positions, sizes, colors }
+  })
 
-  // Generate electron particle data with bezier midpoints
-  const electronData = useMemo(() => {
-    if (network.connections.length === 0) return null
+  // Line geometry data
+  const lineGeometryData = createMemo(() => {
+    const { connections } = networkData()
+    if (connections.length === 0) return null
 
-    const totalParticles = network.connections.length * particlesPerConnection
+    // Each connection is 2 vertices (from and to)
+    const positions = new Float32Array(connections.length * 6)
+    const colors = new Float32Array(connections.length * 6)
+    const opacities = new Float32Array(connections.length * 2)
 
-    const positions = new Float32Array(totalParticles * 3)
-    const connectionIndices = new Float32Array(totalParticles)
-    const particleIndices = new Float32Array(totalParticles)
-    const startPositions = new Float32Array(totalParticles * 3)
-    const midPositions = new Float32Array(totalParticles * 3)
-    const endPositions = new Float32Array(totalParticles * 3)
-    const speedMultipliers = new Float32Array(totalParticles)
-    const brightnesses = new Float32Array(totalParticles)
+    connections.forEach((conn, i) => {
+      // From vertex
+      positions[i * 6] = conn.from.x
+      positions[i * 6 + 1] = conn.from.y
+      positions[i * 6 + 2] = conn.from.z
 
-    let particleIdx = 0
-    network.connections.forEach((conn, connIdx) => {
-      for (let i = 0; i < particlesPerConnection; i++) {
-        positions[particleIdx * 3] = conn.from.x
-        positions[particleIdx * 3 + 1] = conn.from.y
-        positions[particleIdx * 3 + 2] = conn.from.z
+      // To vertex
+      positions[i * 6 + 3] = conn.to.x
+      positions[i * 6 + 4] = conn.to.y
+      positions[i * 6 + 5] = conn.to.z
 
-        connectionIndices[particleIdx] = connIdx
-        particleIndices[particleIdx] = i
+      // Color based on synapse type
+      const typeColor = SYNAPSE_TYPE_COLORS[conn.dominantType]
+      const brightness = conn.isLocked ? 0.2 : conn.brightness
 
-        startPositions[particleIdx * 3] = conn.from.x
-        startPositions[particleIdx * 3 + 1] = conn.from.y
-        startPositions[particleIdx * 3 + 2] = conn.from.z
+      // From color
+      colors[i * 6] = typeColor.r * brightness
+      colors[i * 6 + 1] = typeColor.g * brightness
+      colors[i * 6 + 2] = typeColor.b * brightness
 
-        midPositions[particleIdx * 3] = conn.midpoint.x
-        midPositions[particleIdx * 3 + 1] = conn.midpoint.y
-        midPositions[particleIdx * 3 + 2] = conn.midpoint.z
+      // To color (same)
+      colors[i * 6 + 3] = typeColor.r * brightness
+      colors[i * 6 + 4] = typeColor.g * brightness
+      colors[i * 6 + 5] = typeColor.b * brightness
 
-        endPositions[particleIdx * 3] = conn.to.x
-        endPositions[particleIdx * 3 + 1] = conn.to.y
-        endPositions[particleIdx * 3 + 2] = conn.to.z
+      // Opacity - bright visible lines showing the flow path
+      const opacity = conn.isLocked ? 0.4 : 0.9
+      opacities[i * 2] = opacity
+      opacities[i * 2 + 1] = opacity
+    })
 
-        speedMultipliers[particleIdx] = conn.speedMultiplier
-        brightnesses[particleIdx] = conn.brightness
+    return { positions, colors, opacities }
+  })
 
-        particleIdx++
+  onMount(() => {
+    const sceneObj = scene()
+    const renderer = gl()
+
+    if (!sceneObj || !renderer) {
+      console.warn('SynapseNetworkNew: Scene or renderer not available')
+      return
+    }
+
+    // Create points geometry and material
+    pointsGeometry = new THREE.BufferGeometry()
+    pointsMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uShipPosition: { value: new THREE.Vector3() },
+        uIsShipZoom: { value: 0 },
+      },
+      vertexShader: NODE_VERTEX_SHADER,
+      fragmentShader: NODE_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending,
+    })
+
+    pointsObject = new THREE.Points(pointsGeometry, pointsMaterial)
+    pointsObject.frustumCulled = false
+    pointsObject.visible = false  // Start hidden until we have data
+    sceneObj.add(pointsObject)
+
+    // Create lines geometry and material
+    linesGeometry = new THREE.BufferGeometry()
+    linesMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uShipPosition: { value: new THREE.Vector3() },
+        uIsShipZoom: { value: 0 },
+      },
+      vertexShader: LINE_VERTEX_SHADER,
+      fragmentShader: LINE_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,  // Glow effect for visibility
+    })
+
+    linesObject = new THREE.LineSegments(linesGeometry, linesMaterial)
+    linesObject.frustumCulled = false
+    linesObject.visible = false  // Start hidden until we have data
+    sceneObj.add(linesObject)
+
+    // Create sparkle particles geometry and material
+    sparklesGeometry = new THREE.BufferGeometry()
+    sparklesMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uShipPosition: { value: new THREE.Vector3() },
+        uIsShipZoom: { value: 0 },
+      },
+      vertexShader: SPARKLE_VERTEX_SHADER,
+      fragmentShader: SPARKLE_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending,  // Normal blending to prevent compounding in dense areas
+    })
+
+    sparklesObject = new THREE.Points(sparklesGeometry, sparklesMaterial)
+    sparklesObject.frustumCulled = false
+    sparklesObject.visible = false  // Start hidden until we have data
+    sceneObj.add(sparklesObject)
+
+    onCleanup(() => {
+      // Remove from scene and dispose
+      if (pointsObject && sceneObj) {
+        sceneObj.remove(pointsObject)
+      }
+      if (linesObject && sceneObj) {
+        sceneObj.remove(linesObject)
+      }
+      if (pointsGeometry) {
+        pointsGeometry.dispose()
+      }
+      if (linesGeometry) {
+        linesGeometry.dispose()
+      }
+      if (pointsMaterial) {
+        pointsMaterial.dispose()
+      }
+      if (linesMaterial) {
+        linesMaterial.dispose()
+      }
+      if (sparklesObject && sceneObj) {
+        sceneObj.remove(sparklesObject)
+      }
+      if (sparklesGeometry) {
+        sparklesGeometry.dispose()
+      }
+      if (sparklesMaterial) {
+        sparklesMaterial.dispose()
       }
     })
+  })
 
-    return {
-      positions,
-      connectionIndices,
-      particleIndices,
-      startPositions,
-      midPositions,
-      endPositions,
-      speedMultipliers,
-      brightnesses,
-      count: totalParticles
+  // Update node geometry when data changes
+  createEffect(() => {
+    const data = nodeGeometryData()
+    if (!pointsGeometry || !pointsObject) return
+
+    if (!data) {
+      // No data - hide the object
+      pointsObject.visible = false
+      return
     }
-  }, [network.connections, particlesPerConnection])
 
-  // Time scaling for trance mode
-  const userAgents = useAgentStore((state) => state.userAgents)
-  const timeScale = userAgents.some(a => a.tranceActive) ? 0.05 : 1.0
-  const scaledTimeRef = useRef(0)
-  const lastTimeRef = useRef(0)
+    pointsGeometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
+    pointsGeometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
+    pointsGeometry.setAttribute('aColor', new THREE.BufferAttribute(data.colors, 3))
+    pointsGeometry.computeBoundingSphere()
+    pointsObject.visible = true  // Show when we have data
+  })
 
-  useFrame(({ clock, camera }) => {
-    const realTime = clock.getElapsedTime()
-    const deltaTime = realTime - lastTimeRef.current
-    lastTimeRef.current = realTime
-    scaledTimeRef.current += deltaTime * timeScale
-    const time = scaledTimeRef.current
+  // Update line geometry when data changes
+  createEffect(() => {
+    const data = lineGeometryData()
+    if (!linesGeometry || !linesObject || !sparklesGeometry || !sparklesObject) return
 
-    if (nodeMaterialRef.current) {
-      nodeMaterialRef.current.uniforms.uTime.value = time
-      nodeMaterialRef.current.uniforms.uOpacity.value = opacity
-      nodeMaterialRef.current.uniforms.uCameraPosition.value.copy(camera.position)
+    if (!data) {
+      // No data - hide the objects
+      linesObject.visible = false
+      sparklesObject.visible = false
+      return
     }
-    if (curveMaterialRef.current) {
-      curveMaterialRef.current.uniforms.uTime.value = time
-      curveMaterialRef.current.uniforms.uOpacity.value = opacity
-    }
-    if (electronMaterialRef.current) {
-      electronMaterialRef.current.uniforms.uTime.value = time
-      electronMaterialRef.current.uniforms.uOpacity.value = opacity
-      electronMaterialRef.current.uniforms.uCameraPosition.value.copy(camera.position)
+
+    linesGeometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
+    linesGeometry.setAttribute('aColor', new THREE.BufferAttribute(data.colors, 3))
+    linesGeometry.setAttribute('aOpacity', new THREE.BufferAttribute(data.opacities, 1))
+    linesGeometry.computeBoundingSphere()
+    linesObject.visible = true  // Show when we have data
+
+    // Initialize sparkle particles along sparse selection of connections
+    const { connections } = networkData()
+    if (connections.length > 0) {
+      // Sparse selection - only 10% of connections get sparkles
+      const selectedConnections = connections.filter(() => Math.random() < SPARKLE_CONNECTION_RATIO)
+
+      // Ensure at least 1 connection has sparkles if there are any connections
+      if (selectedConnections.length === 0 && connections.length > 0) {
+        selectedConnections.push(connections[Math.floor(Math.random() * connections.length)])
+      }
+
+      const sparkleCount = selectedConnections.length * SPARKLES_PER_CONNECTION
+      sparklePositions = new Float32Array(sparkleCount * 3)
+      sparkleOffsets = new Float32Array(sparkleCount)
+      const sparkleSizes = new Float32Array(sparkleCount)
+      const sparkleColors = new Float32Array(sparkleCount * 3)
+
+      sparkleConnections = selectedConnections
+
+      selectedConnections.forEach((conn, ci) => {
+        for (let p = 0; p < SPARKLES_PER_CONNECTION; p++) {
+          const i = ci * SPARKLES_PER_CONNECTION + p
+          // Initial random offset along the connection
+          sparkleOffsets[i] = Math.random()
+
+          // Initial position (will be updated in animation)
+          sparklePositions[i * 3] = conn.from.x
+          sparklePositions[i * 3 + 1] = conn.from.y
+          sparklePositions[i * 3 + 2] = conn.from.z
+
+          // Size with variation - larger for visibility
+          sparkleSizes[i] = 4.0 + Math.random() * 3.0
+
+          // Color based on connection - visible sparkles
+          const typeColor = SYNAPSE_TYPE_COLORS[conn.dominantType]
+          const brightness = conn.isLocked ? 0.3 : 0.6 + conn.brightness * 0.3
+          sparkleColors[i * 3] = typeColor.r * brightness
+          sparkleColors[i * 3 + 1] = typeColor.g * brightness
+          sparkleColors[i * 3 + 2] = typeColor.b * brightness
+        }
+      })
+
+      sparklesGeometry.setAttribute('position', new THREE.BufferAttribute(sparklePositions, 3))
+      sparklesGeometry.setAttribute('aSize', new THREE.BufferAttribute(sparkleSizes, 1))
+      sparklesGeometry.setAttribute('aColor', new THREE.BufferAttribute(sparkleColors, 3))
+      sparklesGeometry.setAttribute('aOffset', new THREE.BufferAttribute(sparkleOffsets, 1))
+      sparklesGeometry.computeBoundingSphere()
+      sparklesObject.visible = true  // Show sparkles when we have connections
+    } else {
+      sparklesObject.visible = false  // Hide sparkles when no connections
     }
   })
 
-  return (
-    <group>
-      {/* Glowing bezier curve connections with animated dash pattern */}
-      {curveData && curveData.count > 0 && (
-        <lineSegments frustumCulled={false}>
-          <bufferGeometry>
-            <bufferAttribute
-              attach="attributes-position"
-              args={[curveData.positions, 3]}
-            />
-            <bufferAttribute
-              attach="attributes-aProgress"
-              args={[curveData.progresses, 1]}
-            />
-            <bufferAttribute
-              attach="attributes-aBrightness"
-              args={[curveData.brightnesses, 1]}
-            />
-            <bufferAttribute
-              attach="attributes-aSpeedMultiplier"
-              args={[curveData.speedMultipliers, 1]}
-            />
-            <bufferAttribute
-              attach="attributes-aConnectionIndex"
-              args={[curveData.connectionIndices, 1]}
-            />
-            <bufferAttribute
-              attach="index"
-              args={[curveData.indices, 1]}
-            />
-          </bufferGeometry>
-          <shaderMaterial
-            ref={curveMaterialRef}
-            uniforms={{
-              uTime: { value: 0 },
-              uOpacity: { value: opacity },
-            }}
-            vertexShader={CURVE_VERTEX_SHADER}
-            fragmentShader={CURVE_FRAGMENT_SHADER}
-            transparent
-            depthWrite={false}
-            blending={THREE.AdditiveBlending}
-          />
-        </lineSegments>
-      )}
+  // Update ship zoom uniforms for depth-based visibility
+  createEffect(() => {
+    const isZoom = props.isShipZoom ? 1 : 0
+    const shipPos = props.shipPosition
 
-      {/* Discovered node markers (gold) */}
-      {nodeData && nodeData.count > 0 && (
-        <points frustumCulled={false}>
-          <bufferGeometry>
-            <bufferAttribute
-              attach="attributes-position"
-              args={[nodeData.positions, 3]}
-            />
-            <bufferAttribute
-              attach="attributes-aDiscoveryRatio"
-              args={[nodeData.discoveryRatios, 1]}
-            />
-            <bufferAttribute
-              attach="attributes-aSpaceCount"
-              args={[nodeData.spaceCounts, 1]}
-            />
-          </bufferGeometry>
-          <shaderMaterial
-            ref={nodeMaterialRef}
-            uniforms={{
-              uTime: { value: 0 },
-              uOpacity: { value: opacity },
-              uCameraPosition: { value: new THREE.Vector3(0, 0, 5) },
-            }}
-            vertexShader={NODE_VERTEX_SHADER}
-            fragmentShader={NODE_FRAGMENT_SHADER}
-            transparent
-            depthWrite={false}
-            blending={THREE.AdditiveBlending}
-          />
-        </points>
-      )}
+    if (pointsMaterial) {
+      pointsMaterial.uniforms.uIsShipZoom.value = isZoom
+      if (shipPos) pointsMaterial.uniforms.uShipPosition.value.copy(shipPos)
+    }
+    if (linesMaterial) {
+      linesMaterial.uniforms.uIsShipZoom.value = isZoom
+      if (shipPos) linesMaterial.uniforms.uShipPosition.value.copy(shipPos)
+    }
+    if (sparklesMaterial) {
+      sparklesMaterial.uniforms.uIsShipZoom.value = isZoom
+      if (shipPos) sparklesMaterial.uniforms.uShipPosition.value.copy(shipPos)
+    }
+  })
 
-      {/* Electron particles flowing along bezier curves */}
-      {electronData && electronData.count > 0 && (
-        <points frustumCulled={false}>
-          <bufferGeometry>
-            <bufferAttribute
-              attach="attributes-position"
-              args={[electronData.positions, 3]}
-            />
-            <bufferAttribute
-              attach="attributes-aConnectionIndex"
-              args={[electronData.connectionIndices, 1]}
-            />
-            <bufferAttribute
-              attach="attributes-aParticleIndex"
-              args={[electronData.particleIndices, 1]}
-            />
-            <bufferAttribute
-              attach="attributes-aStartPos"
-              args={[electronData.startPositions, 3]}
-            />
-            <bufferAttribute
-              attach="attributes-aMidPos"
-              args={[electronData.midPositions, 3]}
-            />
-            <bufferAttribute
-              attach="attributes-aEndPos"
-              args={[electronData.endPositions, 3]}
-            />
-            <bufferAttribute
-              attach="attributes-aSpeedMultiplier"
-              args={[electronData.speedMultipliers, 1]}
-            />
-            <bufferAttribute
-              attach="attributes-aBrightness"
-              args={[electronData.brightnesses, 1]}
-            />
-          </bufferGeometry>
-          <shaderMaterial
-            ref={electronMaterialRef}
-            uniforms={{
-              uTime: { value: 0 },
-              uOpacity: { value: opacity },
-              uCameraPosition: { value: new THREE.Vector3(0, 0, 5) },
-            }}
-            vertexShader={ELECTRON_VERTEX_SHADER}
-            fragmentShader={ELECTRON_FRAGMENT_SHADER}
-            transparent
-            depthWrite={false}
-            blending={THREE.AdditiveBlending}
-          />
-        </points>
-      )}
-    </group>
-  )
-})
+  // Animation frame for time updates and sparkle animation
+  useFrame(({ elapsed, clock }) => {
+    // Update scaled time (trance mode deprecated - always normal scale)
+    const timeScale = TRANCE_CONFIG.normalScale
+
+    const realTime = clock.getElapsedTime()
+    const delta = realTime - lastRealTime
+    lastRealTime = realTime
+    scaledTime += delta * timeScale
+
+    // Update shader uniforms
+    if (pointsMaterial) {
+      pointsMaterial.uniforms.uTime.value = scaledTime
+    }
+    if (sparklesMaterial) {
+      sparklesMaterial.uniforms.uTime.value = scaledTime
+    }
+
+    // Animate sparkle particles along connections (flowing river style)
+    if (sparklesGeometry && sparklePositions && sparkleOffsets && sparkleConnections.length > 0) {
+      const speed = 0.15 // Slower, calmer flow for river effect
+
+      sparkleConnections.forEach((conn, ci) => {
+        for (let p = 0; p < SPARKLES_PER_CONNECTION; p++) {
+          const i = ci * SPARKLES_PER_CONNECTION + p
+          // Move offset forward, wrapping around - evenly spaced particles
+          const baseOffset = p / SPARKLES_PER_CONNECTION
+          sparkleOffsets[i] = (sparkleOffsets[i] + delta * speed) % 1.0
+
+          // Interpolate position along connection with even distribution
+          const t = (sparkleOffsets[i] + baseOffset) % 1.0
+          sparklePositions[i * 3] = conn.from.x + (conn.to.x - conn.from.x) * t
+          sparklePositions[i * 3 + 1] = conn.from.y + (conn.to.y - conn.from.y) * t
+          sparklePositions[i * 3 + 2] = conn.from.z + (conn.to.z - conn.from.z) * t
+        }
+      })
+
+      // Update geometry
+      const posAttr = sparklesGeometry.attributes.position as THREE.BufferAttribute
+      if (posAttr) {
+        posAttr.needsUpdate = true
+      }
+    }
+  })
+
+  // No DOM elements to render
+  return null
+}

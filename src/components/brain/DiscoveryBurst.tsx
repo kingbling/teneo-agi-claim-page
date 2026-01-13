@@ -1,277 +1,266 @@
-import { useRef, useMemo, useEffect, useState } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { onMount, onCleanup, createEffect, createMemo, createSignal, For } from 'solid-js'
 import * as THREE from 'three'
-import type { SpaceDiscoveryEvent } from '@/types/agent'
-import { useAgentStore } from '@/stores/agentStore'
+import { useThree, useFrame } from '@/three/hooks'
+import type { SynapseDiscoveryEvent } from '@/stores/shipStore'
+import { BRAIN_SCALE, LOOT_THRESHOLDS } from '@/constants'
+import { TRANCE_CONFIG } from './core/brainConstants'
 
 interface DiscoveryBurstProps {
-  recentDiscoveries: SpaceDiscoveryEvent[]
-  opacity?: number
+  recentDiscoveries: SynapseDiscoveryEvent[]
 }
 
-interface BurstEffect {
+interface Burst {
   id: string
   position: THREE.Vector3
   startTime: number
-  color: THREE.Color
+  duration: number
+  intensity: number // Based on loot amount
 }
 
-const BRAIN_SCALE = { x: 1.3, y: 1.0, z: 1.1 }
-const BURST_DURATION = 2.0 // seconds
-const PARTICLES_PER_BURST = 24
+// Vertex shader for burst particles
+const BURST_VERTEX_SHADER = `
+  attribute float aSize;
+  attribute vec3 aVelocity;
+  attribute float aLife;
 
-// Gold/yellow discovery colors
-const DISCOVERY_COLORS = [
-  new THREE.Color(1.0, 0.9, 0.3),  // Bright gold
-  new THREE.Color(1.0, 0.7, 0.2),  // Deep gold
-  new THREE.Color(1.0, 0.85, 0.5), // Light gold
-]
+  uniform float uTime;
+  uniform float uStartTime;
+  uniform float uDuration;
 
-// Deterministic pseudo-random
-function seededRandom(seed: number): number {
-  const x = Math.sin(seed * 12.9898 + seed * 78.233) * 43758.5453
-  return x - Math.floor(x)
-}
+  varying float vAlpha;
+  varying vec3 vColor;
 
-export function DiscoveryBurst({ recentDiscoveries, opacity = 1 }: DiscoveryBurstProps) {
-  const pointsRef = useRef<THREE.Points>(null)
-  const materialRef = useRef<THREE.ShaderMaterial>(null)
-  const [activeBursts, setActiveBursts] = useState<BurstEffect[]>([])
-  const lastDiscoveryCountRef = useRef(0)
+  void main() {
+    float elapsed = uTime - uStartTime;
+    float progress = clamp(elapsed / uDuration, 0.0, 1.0);
 
-  // Track new discoveries and spawn bursts
-  useEffect(() => {
-    if (recentDiscoveries.length > lastDiscoveryCountRef.current) {
-      // New discovery detected
-      const newDiscovery = recentDiscoveries[0]
-      if (newDiscovery.positionX !== undefined &&
-          newDiscovery.positionY !== undefined &&
-          newDiscovery.positionZ !== undefined) {
+    // Animate outward with gravity and drag
+    vec3 pos = position + aVelocity * elapsed * (1.0 - progress * 0.5);
+    pos.y -= elapsed * elapsed * 0.1; // Gravity
 
-        const position = new THREE.Vector3(
-          newDiscovery.positionX * BRAIN_SCALE.x,
-          newDiscovery.positionY * BRAIN_SCALE.y,
-          newDiscovery.positionZ * BRAIN_SCALE.z
-        )
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
 
-        const colorIndex = Math.abs(newDiscovery.spaceId.charCodeAt(0)) % DISCOVERY_COLORS.length
+    // Fade out over time
+    vAlpha = 1.0 - progress;
 
-        setActiveBursts(prev => [
-          ...prev.slice(-4), // Keep max 5 active bursts
-          {
-            id: newDiscovery.spaceId + Date.now(),
-            position,
-            startTime: -1, // Will be set on first frame
-            color: DISCOVERY_COLORS[colorIndex]
-          }
-        ])
-      }
-    }
-    lastDiscoveryCountRef.current = recentDiscoveries.length
-  }, [recentDiscoveries.length])
+    // Gold to orange gradient based on life
+    vColor = mix(
+      vec3(1.0, 0.84, 0.0), // Gold
+      vec3(1.0, 0.5, 0.1),  // Orange
+      aLife
+    );
 
-  // Get timeScale for trance effect (server-authoritative)
-  const userAgents = useAgentStore((state) => state.userAgents)
-  const timeScale = userAgents.some(a => a.tranceActive) ? 0.05 : 1.0
-  const scaledTimeRef = useRef(0)
-  const lastTimeRef = useRef(0)
+    // Size shrinks as it fades
+    gl_PointSize = aSize * vAlpha * (250.0 / -mvPosition.z);
 
-  // Generate particle data for all active bursts
-  const particleData = useMemo(() => {
-    const maxParticles = 5 * PARTICLES_PER_BURST // Max 5 bursts
-    const positions = new Float32Array(maxParticles * 3)
-    const velocities = new Float32Array(maxParticles * 3)
-    const colors = new Float32Array(maxParticles * 3)
-    const phases = new Float32Array(maxParticles)
-    const burstIndices = new Float32Array(maxParticles)
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`
 
-    // Pre-generate random directions for particles
-    for (let i = 0; i < maxParticles; i++) {
-      const theta = seededRandom(i * 5 + 1) * Math.PI * 2
-      const phi = Math.acos(2 * seededRandom(i * 5 + 2) - 1)
-      const speed = 0.15 + seededRandom(i * 5 + 3) * 0.2
+// Fragment shader for burst particles
+const BURST_FRAGMENT_SHADER = `
+  varying float vAlpha;
+  varying vec3 vColor;
 
-      velocities[i * 3] = Math.sin(phi) * Math.cos(theta) * speed
-      velocities[i * 3 + 1] = Math.sin(phi) * Math.sin(theta) * speed
-      velocities[i * 3 + 2] = Math.cos(phi) * speed
+  void main() {
+    vec2 center = gl_PointCoord - vec2(0.5);
+    float dist = length(center);
 
-      phases[i] = seededRandom(i * 5 + 4)
-      burstIndices[i] = Math.floor(i / PARTICLES_PER_BURST)
-    }
+    // Soft circular falloff
+    float alpha = (1.0 - smoothstep(0.2, 0.5, dist)) * vAlpha;
 
-    return { positions, velocities, colors, phases, burstIndices, maxParticles }
-  }, [])
+    // Add sparkle at core
+    float sparkle = (1.0 - dist * 2.0);
+    vec3 color = mix(vColor, vec3(1.0), max(0.0, sparkle * 0.5));
 
-  // Update burst particles each frame
-  useFrame(({ clock }) => {
-    if (!pointsRef.current || !materialRef.current) return
+    gl_FragColor = vec4(color, alpha * 0.6);
+  }
+`
 
-    const realTime = clock.getElapsedTime()
-    const deltaTime = realTime - lastTimeRef.current
-    lastTimeRef.current = realTime
-    scaledTimeRef.current += deltaTime * timeScale
-    const time = scaledTimeRef.current
+const PARTICLES_PER_BURST = 50
 
-    const positionAttr = pointsRef.current.geometry.attributes.position as THREE.BufferAttribute
-    const colorAttr = pointsRef.current.geometry.attributes.aColor as THREE.BufferAttribute
-    const posArray = positionAttr.array as Float32Array
-    const colorArray = colorAttr.array as Float32Array
+export function DiscoveryBurst(props: DiscoveryBurstProps) {
+  const { scene } = useThree()
 
-    // Initialize start times for new bursts
-    activeBursts.forEach((burst) => {
-      if (burst.startTime < 0) {
-        burst.startTime = time
-      }
-    })
+  // Active bursts signal
+  const [activeBursts, setActiveBursts] = createSignal<Burst[]>([])
 
-    // Update particles for each active burst
-    for (let i = 0; i < particleData.maxParticles; i++) {
-      const burstIdx = Math.floor(i / PARTICLES_PER_BURST)
-      const burst = activeBursts[burstIdx]
+  // Track processed discoveries to avoid duplicates
+  let processedIds = new Set<string>()
 
-      if (!burst) {
-        // Hide unused particles
-        posArray[i * 3] = 0
-        posArray[i * 3 + 1] = -10 // Off screen
-        posArray[i * 3 + 2] = 0
-        continue
-      }
+  // Time tracking for scaled time (trance mode)
+  let scaledTime = 0
+  let lastRealTime = 0
 
-      const elapsed = time - burst.startTime
-      const progress = Math.min(1, elapsed / BURST_DURATION)
+  // Create new bursts for significant discoveries
+  createEffect(() => {
+    const recentDiscoveries = props.recentDiscoveries
+    if (recentDiscoveries.length === 0) return
 
-      if (progress >= 1) {
-        // Burst finished
-        posArray[i * 3] = 0
-        posArray[i * 3 + 1] = -10
-        posArray[i * 3 + 2] = 0
-        continue
-      }
+    const latestDiscovery = recentDiscoveries[0]
+    if (processedIds.has(latestDiscovery.spaceId)) return
 
-      // Calculate particle position
-      const easeOut = 1 - Math.pow(1 - progress, 2)
-      posArray[i * 3] = burst.position.x + particleData.velocities[i * 3] * easeOut
-      posArray[i * 3 + 1] = burst.position.y + particleData.velocities[i * 3 + 1] * easeOut
-      posArray[i * 3 + 2] = burst.position.z + particleData.velocities[i * 3 + 2] * easeOut
+    processedIds.add(latestDiscovery.spaceId)
 
-      // Color fades to white then fades out
-      const colorFade = 1 - progress
-      colorArray[i * 3] = burst.color.r + (1 - burst.color.r) * (1 - colorFade)
-      colorArray[i * 3 + 1] = burst.color.g + (1 - burst.color.g) * (1 - colorFade)
-      colorArray[i * 3 + 2] = burst.color.b + (1 - burst.color.b) * (1 - colorFade)
+    // Only keep last 50 processed IDs
+    if (processedIds.size > 50) {
+      const ids = Array.from(processedIds)
+      processedIds = new Set(ids.slice(-25))
     }
 
-    positionAttr.needsUpdate = true
-    colorAttr.needsUpdate = true
+    // Calculate loot amount for intensity
+    const lootAmount = latestDiscovery.lootDistribution.reduce((s, d) => s + d.amount, 0)
 
-    // Clean up finished bursts
-    const finishedBursts = activeBursts.filter(b => time - b.startTime >= BURST_DURATION)
-    if (finishedBursts.length > 0) {
-      setActiveBursts(prev => prev.filter(b => time - b.startTime < BURST_DURATION))
+    // Only burst for significant discoveries
+    if (lootAmount < LOOT_THRESHOLDS.MIN_NOTIFY) return
+
+    if (latestDiscovery.positionX !== undefined) {
+      const position = new THREE.Vector3(
+        latestDiscovery.positionX * BRAIN_SCALE.x,
+        latestDiscovery.positionY * BRAIN_SCALE.y,
+        latestDiscovery.positionZ * BRAIN_SCALE.z
+      )
+
+      // Intensity based on synapse reward tier
+      const intensity = lootAmount >= LOOT_THRESHOLDS.UNIQUE ? 3.0 :
+                       lootAmount >= LOOT_THRESHOLDS.LEGENDARY ? 2.0 :
+                       lootAmount >= LOOT_THRESHOLDS.DEEP ? 1.5 : 1.0
+
+      const newBurst: Burst = {
+        id: latestDiscovery.spaceId,
+        position,
+        startTime: Date.now() / 1000,
+        duration: 1.5 + intensity * 0.5,
+        intensity,
+      }
+
+      setActiveBursts(prev => [...prev.slice(-4), newBurst])
     }
-
-    materialRef.current.uniforms.uTime.value = time
-    materialRef.current.uniforms.uOpacity.value = opacity
   })
 
-  const vertexShader = `
-    attribute vec3 aColor;
-    attribute float aPhase;
+  onMount(() => {
+    // Remove expired bursts periodically
+    const interval = setInterval(() => {
+      const now = Date.now() / 1000
+      setActiveBursts(prev => prev.filter(b => now - b.startTime < b.duration))
+    }, 200)
 
-    uniform float uTime;
-    uniform vec3 uCameraPosition;
+    onCleanup(() => {
+      clearInterval(interval)
+    })
+  })
 
-    varying vec3 vColor;
-    varying float vAlpha;
-    varying float vDistScale;
-
-    void main() {
-      vColor = aColor;
-
-      vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-      float distToCamera = distance(position, uCameraPosition);
-
-      // Match camera range (1.5 to 6.0) - allow scaling when zoomed in
-      float distScale = smoothstep(6.0, 1.5, distToCamera);
-      vDistScale = distScale;
-
-      // Size based on distance with sparkle effect
-      float sparkle = 0.5 + 0.5 * sin(uTime * 10.0 + aPhase * 20.0);
-      float size = (10.0 + sparkle * 8.0) * max(0.15, vDistScale);
-
-      gl_PointSize = size;
-      gl_Position = projectionMatrix * mvPosition;
-
-      // Alpha based on y position (hide if below threshold)
-      vAlpha = position.y > -5.0 ? 1.0 : 0.0;
-    }
-  `
-
-  const fragmentShader = `
-    uniform float uOpacity;
-    uniform float uTime;
-
-    varying vec3 vColor;
-    varying float vAlpha;
-    varying float vDistScale;
-
-    void main() {
-      vec2 center = gl_PointCoord - vec2(0.5);
-      float dist = length(center);
-      if (dist > 0.5) discard;
-
-      // Soft glow with bright core
-      float core = smoothstep(0.2, 0.0, dist);
-      float glow = smoothstep(0.5, 0.0, dist);
-
-      vec3 color = vColor;
-      color = mix(color, vec3(1.0), core * 0.8);
-
-      // Add sparkle ring
-      float ring = smoothstep(0.5, 0.35, dist) * smoothstep(0.25, 0.35, dist);
-      color += ring * vec3(1.0, 0.95, 0.8) * 0.5;
-
-      // Scale alpha with distance to prevent overexposure when zoomed in
-      float alpha = glow * vAlpha * uOpacity * max(0.2, vDistScale);
-      alpha = max(alpha, 0.02);  // Tiny minimum
-
-      gl_FragColor = vec4(color, alpha);
-    }
-  `
-
+  // Render individual burst particle systems
   return (
-    <points ref={pointsRef} frustumCulled={false}>
-      <bufferGeometry>
-        <bufferAttribute
-          attach="attributes-position"
-          args={[particleData.positions, 3]}
-        />
-        <bufferAttribute
-          attach="attributes-aColor"
-          args={[particleData.colors, 3]}
-        />
-        <bufferAttribute
-          attach="attributes-aPhase"
-          args={[particleData.phases, 1]}
-        />
-        <bufferAttribute
-          attach="attributes-aBurstIndex"
-          args={[particleData.burstIndices, 1]}
-        />
-      </bufferGeometry>
-      <shaderMaterial
-        ref={materialRef}
-        uniforms={{
-          uTime: { value: 0 },
-          uOpacity: { value: opacity },
-          uCameraPosition: { value: new THREE.Vector3(0, 0, 5) },
-        }}
-        vertexShader={vertexShader}
-        fragmentShader={fragmentShader}
-        transparent
-        depthWrite={false}
-        blending={THREE.AdditiveBlending}
-      />
-    </points>
+    <For each={activeBursts()}>
+      {(burst) => <BurstParticles burst={burst} />}
+    </For>
   )
+}
+
+// Individual burst particle system
+function BurstParticles(props: { burst: Burst }) {
+  const { scene } = useThree()
+
+  // Three.js objects (imperative)
+  let points: THREE.Points | null = null
+  let geometry: THREE.BufferGeometry | null = null
+  let material: THREE.ShaderMaterial | null = null
+
+  // Time tracking for scaled time (trance mode)
+  let scaledTime = 0
+  let lastRealTime = 0
+
+  // Build geometry data for this burst
+  const geometryData = createMemo(() => {
+    const burst = props.burst
+    const count = Math.floor(PARTICLES_PER_BURST * burst.intensity)
+
+    const positions = new Float32Array(count * 3)
+    const sizes = new Float32Array(count)
+    const velocities = new Float32Array(count * 3)
+    const lives = new Float32Array(count)
+
+    for (let i = 0; i < count; i++) {
+      // Start at burst position
+      positions[i * 3] = burst.position.x
+      positions[i * 3 + 1] = burst.position.y
+      positions[i * 3 + 2] = burst.position.z
+
+      // Random outward velocity
+      const theta = Math.random() * Math.PI * 2
+      const phi = Math.random() * Math.PI
+      const speed = 0.3 + Math.random() * 0.5 * burst.intensity
+
+      velocities[i * 3] = Math.sin(phi) * Math.cos(theta) * speed
+      velocities[i * 3 + 1] = Math.cos(phi) * speed + 0.2 // Bias upward
+      velocities[i * 3 + 2] = Math.sin(phi) * Math.sin(theta) * speed
+
+      sizes[i] = 5.0 + Math.random() * 8.0 * burst.intensity
+      lives[i] = Math.random()
+    }
+
+    return { positions, sizes, velocities, lives }
+  })
+
+  onMount(() => {
+    const sceneObj = scene()
+    if (!sceneObj) {
+      console.warn('BurstParticles: Scene not available')
+      return
+    }
+
+    const data = geometryData()
+
+    // Create geometry
+    geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
+    geometry.setAttribute('aVelocity', new THREE.BufferAttribute(data.velocities, 3))
+    geometry.setAttribute('aLife', new THREE.BufferAttribute(data.lives, 1))
+
+    // Create shader material
+    material = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uStartTime: { value: props.burst.startTime },
+        uDuration: { value: props.burst.duration },
+      },
+      vertexShader: BURST_VERTEX_SHADER,
+      fragmentShader: BURST_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+
+    // Create points
+    points = new THREE.Points(geometry, material)
+    points.frustumCulled = false
+    sceneObj.add(points)
+
+    onCleanup(() => {
+      if (points && sceneObj) {
+        sceneObj.remove(points)
+      }
+      geometry?.dispose()
+      material?.dispose()
+    })
+  })
+
+  // Update shader uniforms with scaled time
+  useFrame(({ clock }) => {
+    // Update scaled time (trance mode deprecated - always normal scale)
+    const timeScale = TRANCE_CONFIG.normalScale
+
+    const realTime = clock.getElapsedTime()
+    const delta = realTime - lastRealTime
+    lastRealTime = realTime
+    scaledTime += delta * timeScale
+
+    if (material) {
+      material.uniforms.uTime.value = scaledTime
+    }
+  })
+
+  return null
 }

@@ -1,5 +1,5 @@
 // Masterplan 2026: Progression Components
-// User levels, brain levels, unlocks
+// Single USDC-based User Level system (Brain Level removed)
 
 export { UserLevelBadge, UserLevelCard } from './UserLevelBadge'
-export { BrainLevelDisplay, BrainLevelMini } from './BrainLevelDisplay'
+// BrainLevelDisplay removed - Masterplan 2026 uses single USDC-based level system

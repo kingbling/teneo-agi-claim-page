@@ -14,15 +14,9 @@ export type {
 } from '@/stores/shopStore'
 
 export {
-  useShopStore,
+  shopStore,
   getItemIcon,
   getItemCategoryLabel,
   formatDuration,
   getRemainingTime,
-  selectShopItems,
-  selectUserItems,
-  selectActiveEffects,
-  selectConfirmationDialog,
-  selectIsLoadingShop,
-  selectPurchasingItemId,
 } from '@/stores/shopStore'

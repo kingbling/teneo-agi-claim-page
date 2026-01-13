@@ -4,55 +4,23 @@ import type { ShopItem } from '@/stores/shopStore'
 import { formatDuration, getRemainingTime } from '@/stores/shopStore'
 import { cn } from '@/lib/utils'
 
-// Item type colors and styles
-const ITEM_TYPE_STYLES: Record<string, { bg: string; text: string; border: string; glow: string }> = {
-  speed_boost: {
-    bg: 'bg-yellow-500/10',
-    text: 'text-yellow-400',
-    border: 'border-yellow-500/30',
-    glow: 'shadow-yellow-500/20',
-  },
-  luck_charm: {
-    bg: 'bg-green-500/10',
-    text: 'text-green-400',
-    border: 'border-green-500/30',
-    glow: 'shadow-green-500/20',
-  },
-  xp_amplifier: {
-    bg: 'bg-purple-500/10',
-    text: 'text-purple-400',
-    border: 'border-purple-500/30',
-    glow: 'shadow-purple-500/20',
-  },
-  radar: {
-    bg: 'bg-blue-500/10',
-    text: 'text-blue-400',
-    border: 'border-blue-500/30',
-    glow: 'shadow-blue-500/20',
-  },
-  cloak: {
-    bg: 'bg-slate-500/10',
-    text: 'text-slate-400',
-    border: 'border-slate-500/30',
-    glow: 'shadow-slate-500/20',
-  },
+// Clean color system using brand colors
+const ITEM_COLORS: Record<string, { accent: string; bg: string }> = {
+  speed_boost: { accent: '#75e6ea', bg: 'rgba(117, 230, 234, 0.1)' },
+  luck_charm: { accent: '#41cba4', bg: 'rgba(65, 203, 164, 0.1)' },
+  xp_amplifier: { accent: '#a855f7', bg: 'rgba(168, 85, 247, 0.1)' },
+  radar: { accent: '#397bff', bg: 'rgba(57, 123, 255, 0.1)' },
+  cloak: { accent: '#94a3b8', bg: 'rgba(148, 163, 184, 0.1)' },
 }
 
-// Icon component based on item type
 function ItemIcon(props: { itemType: string; class?: string }) {
   switch (props.itemType) {
-    case 'speed_boost':
-      return <Zap class={props.class} />
-    case 'luck_charm':
-      return <Clover class={props.class} />
-    case 'xp_amplifier':
-      return <TrendingUp class={props.class} />
-    case 'radar':
-      return <Radar class={props.class} />
-    case 'cloak':
-      return <EyeOff class={props.class} />
-    default:
-      return <Coins class={props.class} />
+    case 'speed_boost': return <Zap class={props.class} />
+    case 'luck_charm': return <Clover class={props.class} />
+    case 'xp_amplifier': return <TrendingUp class={props.class} />
+    case 'radar': return <Radar class={props.class} />
+    case 'cloak': return <EyeOff class={props.class} />
+    default: return <Coins class={props.class} />
   }
 }
 
@@ -62,148 +30,110 @@ export interface ShopItemCardProps {
   isPurchasing?: boolean
 }
 
-/**
- * ShopItemCard - Displays a shop item with purchase capability
- * Shows item details, cost, duration, and purchase status
- */
 export function ShopItemCard(props: ShopItemCardProps) {
-  const styles = () => ITEM_TYPE_STYLES[props.item.id] || ITEM_TYPE_STYLES.speed_boost
+  const colors = () => ITEM_COLORS[props.item.id] || ITEM_COLORS.speed_boost
   const isOwned = () => props.item.isOwned
   const canPurchase = () => props.item.canPurchase && !props.isPurchasing
 
   return (
     <div
       class={cn(
-        'relative rounded-2xl border-2 transition-all duration-300 animate-in fade-in slide-in-from-bottom-2',
-        isOwned()
-          ? `${styles().border} ${styles().bg}`
-          : 'border-[var(--card-border)]/30 bg-gradient-to-br from-[var(--background-secondary)] to-[var(--background-primary)]/50',
-        canPurchase() && 'hover:-translate-y-1 hover:shadow-xl hover:shadow-black/20 cursor-pointer'
+        'relative rounded-xl overflow-hidden transition-all duration-200',
+        'bg-white/[0.03] backdrop-blur-sm',
+        'border border-white/[0.06]',
+        canPurchase() && 'hover:bg-white/[0.05] hover:border-white/[0.1] cursor-pointer',
+        isOwned() && 'ring-1 ring-inset'
       )}
+      style={{
+        '--card-accent': colors().accent,
+        'ring-color': isOwned() ? colors().accent + '40' : undefined,
+      } as any}
     >
-      {/* Owned indicator glow */}
-      <Show when={isOwned()}>
-        <div class={cn(
-          'absolute -inset-0.5 rounded-2xl opacity-30 blur-sm',
-          styles().bg.replace('/10', '/30')
-        )} />
-      </Show>
+      {/* Content - Clean vertical stack */}
+      <div class="p-4 flex flex-col items-center text-center">
 
-      <div class="relative p-5">
-        {/* Header: Icon + Name */}
-        <div class="flex items-start justify-between mb-4">
-          <div class="flex items-center gap-3">
-            <div class={cn(
-              'p-3 rounded-xl border',
-              styles().bg,
-              styles().border
-            )}>
-              <ItemIcon itemType={props.item.id} class={cn('h-6 w-6', styles().text)} />
-            </div>
-            <div>
-              <h3 class="font-bold text-lg text-[var(--text-primary)]">{props.item.name}</h3>
-              <p class="text-sm text-[var(--text-muted)]">{props.item.description}</p>
-            </div>
-          </div>
-          <Show when={isOwned()}>
-            <div class={cn(
-              'p-1.5 rounded-full',
-              styles().bg,
-              styles().border,
-              'border'
-            )}>
-              <Check class={cn('h-4 w-4', styles().text)} />
-            </div>
-          </Show>
+        {/* Large centered icon */}
+        <div
+          class="w-12 h-12 rounded-xl flex items-center justify-center mb-3"
+          style={{ background: colors().bg }}
+        >
+          <ItemIcon
+            itemType={props.item.id}
+            class="w-6 h-6"
+            style={{ color: colors().accent } as any}
+          />
         </div>
 
-        {/* Effect Display */}
-        <div class={cn(
-          'p-3 rounded-xl mb-4',
-          'bg-[var(--background-primary)]/50 border border-[var(--card-border)]/20'
-        )}>
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-[var(--text-muted)]">Effect</span>
-            <span class={cn('text-sm font-bold', styles().text)}>{props.item.effect}</span>
-          </div>
-        </div>
+        {/* Item name */}
+        <h3 class="font-semibold text-white text-sm mb-1">
+          {props.item.name}
+        </h3>
 
-        {/* Duration & Cost Row */}
-        <div class="flex items-center justify-between mb-4">
-          <div class="flex items-center gap-2">
-            <Clock class="h-4 w-4 text-[var(--text-muted)]" />
-            <span class="text-sm text-[var(--text-muted)]">
-              {formatDuration(props.item.duration)}
-            </span>
-          </div>
-          <div class="flex items-center gap-2">
-            <Coins class="h-4 w-4 text-[hsl(var(--accent))]" />
-            <span class="text-sm font-bold text-[hsl(var(--accent))]">
-              {props.item.cost.toLocaleString()} $AGENTIC
-            </span>
-          </div>
-        </div>
+        {/* Effect - prominent */}
+        <p
+          class="text-base font-bold mb-3"
+          style={{ color: colors().accent }}
+        >
+          {props.item.effect}
+        </p>
 
-        {/* Owned Item Status */}
+        {/* Owned status */}
         <Show when={isOwned() && props.item.ownedItem}>
-          <div class={cn(
-            'p-3 rounded-xl mb-4',
-            styles().bg,
-            styles().border,
-            'border'
-          )}>
-            <div class="flex items-center justify-between">
-              <span class={cn('text-sm font-medium', styles().text)}>Active</span>
-              <span class="text-sm text-[var(--text-muted)]">
-                {getRemainingTime(props.item.ownedItem!.expiresAt)}
-              </span>
-            </div>
+          <div
+            class="w-full py-2 px-3 rounded-lg mb-3 flex items-center justify-center gap-2"
+            style={{ background: colors().bg }}
+          >
+            <Check class="w-3.5 h-3.5" style={{ color: colors().accent } as any} />
+            <span class="text-xs" style={{ color: colors().accent }}>
+              {getRemainingTime(props.item.ownedItem!.expiresAt)}
+            </span>
           </div>
         </Show>
 
-        {/* Purchase Button */}
+        {/* Price CTA button */}
         <Show when={!isOwned()}>
           <button
             onClick={() => canPurchase() && props.onPurchase(props.item.id)}
             disabled={!canPurchase()}
-            aria-label={`Purchase ${props.item.name} for ${props.item.cost.toLocaleString()} AGENTIC`}
             class={cn(
-              'w-full px-4 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all duration-200',
+              'w-full py-2.5 px-4 rounded-lg font-semibold text-sm transition-all duration-150',
+              'flex items-center justify-center gap-2',
               canPurchase()
-                ? `bg-gradient-to-r from-[var(--brand-teal-1)]/20 to-[hsl(var(--accent))]/20 border ${styles().border} ${styles().text} hover:from-[var(--brand-teal-1)]/30 hover:to-[hsl(var(--accent))]/30 shadow-lg ${styles().glow} hover:scale-[1.02] active:scale-[0.98]`
-                : 'bg-[var(--background-primary)] text-[var(--text-muted)] border border-[var(--card-border)]/20 cursor-not-allowed'
+                ? 'bg-white/[0.08] hover:bg-white/[0.12] text-white border border-white/[0.1]'
+                : 'bg-white/[0.02] text-white/40 border border-white/[0.04] cursor-not-allowed'
             )}
           >
             <Show
               when={!props.isPurchasing}
-              fallback={
-                <>
-                  <Zap class="h-4 w-4 animate-spin" />
-                  Purchasing...
-                </>
-              }
+              fallback={<span class="text-xs">Purchasing...</span>}
             >
               <Show
                 when={canPurchase()}
-                fallback={<span class="text-xs">{props.item.purchaseError || 'Unavailable'}</span>}
+                fallback={<span class="text-xs opacity-60">{props.item.purchaseError || `Need ${props.item.cost - (props.item as any).balance || 0} more`}</span>}
               >
-                <Coins class="h-4 w-4" />
-                Purchase
+                <span>{props.item.cost.toLocaleString()}</span>
+                <span class="text-white/50 text-xs">$AGENTIC</span>
               </Show>
             </Show>
           </button>
         </Show>
 
-        {/* Already Owned State */}
-        <Show when={isOwned()}>
-          <div class={cn(
-            'w-full px-4 py-3 rounded-xl font-medium text-sm flex items-center justify-center gap-2',
-            styles().bg,
-            styles().border,
-            'border'
-          )}>
-            <Check class={cn('h-4 w-4', styles().text)} />
-            <span class={styles().text}>Owned</span>
+        {/* Already owned */}
+        <Show when={isOwned() && !props.item.ownedItem}>
+          <div
+            class="w-full py-2.5 px-4 rounded-lg flex items-center justify-center gap-2"
+            style={{ background: colors().bg }}
+          >
+            <Check class="w-4 h-4" style={{ color: colors().accent } as any} />
+            <span class="text-sm font-medium" style={{ color: colors().accent }}>Owned</span>
+          </div>
+        </Show>
+
+        {/* Duration - subtle, below button */}
+        <Show when={!isOwned()}>
+          <div class="flex items-center gap-1.5 mt-2 text-white/30 text-xs">
+            <Clock class="w-3 h-3" />
+            <span>{formatDuration(props.item.duration)}</span>
           </div>
         </Show>
       </div>

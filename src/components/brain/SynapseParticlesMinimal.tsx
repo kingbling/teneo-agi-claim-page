@@ -10,6 +10,8 @@ interface SynapseParticlesMinimalProps {
   selectedRegionIndex?: number
   highlightIntensity?: number
   lodLevel?: number  // 0 = close (most detail), 1 = medium, 2 = far (least detail)
+  shipPosition?: THREE.Vector3 | null  // Ship world position when zoomed (for depth-based visibility)
+  isShipZoom?: boolean  // Enable depth-based visibility (show particles behind ship only)
 }
 
 // Perlin-like noise for organic surface detail
@@ -164,21 +166,21 @@ function generateBrainSynapses(count: number) {
     colors[i * 3 + 1] = Math.min(1.0, cg * 1.3)
     colors[i * 3 + 2] = Math.min(1.0, cb * 1.3)
 
-    // Phase 4.2: Increased particle sizes by ~50% for better visibility
+    // Particle sizes for visibility
     const sizeRoll = Math.random()
     const depthVariation = Math.abs(noise3D(x * 0.5, y * 0.5, z * 0.5))
 
     if (sizeRoll > 0.995) {
-      // Rare large "hub" synapses (0.5%) - very prominent
+      // Rare large "hub" synapses (0.5%)
       sizes[i] = 12.0 + depthVariation * 3.0
     } else if (sizeRoll > 0.97) {
-      // Medium-large particles (2.5%) - noticeable
+      // Medium-large particles (2.5%)
       sizes[i] = 9.0 + depthVariation * 2.0
     } else if (sizeRoll > 0.85) {
-      // Medium particles (12%) - visible detail
+      // Medium particles (12%)
       sizes[i] = 7.0 + depthVariation * 1.5
     } else {
-      // Base particles with variation (85%) - good coverage
+      // Base particles (85%)
       sizes[i] = 5.0 + depthVariation * 2.0
     }
   }
@@ -229,6 +231,8 @@ export function SynapseParticlesMinimal(props: SynapseParticlesMinimalProps) {
       uniforms: {
         uSelectedRegion: { value: props.selectedRegionIndex ?? -1 },
         uHighlightIntensity: { value: props.highlightIntensity ?? 0 },
+        uShipPosition: { value: new THREE.Vector3() },
+        uIsShipZoom: { value: 0 },
       },
       vertexShader: BRAIN_REGION_VERTEX_SHADER,
       fragmentShader: BRAIN_REGION_FRAGMENT_SHADER,
@@ -256,6 +260,16 @@ export function SynapseParticlesMinimal(props: SynapseParticlesMinimalProps) {
     if (material) {
       material.uniforms.uSelectedRegion.value = props.selectedRegionIndex ?? -1
       material.uniforms.uHighlightIntensity.value = props.highlightIntensity ?? 0
+    }
+  })
+
+  // Update ship zoom uniforms
+  createEffect(() => {
+    if (material) {
+      material.uniforms.uIsShipZoom.value = props.isShipZoom ? 1 : 0
+      if (props.shipPosition) {
+        material.uniforms.uShipPosition.value.copy(props.shipPosition)
+      }
     }
   })
 

@@ -11,6 +11,7 @@
  *   ...
  */
 
+export { default as authRouter } from './auth.js'
 export { default as shipsRouter } from './ships.js'
 export { default as synapsesRouter } from './synapses.js'
 export { default as shopRouter } from './shop.js'
@@ -27,6 +28,7 @@ export { default as eventsRouter } from './events.js'
  * @param app - Express application instance
  */
 import { Express } from 'express'
+import authRouter from './auth.js'
 import shipsRouter from './ships.js'
 import synapsesRouter from './synapses.js'
 import shopRouter from './shop.js'
@@ -35,6 +37,9 @@ import leaderboardsRouter from './leaderboards.js'
 import eventsRouter from './events.js'
 
 export function mountMasterplanRoutes(app: Express): void {
+  // Auth routes (unauthenticated)
+  app.use('/api/auth', authRouter)
+
   // Ship routes
   app.use('/api/ships', shipsRouter)
 

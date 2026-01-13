@@ -2,7 +2,7 @@ import { createRoot } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import { FUNCTIONAL_BRAIN_REGIONS, type BrainRegion } from '@/constants/brainRegions'
 
-interface BrainRegionState {
+export interface BrainRegionState {
   // Currently selected region index (-1 = none)
   selectedRegionIndex: number
   // Highlight intensity for animation (0-1)

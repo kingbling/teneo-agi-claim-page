@@ -1,9 +1,8 @@
 import { Show, For } from 'solid-js'
-import { Zap, Clock, Users, Trophy, Ticket } from 'lucide-solid'
+import { Zap, Clock, Users, Trophy, CheckCircle, Circle } from 'lucide-solid'
 import { cn } from '@/lib/utils'
 import {
   type SynapseType,
-  type SynapseDistribution,
   SYNAPSE_CONFIG,
   getSynapseTypeLabel,
   formatPoints,
@@ -83,9 +82,6 @@ export function SynapseInfo(props: SynapseInfoProps) {
     ? (props.synapse.pointsAccumulated / props.synapse.pointsRequired) * 100
     : 0
 
-  // Determine distribution type
-  const distribution = () => typeConfig().distribution
-
   return (
     <Show
       when={!props.compact}
@@ -121,18 +117,20 @@ export function SynapseInfo(props: SynapseInfoProps) {
             </span>
           </Show>
 
-          {/* Explorers */}
-          <div class="flex items-center gap-1 text-xs text-[var(--text-muted)]">
-            <Users class="h-3 w-3" />
-            {props.synapse.explorerCount}
-          </div>
-
-          {/* Distribution Icon */}
+          {/* V1 Masterplan: Single player - show status */}
           <Show
-            when={distribution() === 'lottery'}
-            fallback={<Users class="h-3.5 w-3.5 text-emerald-400" />}
+            when={props.synapse.explorerCount === 0}
+            fallback={
+              <div class="flex items-center gap-1 text-xs text-orange-400">
+                <Circle class="h-3 w-3 fill-current" />
+                Occupied
+              </div>
+            }
           >
-            <Ticket class="h-3.5 w-3.5 text-purple-400" />
+            <div class="flex items-center gap-1 text-xs text-emerald-400">
+              <CheckCircle class="h-3 w-3" />
+              Available
+            </div>
           </Show>
         </div>
       }
@@ -154,7 +152,6 @@ export function SynapseInfo(props: SynapseInfoProps) {
             <div>
               <div class="flex items-center gap-2">
                 <SynapseTypeBadge type={props.synapse.synapseType} size="lg" />
-                <DistributionBadge distribution={distribution()} />
               </div>
               <p class="text-xs text-[var(--text-muted)] mt-1">
                 {props.synapse.region} - {props.synapse.zone}
@@ -188,22 +185,25 @@ export function SynapseInfo(props: SynapseInfoProps) {
           </div>
         </div>
 
-        {/* Stats Grid */}
-        <div class="grid grid-cols-3 gap-2 mb-4">
-          {/* Explorers */}
+        {/* Stats Grid - V1 Masterplan: Single player */}
+        <div class="grid grid-cols-2 gap-2 mb-4">
+          {/* Status */}
           <div class="p-3 rounded-lg bg-[var(--background-primary)] border border-[var(--card-border)]/20 text-center">
             <div class="flex items-center justify-center gap-1 mb-1">
-              <Users class="h-3.5 w-3.5 text-[var(--text-muted)]" />
-            </div>
-            <p class="font-bold text-[var(--text-primary)]">
-              {props.synapse.explorerCount}
-              <Show when={props.synapse.maxExplorers > 0}>
-                <span class="font-normal text-[var(--text-muted)]">
-                  /{props.synapse.maxExplorers}
-                </span>
+              <Show
+                when={props.synapse.explorerCount === 0}
+                fallback={<Circle class="h-3.5 w-3.5 text-orange-400 fill-current" />}
+              >
+                <CheckCircle class="h-3.5 w-3.5 text-emerald-400" />
               </Show>
+            </div>
+            <p class={cn(
+              'font-bold',
+              props.synapse.explorerCount === 0 ? 'text-emerald-400' : 'text-orange-400'
+            )}>
+              {props.synapse.explorerCount === 0 ? 'Available' : 'Occupied'}
             </p>
-            <p class="text-xs text-[var(--text-muted)]">Explorers</p>
+            <p class="text-xs text-[var(--text-muted)]">Status</p>
           </div>
 
           {/* ETA */}
@@ -216,25 +216,6 @@ export function SynapseInfo(props: SynapseInfoProps) {
             </p>
             <p class="text-xs text-[var(--text-muted)]">ETA</p>
           </div>
-
-          {/* Distribution */}
-          <div class="p-3 rounded-lg bg-[var(--background-primary)] border border-[var(--card-border)]/20 text-center">
-            <div class="flex items-center justify-center gap-1 mb-1">
-              <Show
-                when={distribution() === 'lottery'}
-                fallback={<Users class="h-3.5 w-3.5 text-emerald-400" />}
-              >
-                <Ticket class="h-3.5 w-3.5 text-purple-400" />
-              </Show>
-            </div>
-            <p class={cn(
-              'font-bold capitalize',
-              distribution() === 'lottery' ? 'text-purple-400' : 'text-emerald-400'
-            )}>
-              {distribution() === 'lottery' ? 'Lottery' : 'Fair'}
-            </p>
-            <p class="text-xs text-[var(--text-muted)]">Rewards</p>
-          </div>
         </div>
 
         {/* Rewards */}
@@ -244,36 +225,18 @@ export function SynapseInfo(props: SynapseInfoProps) {
               <Trophy class="h-4 w-4 text-yellow-400" />
               <span class="text-sm font-semibold text-[var(--text-primary)]">Rewards</span>
             </div>
-            <div class="flex gap-4 text-sm">
-              <div>
-                <span class="text-[var(--text-muted)]">$AGI: </span>
-                <span class="font-bold text-yellow-400">
-                  {formatPoints(props.synapse.agiReward)}
-                </span>
-              </div>
-              <div>
-                <span class="text-[var(--text-muted)]">Brain XP: </span>
-                <span class="font-bold text-[var(--brand-teal-1)]">
-                  {formatPoints(props.synapse.brainXpReward)}
-                </span>
-              </div>
+            <div class="text-sm">
+              <span class="text-[var(--text-muted)]">$AGI: </span>
+              <span class="font-bold text-yellow-400">
+                {formatPoints(props.synapse.agiReward)}
+              </span>
             </div>
           </div>
         </Show>
 
-        {/* Distribution Info */}
-        <div class={cn(
-          'mt-3 p-2 rounded-lg text-xs',
-          distribution() === 'lottery'
-            ? 'bg-purple-500/10 border border-purple-500/20 text-purple-300'
-            : 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
-        )}>
-          <Show
-            when={distribution() === 'lottery'}
-            fallback="Rewards split fairly among all explorers based on contribution."
-          >
-            Winner takes all! Your odds depend on contribution percentage.
-          </Show>
+        {/* V1 Masterplan: Single player info */}
+        <div class="mt-3 p-2 rounded-lg text-xs bg-emerald-500/10 border border-emerald-500/20 text-emerald-300">
+          Complete this synapse to earn the full reward!
         </div>
       </div>
     </Show>
@@ -312,43 +275,6 @@ export function SynapseTypeBadge(props: SynapseTypeBadgeProps) {
     >
       <Zap class={cn(size() === 'sm' ? 'h-2.5 w-2.5' : size() === 'md' ? 'h-3 w-3' : 'h-3.5 w-3.5')} />
       {getSynapseTypeLabel(props.type)}
-    </span>
-  )
-}
-
-/**
- * DistributionBadge - Shows fair_share or lottery distribution
- */
-export interface DistributionBadgeProps {
-  distribution: SynapseDistribution
-  class?: string
-}
-
-export function DistributionBadge(props: DistributionBadgeProps) {
-  const isLottery = () => props.distribution === 'lottery'
-
-  return (
-    <span
-      class={cn(
-        'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium border',
-        isLottery()
-          ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
-          : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
-        props.class
-      )}
-    >
-      <Show
-        when={isLottery()}
-        fallback={
-          <>
-            <Users class="h-3 w-3" />
-            Fair Share
-          </>
-        }
-      >
-        <Ticket class="h-3 w-3" />
-        Lottery
-      </Show>
     </span>
   )
 }

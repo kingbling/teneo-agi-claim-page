@@ -12,7 +12,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5175,
+    port: 5176,
   },
   build: {
     rollupOptions: {

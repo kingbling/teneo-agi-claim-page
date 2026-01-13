@@ -21,8 +21,7 @@ export interface SynapseTypeConfig {
   maxExplorers: number        // Max concurrent explorers (-1 = unlimited)
   distribution: SynapseDistribution
   agiReward: number           // $AGI reward for completion
-  brainXpReward: number       // Brain XP earned
-  unlockBrainLevel: number    // Brain level required to explore
+  unlockUserLevel: UserLevel  // User level (USDC-based) required to explore
 }
 
 export const SYNAPSE_CONFIG: Record<SynapseType, SynapseTypeConfig> = {
@@ -30,71 +29,64 @@ export const SYNAPSE_CONFIG: Record<SynapseType, SynapseTypeConfig> = {
     points: 6_000,
     maxPerMin: 100,
     etaMinutes: 60,
-    maxExplorers: 1,
+    maxExplorers: 1,         // Single player only (V1 Masterplan)
     distribution: 'fair_share',
     agiReward: 10,
-    brainXpReward: 100,
-    unlockBrainLevel: 1,
+    unlockUserLevel: 1,      // All users
   },
   complex: {
     points: 120_000,
     maxPerMin: 200,
     etaMinutes: 720,         // 12 hours
-    maxExplorers: 2,
+    maxExplorers: 1,         // Single player only (V1 Masterplan)
     distribution: 'fair_share',
     agiReward: 200,
-    brainXpReward: 500,
-    unlockBrainLevel: 5,
+    unlockUserLevel: 1,      // All users
   },
   deep: {
     points: 2_000_000,
     maxPerMin: 300,
     etaMinutes: 2880,        // 48 hours
-    maxExplorers: 4,
-    distribution: 'lottery',
+    maxExplorers: 1,         // Single player only (V1 Masterplan)
+    distribution: 'fair_share',
     agiReward: 4_000,
-    brainXpReward: 2_000,
-    unlockBrainLevel: 20,
+    unlockUserLevel: 1,      // All users
   },
   core: {
     points: 20_000_000,
     maxPerMin: 400,
     etaMinutes: 4320,        // 72 hours
-    maxExplorers: 10,
-    distribution: 'lottery',
+    maxExplorers: 1,         // Single player only (V1 Masterplan)
+    distribution: 'fair_share',
     agiReward: 40_000,
-    brainXpReward: 10_000,
-    unlockBrainLevel: 50,
+    unlockUserLevel: 1,      // All users
   },
   rare: {
     points: 50_000_000,
     maxPerMin: 500,
     etaMinutes: 10080,       // 1 week
-    maxExplorers: -1,        // unlimited
-    distribution: 'lottery',
+    maxExplorers: 1,         // Single player only (V1 Masterplan)
+    distribution: 'fair_share',
     agiReward: 100_000,
-    brainXpReward: 25_000,
-    unlockBrainLevel: 100,
+    unlockUserLevel: 2,      // $1+ USDC (Navigator)
   },
   legendary: {
     points: 100_000_000,
     maxPerMin: 600,
     etaMinutes: 20160,       // 2 weeks
-    maxExplorers: -1,
-    distribution: 'lottery',
+    maxExplorers: 1,         // Single player only (V1 Masterplan)
+    distribution: 'fair_share',
     agiReward: 200_000,
-    brainXpReward: 50_000,
-    unlockBrainLevel: 175,
+    unlockUserLevel: 3,      // $10+ USDC (Voyager)
   },
   unique: {
     points: 500_000_000,
     maxPerMin: 1000,
     etaMinutes: 43200,       // 30 days
-    maxExplorers: -1,
-    distribution: 'lottery',
+    maxExplorers: 1,         // Single player only (V1 Masterplan)
+    distribution: 'fair_share',
     agiReward: 1_000_000,
-    brainXpReward: 100_000,
-    unlockBrainLevel: 248,
+    unlockUserLevel: 4,      // $100+ USDC (Captain)
   },
 } as const
 
@@ -110,18 +102,17 @@ export type UserLevel = 1 | 2 | 3 | 4 | 5
 
 export interface UserLevelConfig {
   minUSDC: number           // Minimum cumulative USDC spent
-  multiplier: number        // Reward multiplier
-  etaBoost: number          // ETA reduction percentage
+  multiplier: number        // Points per minute multiplier (Masterplan 2026: Level Boost)
   maxShips: number          // Max ships allowed at this level
   label: string             // Display label
 }
 
 export const USER_LEVEL_CONFIG: Record<UserLevel, UserLevelConfig> = {
-  1: { minUSDC: 0,    multiplier: 1.0, etaBoost: 0.00, maxShips: 1,  label: 'Explorer' },
-  2: { minUSDC: 1,    multiplier: 1.2, etaBoost: 0.05, maxShips: 2,  label: 'Navigator' },
-  3: { minUSDC: 10,   multiplier: 1.5, etaBoost: 0.12, maxShips: 3,  label: 'Voyager' },
-  4: { minUSDC: 100,  multiplier: 1.9, etaBoost: 0.20, maxShips: 5,  label: 'Captain' },
-  5: { minUSDC: 1000, multiplier: 2.4, etaBoost: 0.30, maxShips: 10, label: 'Admiral' },
+  1: { minUSDC: 0,    multiplier: 1.0, maxShips: 1,  label: 'Explorer' },
+  2: { minUSDC: 1,    multiplier: 1.2, maxShips: 2,  label: 'Navigator' },
+  3: { minUSDC: 10,   multiplier: 1.5, maxShips: 3,  label: 'Voyager' },
+  4: { minUSDC: 100,  multiplier: 1.9, maxShips: 5,  label: 'Captain' },
+  5: { minUSDC: 1000, multiplier: 2.4, maxShips: 10, label: 'Admiral' },
 } as const
 
 export function calculateUserLevel(totalUSDCSpent: number): UserLevel {
@@ -133,144 +124,46 @@ export function calculateUserLevel(totalUSDCSpent: number): UserLevel {
 }
 
 // ============================================================================
-// MASTERPLAN 2026: BRAIN LEVELS (248 Levels with exponential XP)
+// MASTERPLAN 2026: HELPER FUNCTIONS
 // ============================================================================
 
-export const BRAIN_LEVEL_CONFIG = {
-  baseXP: 1_000_000,        // XP required for level 1 -> 2
-  growthRate: 0.02,         // +2% XP per level
-  maxLevel: 248,
-} as const
-
-export const SHIP_UNLOCK_MILESTONES: Record<number, number> = {
-  1: 1,     // Level 1: 1 ship
-  10: 2,    // Level 10: 2 ships
-  25: 3,    // Level 25: 3 ships
-  50: 4,    // Level 50: 4 ships
-  100: 5,   // Level 100: 5 ships
-  150: 7,   // Level 150: 7 ships
-  200: 10,  // Level 200: 10 ships
-}
-
-export const SYNAPSE_UNLOCK_LEVELS: Record<SynapseType, number> = {
-  minor: 1,
-  complex: 5,
-  deep: 20,
-  core: 50,
-  rare: 100,
-  legendary: 175,
-  unique: 248,
-}
-
-export function getXPForLevel(level: number): number {
-  if (level < 1) return 0
-  if (level >= BRAIN_LEVEL_CONFIG.maxLevel) return Infinity
-  return Math.floor(
-    BRAIN_LEVEL_CONFIG.baseXP * Math.pow(1 + BRAIN_LEVEL_CONFIG.growthRate, level - 1)
-  )
-}
-
+// Brain Level (1-248) determines max ships
+// Scales from 1 ship at level 1 to 10 ships at level 248
 export function getMaxShipsForBrainLevel(brainLevel: number): number {
-  let maxShips = 1
-  const levels = Object.keys(SHIP_UNLOCK_MILESTONES).map(Number).sort((a, b) => a - b)
-  for (const level of levels) {
-    if (brainLevel >= level) {
-      maxShips = SHIP_UNLOCK_MILESTONES[level]
-    }
-  }
-  return maxShips
-}
-
-export function getUnlockedSynapseTypes(brainLevel: number): SynapseType[] {
-  return SYNAPSE_TYPE_ORDER.filter(type => brainLevel >= SYNAPSE_UNLOCK_LEVELS[type])
+  if (brainLevel < 10) return 1
+  if (brainLevel < 25) return 2
+  if (brainLevel < 50) return 3
+  if (brainLevel < 75) return 4
+  if (brainLevel < 100) return 5
+  if (brainLevel < 125) return 6
+  if (brainLevel < 150) return 7
+  if (brainLevel < 175) return 8
+  if (brainLevel < 200) return 9
+  return 10
 }
 
 // ============================================================================
-// MASTERPLAN 2026: ETA CALCULATION (Collaboration with Diminishing Returns)
+// V1 MASTERPLAN: ETA CALCULATION (User Level + Items, Single Player)
 // ============================================================================
 
-const EXPLORER_BOOSTS = [0, 0.07, 0.05, 0.04, 0.03, 0.02, 0.01]
-
+/**
+ * Calculate final ETA based on user level and item bonuses.
+ * Higher user level = faster completion (FOMO mechanic).
+ *
+ * Formula: Final ETA = Base ETA / (levelMultiplier * (1 + itemSpeedBoost))
+ *
+ * @param baseETAMinutes - Base ETA from synapse config
+ * @param userLevel - User's level (1-5)
+ * @param itemSpeedBoost - Speed boost from items (0.0 - 1.0, e.g., 0.10 = +10%)
+ */
 export function calculateFinalETA(
   baseETAMinutes: number,
-  explorerCount: number,
-  userLevels: UserLevel[]
+  userLevel: UserLevel,
+  itemSpeedBoost: number = 0
 ): number {
-  // Explorer boost with diminishing returns (max ~22% total)
-  let explorerBoost = 0
-  for (let i = 1; i < explorerCount && i < EXPLORER_BOOSTS.length; i++) {
-    explorerBoost += EXPLORER_BOOSTS[i]
-  }
-  // Additional explorers beyond 6 add 1% each
-  if (explorerCount > 6) {
-    explorerBoost += 0.01 * (explorerCount - 6)
-  }
-
-  // Level boost (average of all explorers)
-  const avgLevelBoost = userLevels.reduce((sum, lvl) => {
-    return sum + USER_LEVEL_CONFIG[lvl].etaBoost
-  }, 0) / Math.max(userLevels.length, 1)
-
-  // Formula: Final ETA = Base ETA x max(0.50, (1-ExplorerBoost) x (1-LevelBoost))
-  const multiplier = Math.max(0.50, (1 - explorerBoost) * (1 - avgLevelBoost))
-  return Math.ceil(baseETAMinutes * multiplier)
-}
-
-// ============================================================================
-// MASTERPLAN 2026: REWARD DISTRIBUTION
-// ============================================================================
-
-export interface LotteryResult {
-  winnerId: string
-  winnerShipId: string
-  reward: number
-  totalParticipants: number
-  totalPoints: number
-}
-
-export function runLotteryDistribution(
-  explorers: Array<{ userId: string; shipId: string; pointsContributed: number }>,
-  totalReward: number
-): LotteryResult {
-  const totalPoints = explorers.reduce((sum, e) => sum + e.pointsContributed, 0)
-  const random = Math.random() * totalPoints
-
-  let cumulative = 0
-  for (const explorer of explorers) {
-    cumulative += explorer.pointsContributed
-    if (random <= cumulative) {
-      return {
-        winnerId: explorer.userId,
-        winnerShipId: explorer.shipId,
-        reward: totalReward,
-        totalParticipants: explorers.length,
-        totalPoints,
-      }
-    }
-  }
-
-  // Fallback to last explorer (shouldn't happen)
-  const last = explorers[explorers.length - 1]
-  return {
-    winnerId: last.userId,
-    winnerShipId: last.shipId,
-    reward: totalReward,
-    totalParticipants: explorers.length,
-    totalPoints,
-  }
-}
-
-export function runFairShareDistribution(
-  explorers: Array<{ userId: string; shipId: string; pointsContributed: number }>,
-  totalReward: number
-): Array<{ userId: string; shipId: string; reward: number }> {
-  const totalPoints = explorers.reduce((sum, e) => sum + e.pointsContributed, 0)
-
-  return explorers.map(explorer => ({
-    userId: explorer.userId,
-    shipId: explorer.shipId,
-    reward: Math.floor((explorer.pointsContributed / totalPoints) * totalReward),
-  }))
+  const levelMultiplier = USER_LEVEL_CONFIG[userLevel].multiplier
+  const totalBoost = levelMultiplier * (1 + itemSpeedBoost)
+  return Math.ceil(baseETAMinutes / totalBoost)
 }
 
 // ============================================================================
@@ -308,7 +201,7 @@ export const ITEM_DEFINITIONS: Record<ItemType, ItemDefinition> = {
   xp_amplifier: {
     id: 'xp_amplifier',
     name: 'XP Amplifier',
-    description: 'Increases brain XP earned',
+    description: 'Increases XP rewards earned',
     cost: 200,
     effectValue: 0.15,      // +15%
     durationMinutes: 60,
@@ -421,23 +314,6 @@ export const TRAIT_EFFECTS: Record<string, TraitEffect> = {
     tranceSlowdownPerLevel: 0.05,      // +5% slowdown per level
     tranceTimeScale: 0.05,             // 20x slowdown (0.05 = 1/20)
   },
-  // Extended traits (for future use)
-  solver: {
-    type: 'solver',
-    // To be implemented
-  },
-  pioneer: {
-    type: 'pioneer',
-    // To be implemented
-  },
-  networker: {
-    type: 'networker',
-    // To be implemented
-  },
-  beacon: {
-    type: 'beacon',
-    // To be implemented
-  },
 } as const
 
 // ============ TIER SYSTEM ============
@@ -512,14 +388,6 @@ export function calculateTravelTime(distance: number, swiftLevel: number): numbe
 }
 
 /**
- * Calculate search speed with swift trait
- */
-export function calculateSearchSpeed(swiftLevel: number): number {
-  const speedBonus = 1 + (swiftLevel * TRAIT_EFFECTS.swift.speedBonus!)
-  return RATES.BASE_SEARCH_SPEED * speedBonus
-}
-
-/**
  * Calculate solve probability with explorer and collaborative traits
  */
 export function calculateSolveProbability(
@@ -571,9 +439,6 @@ export interface GameConfig {
   // Masterplan 2026
   synapseTypes: typeof SYNAPSE_CONFIG
   userLevels: typeof USER_LEVEL_CONFIG
-  brainLevel: typeof BRAIN_LEVEL_CONFIG
-  shipUnlocks: typeof SHIP_UNLOCK_MILESTONES
-  synapseUnlocks: typeof SYNAPSE_UNLOCK_LEVELS
   items: typeof ITEM_DEFINITIONS
 
   // Legacy (for migration)
@@ -593,9 +458,6 @@ export function getGameConfig(): GameConfig {
     // Masterplan 2026
     synapseTypes: SYNAPSE_CONFIG,
     userLevels: USER_LEVEL_CONFIG,
-    brainLevel: BRAIN_LEVEL_CONFIG,
-    shipUnlocks: SHIP_UNLOCK_MILESTONES,
-    synapseUnlocks: SYNAPSE_UNLOCK_LEVELS,
     items: ITEM_DEFINITIONS,
 
     // Legacy (for migration)
@@ -607,6 +469,6 @@ export function getGameConfig(): GameConfig {
       limits: TIER_LIMITS,
       stakingBonuses: STAKING_BONUSES,
     },
-    version: '2.0.0',  // Masterplan 2026
+    version: '3.0.0',  // Masterplan 2026 - Single USDC-based level system
   }
 }

@@ -1,190 +1,202 @@
-import { useRef, useMemo } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { onMount, onCleanup, createEffect, createMemo } from 'solid-js'
 import * as THREE from 'three'
-import type { Agent } from '@/types/agent'
-import { useAgentStore } from '@/stores/agentStore'
+import { useThree, useFrame } from '@/three/hooks'
+import type { Ship } from '@/stores/shipStore'
+import { BRAIN_SCALE, TRANCE_CONFIG } from './core/brainConstants'
 
 interface BurnParticlesProps {
-  agents: Agent[]
-  maxParticlesPerAgent?: number
+  userAgents: Ship[]
 }
 
-// Deterministic pseudo-random based on seed (avoids lint issues with Math.random in useMemo)
-function seededRandom(seed: number): number {
-  const x = Math.sin(seed * 12.9898 + seed * 78.233) * 43758.5453
-  return x - Math.floor(x)
-}
+// Vertex shader for burn particles
+const BURN_VERTEX_SHADER = `
+  attribute float aSize;
+  attribute float aLife;
+  attribute vec3 aVelocity;
 
-export function BurnParticles({ agents = [], maxParticlesPerAgent = 5 }: BurnParticlesProps) {
-  const pointsRef = useRef<THREE.Points>(null)
-  const materialRef = useRef<THREE.ShaderMaterial>(null)
+  uniform float uTime;
 
-  // Filter to only active agents (burning points)
-  const activeAgents = useMemo(() => {
-    return agents.filter(a => a.state === 'deploying' || a.state === 'solving')
-  }, [agents])
+  varying float vLife;
 
-  const particleCount = activeAgents.length * maxParticlesPerAgent
+  void main() {
+    vLife = aLife;
 
-  // Create particle data using deterministic random
-  const { positions, velocities, lifetimes, colors } = useMemo(() => {
-    const positions = new Float32Array(particleCount * 3)
-    const velocities = new Float32Array(particleCount * 3)
-    const lifetimes = new Float32Array(particleCount)
-    const colors = new Float32Array(particleCount * 3)
+    // Animate position upward with velocity
+    vec3 pos = position + aVelocity * mod(uTime + aLife * 10.0, 2.0);
 
-    for (let i = 0; i < particleCount; i++) {
-      // Use deterministic random based on particle index
-      const r1 = seededRandom(i * 7 + 1)
-      const r2 = seededRandom(i * 7 + 2)
-      const r3 = seededRandom(i * 7 + 3)
-      const r4 = seededRandom(i * 7 + 4)
-      const r5 = seededRandom(i * 7 + 5)
-      const r6 = seededRandom(i * 7 + 6)
-      const r7 = seededRandom(i * 7 + 7)
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
 
-      // Initial position offset
-      positions[i * 3] = (r1 - 0.5) * 0.05
-      positions[i * 3 + 1] = (r2 - 0.5) * 0.05
-      positions[i * 3 + 2] = (r3 - 0.5) * 0.05
+    // Size based on life (fade out as it rises)
+    float lifeFactor = 1.0 - mod(uTime * 0.5 + aLife, 1.0);
+    gl_PointSize = aSize * lifeFactor * (300.0 / -mvPosition.z);
 
-      // Upward velocity with spread
-      velocities[i * 3] = (r4 - 0.5) * 0.02
-      velocities[i * 3 + 1] = r5 * 0.03 + 0.01  // Upward
-      velocities[i * 3 + 2] = (r6 - 0.5) * 0.02
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`
 
-      // Lifetime phase (0-1)
-      lifetimes[i] = r7
+// Fragment shader for burn particles
+const BURN_FRAGMENT_SHADER = `
+  varying float vLife;
 
-      // Fire colors: orange to yellow
-      const colorPhase = seededRandom(i * 7 + 8)
-      colors[i * 3] = 1.0  // R
-      colors[i * 3 + 1] = 0.4 + colorPhase * 0.5  // G
-      colors[i * 3 + 2] = 0.1 * colorPhase  // B
+  void main() {
+    vec2 center = gl_PointCoord - vec2(0.5);
+    float dist = length(center);
+
+    // Soft circular falloff
+    float alpha = 1.0 - smoothstep(0.2, 0.5, dist);
+
+    // Fire colors: yellow core -> orange -> red edges
+    float lifeCycle = mod(vLife * 3.0, 1.0);
+    vec3 color;
+    if (lifeCycle < 0.3) {
+      // Yellow-white core
+      color = vec3(1.0, 0.95, 0.7);
+    } else if (lifeCycle < 0.6) {
+      // Orange
+      color = vec3(1.0, 0.6, 0.2);
+    } else {
+      // Red-orange
+      color = vec3(1.0, 0.3, 0.1);
     }
 
-    return { positions, velocities, lifetimes, colors }
-  }, [particleCount])
+    // Fade alpha based on distance from center
+    alpha *= (1.0 - lifeCycle * 0.5);
 
-  // Get timeScale for trance effect (server-authoritative)
-  const userAgents = useAgentStore((state) => state.userAgents)
-  const timeScale = userAgents.some(a => a.tranceActive) ? 0.05 : 1.0
-  const scaledTimeRef = useRef(0)
-  const lastTimeRef = useRef(0)
+    gl_FragColor = vec4(color, alpha * 0.5);
+  }
+`
 
-  // Update particle positions based on agent positions
-  useFrame(({ clock }) => {
-    if (!pointsRef.current || !materialRef.current || activeAgents.length === 0) return
+const PARTICLES_PER_AGENT = 30
 
-    // Calculate scaled time for trance slowdown
-    const realTime = clock.getElapsedTime()
-    const deltaTime = realTime - lastTimeRef.current
-    lastTimeRef.current = realTime
-    scaledTimeRef.current += deltaTime * timeScale
-    const time = scaledTimeRef.current
-    const positionAttr = pointsRef.current.geometry.attributes.position as THREE.BufferAttribute
-    const posArray = positionAttr.array as Float32Array
+export function BurnParticles(props: BurnParticlesProps) {
+  const { scene } = useThree()
 
-    for (let i = 0; i < particleCount; i++) {
-      const agentIdx = Math.floor(i / maxParticlesPerAgent)
-      if (agentIdx >= activeAgents.length) continue
+  // Three.js objects (imperative)
+  let points: THREE.Points | null = null
+  let geometry: THREE.BufferGeometry | null = null
+  let material: THREE.ShaderMaterial | null = null
 
-      const agent = activeAgents[agentIdx]
+  // Time tracking for scaled time (trance mode)
+  let scaledTime = 0
+  let lastRealTime = 0
 
-      // Particle lifecycle (loop every 2 seconds, staggered)
-      const phase = ((time * 0.5 + lifetimes[i]) % 1)
-
-      // Base position is agent position
-      const baseX = agent.positionX * 1.35
-      const baseY = agent.positionY * 1.0
-      const baseZ = agent.positionZ * 1.15
-
-      // Add velocity-based offset (particles rise and spread)
-      const velX = velocities[i * 3] * phase * 3
-      const velY = velocities[i * 3 + 1] * phase * 3
-      const velZ = velocities[i * 3 + 2] * phase * 3
-
-      posArray[i * 3] = baseX + velX + positions[i * 3]
-      posArray[i * 3 + 1] = baseY + velY + positions[i * 3 + 1]
-      posArray[i * 3 + 2] = baseZ + velZ + positions[i * 3 + 2]
-    }
-
-    positionAttr.needsUpdate = true
-    materialRef.current.uniforms.uTime.value = time
+  // Filter to only solving/deploying agents (active burn effect)
+  const activeShips = createMemo(() => {
+    return props.userAgents.filter(a => a.state === 'solving' || a.state === 'deploying')
   })
 
-  if (activeAgents.length === 0) return null
+  // Build geometry data for burn particles around active agents
+  const geometryData = createMemo(() => {
+    const agents = activeShips()
+    const count = agents.length * PARTICLES_PER_AGENT
 
-  const vertexShader = `
-    attribute vec3 aColor;
-    attribute float aLifetime;
+    if (count === 0) return null
 
-    uniform float uTime;
+    const positions = new Float32Array(count * 3)
+    const sizes = new Float32Array(count)
+    const lives = new Float32Array(count)
+    const velocities = new Float32Array(count * 3)
 
-    varying vec3 vColor;
-    varying float vAlpha;
+    agents.forEach((agent, agentIndex) => {
+      const baseX = agent.positionX * BRAIN_SCALE.x
+      const baseY = agent.positionY * BRAIN_SCALE.y
+      const baseZ = agent.positionZ * BRAIN_SCALE.z
 
-    void main() {
-      vColor = aColor;
+      for (let p = 0; p < PARTICLES_PER_AGENT; p++) {
+        const i = agentIndex * PARTICLES_PER_AGENT + p
 
-      // Fade out as particle ages
-      float phase = fract(uTime * 0.5 + aLifetime);
-      vAlpha = 1.0 - phase;
+        // Random offset around agent position
+        const angle = Math.random() * Math.PI * 2
+        const radius = Math.random() * 0.08
+        positions[i * 3] = baseX + Math.cos(angle) * radius
+        positions[i * 3 + 1] = baseY + (Math.random() - 0.5) * 0.05
+        positions[i * 3 + 2] = baseZ + Math.sin(angle) * radius
 
-      vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        // Size variation
+        sizes[i] = 3.0 + Math.random() * 4.0
 
-      // Size decreases as particle ages
-      float size = mix(6.0, 2.0, phase);
-      gl_PointSize = size;
+        // Random life offset for staggered animation
+        lives[i] = Math.random()
 
-      gl_Position = projectionMatrix * mvPosition;
+        // Upward velocity with slight horizontal drift
+        velocities[i * 3] = (Math.random() - 0.5) * 0.02
+        velocities[i * 3 + 1] = 0.05 + Math.random() * 0.1 // Upward
+        velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.02
+      }
+    })
+
+    return { positions, sizes, lives, velocities }
+  })
+
+  onMount(() => {
+    const sceneObj = scene()
+    if (!sceneObj) {
+      console.warn('BurnParticlesNew: Scene not available')
+      return
     }
-  `
 
-  const fragmentShader = `
-    varying vec3 vColor;
-    varying float vAlpha;
+    // Create geometry
+    geometry = new THREE.BufferGeometry()
 
-    void main() {
-      // Circular soft particle
-      vec2 center = gl_PointCoord - vec2(0.5);
-      float dist = length(center);
-      if (dist > 0.5) discard;
+    // Create shader material
+    material = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 } },
+      vertexShader: BURN_VERTEX_SHADER,
+      fragmentShader: BURN_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
 
-      float softness = 1.0 - smoothstep(0.2, 0.5, dist);
-      float alpha = softness * vAlpha * 0.8;
+    // Create points
+    points = new THREE.Points(geometry, material)
+    points.frustumCulled = false
+    points.renderOrder = 50  // Lower than ships (100) so ships render on top
+    sceneObj.add(points)
 
-      gl_FragColor = vec4(vColor, alpha);
+    onCleanup(() => {
+      if (points && sceneObj) {
+        sceneObj.remove(points)
+      }
+      geometry?.dispose()
+      material?.dispose()
+    })
+  })
+
+  // Update geometry when active agents change
+  createEffect(() => {
+    const data = geometryData()
+    if (!geometry) return
+
+    if (!data) {
+      // No active agents - clear geometry
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3))
+      geometry.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(0), 1))
+      geometry.setAttribute('aLife', new THREE.BufferAttribute(new Float32Array(0), 1))
+      geometry.setAttribute('aVelocity', new THREE.BufferAttribute(new Float32Array(0), 3))
+      return
     }
-  `
 
-  return (
-    <points ref={pointsRef} frustumCulled={false}>
-      <bufferGeometry>
-        <bufferAttribute
-          attach="attributes-position"
-          args={[positions, 3]}
-        />
-        <bufferAttribute
-          attach="attributes-aColor"
-          args={[colors, 3]}
-        />
-        <bufferAttribute
-          attach="attributes-aLifetime"
-          args={[lifetimes, 1]}
-        />
-      </bufferGeometry>
-      <shaderMaterial
-        ref={materialRef}
-        uniforms={{
-          uTime: { value: 0 },
-        }}
-        vertexShader={vertexShader}
-        fragmentShader={fragmentShader}
-        transparent
-        depthWrite={false}
-        blending={THREE.AdditiveBlending}
-      />
-    </points>
-  )
+    geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
+    geometry.setAttribute('aLife', new THREE.BufferAttribute(data.lives, 1))
+    geometry.setAttribute('aVelocity', new THREE.BufferAttribute(data.velocities, 3))
+  })
+
+  // Update shader uniforms with scaled time
+  useFrame(({ clock }) => {
+    // Update scaled time (trance mode support deprecated - always normal scale)
+    const timeScale = TRANCE_CONFIG.normalScale
+
+    const realTime = clock.getElapsedTime()
+    const delta = realTime - lastRealTime
+    lastRealTime = realTime
+    scaledTime += delta * timeScale
+
+    if (material) {
+      material.uniforms.uTime.value = scaledTime
+    }
+  })
+
+  return null
 }
