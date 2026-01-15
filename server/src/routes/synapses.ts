@@ -14,6 +14,8 @@ import {
   updateExplorationRate,
 } from '../simulation/engine.js'
 import { SYNAPSE_CONFIG, USER_LEVEL_CONFIG, calculateUserLevel, type SynapseType, type UserLevel } from '../config/gameConfig.js'
+import { agentToShip } from './ships.js'
+import { triggerShipUpdate } from '../index.js'
 
 const router = Router()
 
@@ -51,6 +53,117 @@ function getSynapseConfig(type: SynapseType) {
   return SYNAPSE_CONFIG[type] || SYNAPSE_CONFIG.minor
 }
 
+// Helper to convert a space DB object to synapse response
+function spaceToSynapse(space: any): SynapseResponse {
+  const synapseType = (space.synapseType || space.synapse_type || 'minor') as SynapseType
+  const config = getSynapseConfig(synapseType)
+
+  return {
+    id: space.id,
+    positionX: space.positionX || space.position_x,
+    positionY: space.positionY || space.position_y,
+    positionZ: space.positionZ || space.position_z,
+    region: space.region || '',
+    zone: space.zone || '',
+    synapseType,
+    state: space.state === 'undiscovered' ? 'undiscovered' :
+           space.state === 'being_solved' ? 'being_explored' : 'completed',
+    pointsRequired: space.pointsRequired || space.points_required || config.points,
+    pointsAccumulated: space.pointsAccumulated || space.points_accumulated || 0,
+    currentEtaMinutes: space.currentEtaMinutes || space.current_eta_minutes || null,
+    explorerCount: 0, // Will be updated by real-time sync
+    maxExplorers: config.maxExplorers,
+    agiReward: space.agiReward || space.agi_reward || config.agiReward,
+    sectorId: space.sectorId || space.sector_id || null,
+  }
+}
+
+/**
+ * GET /api/synapses/near
+ * Find the closest synapse to given coordinates
+ * Query params: x, y, z (required), radius (optional, default 0.5)
+ */
+router.get('/near', (req: Request, res: Response) => {
+  try {
+    const x = parseFloat(req.query.x as string)
+    const y = parseFloat(req.query.y as string)
+    const z = parseFloat(req.query.z as string)
+    const radius = parseFloat(req.query.radius as string) || 0.5
+
+    if (isNaN(x) || isNaN(y) || isNaN(z)) {
+      return res.status(400).json({ error: 'x, y, z coordinates are required' })
+    }
+
+    // Find closest synapse within radius using Euclidean distance
+    const stmt = db.prepare(`
+      SELECT *,
+        (position_x - ?) * (position_x - ?) +
+        (position_y - ?) * (position_y - ?) +
+        (position_z - ?) * (position_z - ?) as dist_sq
+      FROM spaces
+      WHERE position_x BETWEEN ? AND ?
+        AND position_y BETWEEN ? AND ?
+        AND position_z BETWEEN ? AND ?
+      ORDER BY dist_sq ASC
+      LIMIT 1
+    `)
+
+    const row = stmt.get(
+      x, x, y, y, z, z,
+      x - radius, x + radius,
+      y - radius, y + radius,
+      z - radius, z + radius
+    ) as any
+
+    if (!row) {
+      return res.status(404).json({ error: 'No synapse found near coordinates' })
+    }
+
+    const synapseType = (row.synapse_type || 'minor') as SynapseType
+    const config = getSynapseConfig(synapseType)
+
+    // Get explorers
+    const explorersStmt = db.prepare(`
+      SELECT
+        se.ship_id as shipId,
+        se.user_id as userId,
+        a.name as shipName,
+        se.points_contributed as pointsContributed,
+        se.points_per_minute as pointsPerMinute,
+        se.joined_at as joinedAt
+      FROM synapse_explorers se
+      JOIN agents a ON a.id = se.ship_id
+      WHERE se.synapse_id = ?
+    `)
+    const explorers = explorersStmt.all(row.id) as ExplorerInfo[]
+
+    const synapse: SynapseResponse = {
+      id: row.id,
+      positionX: row.position_x,
+      positionY: row.position_y,
+      positionZ: row.position_z,
+      region: row.region,
+      zone: row.zone,
+      synapseType,
+      state: row.state === 'undiscovered' ? 'undiscovered' :
+             row.state === 'being_solved' ? 'being_explored' : 'completed',
+      pointsRequired: row.points_required || config.points,
+      pointsAccumulated: row.points_accumulated || 0,
+      currentEtaMinutes: row.current_eta_minutes || null,
+      explorerCount: explorers.length,
+      maxExplorers: config.maxExplorers,
+      agiReward: row.agi_reward || config.agiReward,
+      sectorId: row.sector_id || null,
+      explorers,
+    }
+
+    res.json({ synapse })
+  } catch (error) {
+    console.error('Failed to find nearby synapse:', error)
+    res.status(500).json({ error: 'Failed to find nearby synapse' })
+  }
+})
+
 /**
  * GET /api/synapses/:id
  * Get synapse details including current explorers
@@ -65,7 +178,7 @@ router.get('/:id', (req: Request, res: Response) => {
     }
 
     // Get synapse type from extended data
-    const extendedStmt = db.prepare('SELECT synapse_type, points_required, points_accumulated, current_eta_minutes, agi_reward, brain_xp_reward, sector_id FROM spaces WHERE id = ?')
+    const extendedStmt = db.prepare('SELECT synapse_type, points_required, points_accumulated, current_eta_minutes, agi_reward, sector_id FROM spaces WHERE id = ?')
     const extended = extendedStmt.get(id) as any || {}
 
     const synapseType = (extended.synapse_type || 'minor') as SynapseType
@@ -207,23 +320,15 @@ router.post('/:id/explore', (req: Request, res: Response) => {
         positionZ: space.positionZ,
       })
 
-      const updatedAgent = getAgent(shipId)
+      // Trigger WebSocket update for the user
+      triggerShipUpdate(userId)
 
+      // Get updated agent and return as ship (client expects { ship: ..., synapse: ... })
+      const updatedAgent = getAgent(shipId)
       res.json({
         success: true,
-        ship: {
-          id: updatedAgent!.id,
-          name: updatedAgent!.name,
-          state: 'exploring',
-          currentSynapseId: id,
-          currentPointsPerMin: cappedRate,
-        },
-        synapse: {
-          id,
-          state: 'being_explored',
-          explorerCount: count + 1,
-        },
-        message: `Ship ${updatedAgent!.name} is now exploring synapse at ${cappedRate} points/min`
+        ship: updatedAgent ? agentToShip(updatedAgent) : null,
+        synapse: spaceToSynapse(space),
       })
     } else {
       res.status(400).json({ error: 'Failed to start exploration' })
@@ -268,25 +373,14 @@ router.post('/:id/leave', (req: Request, res: Response) => {
         targetSpaceId: null,
       })
 
+      // Trigger WebSocket update for the user
+      triggerShipUpdate(agent.ownerId)
+
+      // Get updated agent and return as ship (client expects { ship: ... })
       const updatedAgent = getAgent(shipId)
-
-      // Get remaining explorer count
-      const explorerCountStmt = db.prepare('SELECT COUNT(*) as count FROM synapse_explorers WHERE synapse_id = ?')
-      const { count } = explorerCountStmt.get(id) as { count: number }
-
       res.json({
         success: true,
-        ship: {
-          id: updatedAgent!.id,
-          name: updatedAgent!.name,
-          state: 'idle',
-          currentSynapseId: null,
-        },
-        synapse: {
-          id,
-          explorerCount: count,
-        },
-        message: `Ship ${updatedAgent!.name} has left the exploration`
+        ship: updatedAgent ? agentToShip(updatedAgent) : null,
       })
     } else {
       res.status(400).json({ error: 'Failed to leave exploration' })
@@ -339,17 +433,14 @@ router.post('/:id/rate', (req: Request, res: Response) => {
     const success = updateExplorationRate(shipId, cappedRate)
 
     if (success) {
+      // Trigger WebSocket update for the user
+      triggerShipUpdate(agent.ownerId)
+
+      // Get updated agent and return as ship (client expects { ship: ... })
+      const updatedAgent = getAgent(shipId)
       res.json({
         success: true,
-        ship: {
-          id: agent.id,
-          name: agent.name,
-          currentSynapseId: id,
-          currentPointsPerMin: cappedRate,
-        },
-        message: cappedRate !== pointsPerMin
-          ? `Rate set to ${cappedRate} points/min (capped from ${pointsPerMin})`
-          : `Rate updated to ${cappedRate} points/min`
+        ship: updatedAgent ? agentToShip(updatedAgent) : null,
       })
     } else {
       res.status(400).json({ error: 'Failed to update spending rate' })

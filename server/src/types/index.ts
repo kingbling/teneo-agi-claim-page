@@ -25,10 +25,7 @@ export interface Space {
   region: BrainRegion
   zone: string
   synapseCount: number
-  baseProbability: number  // 0.001 - 0.05
   state: SpaceState
-  solveProgress: number    // 0-100
-  lootPool: number         // AGI tokens available
   discoveredAt: number | null
 }
 
@@ -63,12 +60,8 @@ export interface Agent {
   solveStartTime: number | null
   travelStartTime: number | null
   travelDuration: number | null  // ms to reach destination
-  pointsBalance: number
-  pointsBurnRate: number    // Base points per second
   traits: AgentTrait[]
   spacesDiscovered: number
-  totalLoot: number
-  totalPointsBurned: number
   distanceTraveled: number
   createdAt: number
   deployedAt: number | null
@@ -104,7 +97,6 @@ export interface SpaceCluster {
   spaceCount: number
   discoveredCount: number
   beingSolvedCount: number
-  avgLootPool: number
   updatedAt: number
 }
 
@@ -118,9 +110,6 @@ export interface User {
   totalLootEarned: number
   createdAt: number
   // Masterplan 2026 fields
-  brain_level?: number
-  brain_xp?: number
-  total_brain_xp?: number
   usdc_spent?: number
   agentic_balance?: number
   total_agi_earned?: number
@@ -129,12 +118,18 @@ export interface User {
 
 // WebSocket message types
 export type ClientMessage =
-  | { type: 'agent:create'; data: { name: string; traits: AgentTrait[] } }
-  | { type: 'agent:deploy'; data: { agentId: string; spaceId: string } }
-  | { type: 'agent:direct'; data: { agentId: string; position: [number, number, number] } }
-  | { type: 'agent:recall'; data: { agentId: string } }
-  | { type: 'agent:refuel'; data: { agentId: string; points: number } }
-  | { type: 'subscribe:region'; data: { regionId: string } }
+  | { type: 'ping'; data: Record<string, never> }
+  | { type: 'auth:identify'; data: { token: string } }
+  | { type: 'auth:logout'; data: Record<string, never> }
+
+// Log entry for admin streaming
+export interface LogEntryData {
+  id: string
+  timestamp: number
+  level: 'info' | 'warn' | 'error' | 'debug'
+  message: string
+  data?: any
+}
 
 export type ServerMessage =
   | { type: 'state:sync'; data: WorldState }
@@ -147,6 +142,12 @@ export type ServerMessage =
   | { type: 'synapse:completed'; data: SynapseCompletionData }
   | { type: 'exploration:progress'; data: ExplorationProgressData }
   | { type: 'user:levelup'; data: UserLevelUpData }
+  // Admin log streaming
+  | { type: 'log:entry'; data: LogEntryData }
+  // Ship sync (user-specific)
+  | { type: 'ships:sync'; data: ShipSyncData }
+  | { type: 'auth:success'; data: { userId: string } }
+  | { type: 'auth:error'; data: { message: string } }
 
 export interface WorldState {
   synapseClusters: SpaceCluster[]
@@ -165,14 +166,12 @@ export interface AgentUpdate {
   positionY: number
   positionZ: number
   state: AgentState
-  pointsBalance: number
   targetSpaceId: string | null
 }
 
 export interface SpaceUpdate {
   id: string
   state: SpaceState
-  solveProgress: number
   solverCount: number
 }
 
@@ -223,8 +222,50 @@ export interface ExplorationProgressData {
 export interface UserLevelUpData {
   userId: string
   newLevel: UserLevel
-  newBrainLevel: number
-  brainXpEarned: number
+  timestamp: number
+}
+
+// ============================================================================
+// SHIP SYNC: Client-friendly ship data sent via WebSocket
+// ============================================================================
+
+// Client-facing ship state (different from internal AgentState)
+export type ShipState = 'idle' | 'searching' | 'deploying' | 'exploring' | 'returning'
+
+// Ship DTO for WebSocket sync (client-friendly state names)
+export interface ShipDTO {
+  id: string
+  ownerId: string
+  name: string
+  state: ShipState
+  // Current position
+  positionX: number
+  positionY: number
+  positionZ: number
+  // Start position for travel animation
+  startPositionX: number | null
+  startPositionY: number | null
+  startPositionZ: number | null
+  // Target position for travel animation
+  targetPositionX: number | null
+  targetPositionY: number | null
+  targetPositionZ: number | null
+  // Current synapse being explored
+  currentSynapseId: string | null
+  // Travel timing for interpolation
+  travelStartTime: number | null
+  travelDuration: number | null
+  // Autopilot
+  autopilotEnabled: boolean
+  // Stats
+  currentPointsPerMin: number
+  spacesDiscovered: number
+  totalAgiEarned: number
+  createdAt: number
+}
+
+export interface ShipSyncData {
+  ships: ShipDTO[]
   timestamp: number
 }
 

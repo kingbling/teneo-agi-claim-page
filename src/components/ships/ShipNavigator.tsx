@@ -29,6 +29,8 @@ export function ShipNavigator(props: ShipNavigatorProps) {
     switch (state) {
       case 'idle':
         return { bg: 'bg-gray-500/20', text: 'text-gray-400', label: 'Idle' }
+      case 'searching':
+        return { bg: 'bg-orange-500/20', text: 'text-orange-400', label: 'Searching' }
       case 'exploring':
         return { bg: 'bg-teal-500/20', text: 'text-teal-400', label: 'Exploring' }
       case 'deploying':

@@ -102,8 +102,8 @@ function generateSpaces() {
   const insertStmt = db.prepare(`
     INSERT INTO spaces (
       id, position_x, position_y, position_z, region, zone,
-      synapse_count, base_probability, state, solve_progress, loot_pool
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'undiscovered', 0, ?)
+      synapse_count, state
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'undiscovered')
   `)
 
   const insertMany = db.transaction((spaces: any[]) => {
@@ -154,20 +154,12 @@ function generateSpaces() {
     const variance = 0.5 + Math.random() * 1.0  // 50% to 150%
     const synapseCount = Math.floor(synapsesPerSpace * variance)
 
-    // Base probability (harder spaces have lower probability)
-    const baseProbability = 0.001 + Math.random() * 0.009  // 0.1% to 1%
-
-    // Loot pool based on synapse count (1 AGI per 1B synapses)
-    const lootPool = Math.floor(synapseCount / 1_000_000_000)
-
     batch.push([
       uuid(),
       x, y, z,
       region,
       zone,
       synapseCount,
-      baseProbability,
-      Math.max(1, lootPool),  // Minimum 1 loot
     ])
 
     if (batch.length >= batchSize) {
@@ -211,7 +203,6 @@ function generateSpaceClusters() {
       spaceCount: number
       discoveredCount: number
       beingSolvedCount: number
-      totalLoot: number
     }>()
 
     // Assign spaces to clusters
@@ -229,7 +220,6 @@ function generateSpaceClusters() {
           spaceCount: 0,
           discoveredCount: 0,
           beingSolvedCount: 0,
-          totalLoot: 0,
         })
       }
 
@@ -238,15 +228,14 @@ function generateSpaceClusters() {
       cluster.spaceCount++
       if (space.state === 'discovered') cluster.discoveredCount++
       if (space.state === 'being_solved') cluster.beingSolvedCount++
-      cluster.totalLoot += space.loot_pool
     }
 
     // Insert clusters
     const insertStmt = db.prepare(`
       INSERT INTO space_clusters (
         id, lod_level, position_x, position_y, position_z,
-        space_count, discovered_count, being_solved_count, avg_loot_pool, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        space_count, discovered_count, being_solved_count, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     const now = Date.now()
@@ -255,12 +244,11 @@ function generateSpaceClusters() {
       const cx = data.positions.reduce((s, p) => s + p[0], 0) / data.positions.length
       const cy = data.positions.reduce((s, p) => s + p[1], 0) / data.positions.length
       const cz = data.positions.reduce((s, p) => s + p[2], 0) / data.positions.length
-      const avgLoot = data.totalLoot / data.spaceCount
 
       insertStmt.run(
         uuid(), lodLevel, cx, cy, cz,
         data.spaceCount, data.discoveredCount, data.beingSolvedCount,
-        avgLoot, now
+        now
       )
     }
 
@@ -299,9 +287,8 @@ function seedTestAgents() {
       id, owner_id, name, state, position_x, position_y, position_z,
       start_position_x, start_position_y, start_position_z,
       target_space_id, travel_start_time, travel_duration,
-      points_balance, points_burn_rate, traits, spaces_discovered,
-      total_loot, total_points_burned, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      traits, spaces_discovered, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
 
   const traitTypes = ['explorer', 'efficient', 'swift', 'lucky', 'collaborative']
@@ -336,10 +323,8 @@ function seedTestAgents() {
       x, y, z,
       null, null, null,  // start_position_x/y/z
       null, null, null,  // target_space_id, travel_start_time, travel_duration
-      500 + Math.random() * 500,  // 500-1000 starting points
-      1.0,
       JSON.stringify(traits),
-      0, 0, 0, Date.now()
+      0, Date.now()
     )
   }
 
@@ -355,7 +340,6 @@ async function main() {
   console.log('Clearing existing data...')
   db.prepare('DELETE FROM loot_distributions').run()
   db.prepare('DELETE FROM discovery_events').run()
-  db.prepare('DELETE FROM space_solvers').run()
   db.prepare('DELETE FROM agents').run()
   db.prepare('DELETE FROM spaces').run()
   db.prepare('DELETE FROM space_clusters').run()

@@ -35,7 +35,55 @@ init_database() {
     fi
 }
 
-case "${1:-docker-dev}" in
+case "${1:-dev}" in
+    dev)
+        echo ""
+        echo "=========================================="
+        echo "  Teneo Discovery Portal - Local Dev"
+        echo "=========================================="
+        echo ""
+
+        # Kill old processes on ports
+        print_warning "Killing processes on ports 4000, 5176..."
+        lsof -ti:4000 | xargs kill -9 2>/dev/null || true
+        lsof -ti:5176 | xargs kill -9 2>/dev/null || true
+
+        # Kill old tmux session if exists
+        tmux kill-session -t teneo 2>/dev/null || true
+
+        # Check dependencies
+        if [ ! -d "node_modules" ]; then
+            print_warning "Installing frontend dependencies..."
+            npm install
+        fi
+
+        if [ ! -d "server/node_modules" ]; then
+            print_warning "Installing server dependencies..."
+            cd server && npm install && cd ..
+        fi
+
+        # Initialize database
+        init_database
+
+        print_status "Starting tmux session..."
+        echo ""
+        print_status "Server: http://localhost:4000"
+        print_status "Frontend: http://localhost:5176"
+        echo ""
+        print_warning "Tmux shortcuts:"
+        echo "  Ctrl+B, ↑/↓  - Switch between panes"
+        echo "  Ctrl+B, z    - Zoom current pane (toggle)"
+        echo "  Ctrl+B, [    - Copy mode (scroll), q to exit"
+        echo "  Ctrl+B, d    - Detach (keeps running)"
+        echo ""
+
+        # Create tmux session with split panes
+        PROJECT_DIR="$(pwd)"
+        tmux new-session -d -s teneo -c "$PROJECT_DIR/server" "npm run dev"
+        tmux split-window -v -t teneo -c "$PROJECT_DIR" "npm run dev"
+        tmux attach -t teneo
+        ;;
+
     local)
         echo ""
         echo "=========================================="
@@ -216,15 +264,26 @@ case "${1:-docker-dev}" in
 
     attach)
         print_status "Attaching to tmux session..."
-        docker exec -it poc-teneo-dev-1 tmux attach -t teneo
+        # Try local tmux first, then docker
+        tmux attach -t teneo 2>/dev/null || docker exec -it poc-teneo-dev-1 tmux attach -t teneo
         ;;
 
     stop)
         echo ""
-        print_status "Stopping Docker containers..."
+        print_status "Stopping services..."
+
+        # Kill tmux session
+        tmux kill-session -t teneo 2>/dev/null && print_status "Tmux session killed" || true
+
+        # Kill processes on ports
+        lsof -ti:4000 | xargs kill -9 2>/dev/null && print_status "Killed process on port 4000" || true
+        lsof -ti:5176 | xargs kill -9 2>/dev/null && print_status "Killed process on port 5176" || true
+
+        # Stop Docker if running
         docker-compose down 2>/dev/null || true
         docker-compose -f docker-compose.dev.yml down 2>/dev/null || true
-        print_status "Containers stopped"
+
+        print_status "All services stopped"
         ;;
 
     logs)
@@ -244,16 +303,15 @@ case "${1:-docker-dev}" in
         echo "Usage: ./start.sh [command]"
         echo ""
         echo "Commands:"
-        echo "  (default)  - Start Docker with tmux split view + hot reload"
-        echo "  attach     - Attach to tmux session"
-        echo "  stop       - Stop Docker containers"
+        echo "  (default)  - Local dev with tmux split view (server + frontend)"
+        echo "  stop       - Stop tmux session and kill processes"
+        echo "  attach     - Reattach to tmux session"
+        echo ""
+        echo "Docker:"
+        echo "  docker-dev - Docker with tmux split view + hot reload"
+        echo "  docker     - Docker production build"
         echo "  logs       - View Docker logs"
         echo "  status     - Check status"
-        echo ""
-        echo "Other:"
-        echo "  local      - Run locally without Docker"
-        echo "  prod       - Production mode locally"
-        echo "  docker     - Docker production build"
         exit 1
         ;;
 esac

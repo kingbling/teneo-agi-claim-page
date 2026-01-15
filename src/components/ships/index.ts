@@ -3,3 +3,4 @@
 
 export { ShipNavigator } from './ShipNavigator'
 export { CreateShipDialog, type CreateShipDialogProps } from './CreateShipDialog'
+export { ShipDetailPanel } from './ShipDetailPanel'

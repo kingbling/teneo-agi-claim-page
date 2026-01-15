@@ -124,25 +124,6 @@ export function calculateUserLevel(totalUSDCSpent: number): UserLevel {
 }
 
 // ============================================================================
-// MASTERPLAN 2026: HELPER FUNCTIONS
-// ============================================================================
-
-// Brain Level (1-248) determines max ships
-// Scales from 1 ship at level 1 to 10 ships at level 248
-export function getMaxShipsForBrainLevel(brainLevel: number): number {
-  if (brainLevel < 10) return 1
-  if (brainLevel < 25) return 2
-  if (brainLevel < 50) return 3
-  if (brainLevel < 75) return 4
-  if (brainLevel < 100) return 5
-  if (brainLevel < 125) return 6
-  if (brainLevel < 150) return 7
-  if (brainLevel < 175) return 8
-  if (brainLevel < 200) return 9
-  return 10
-}
-
-// ============================================================================
 // V1 MASTERPLAN: ETA CALCULATION (User Level + Items, Single Player)
 // ============================================================================
 
@@ -224,23 +205,11 @@ export const ITEM_DEFINITIONS: Record<ItemType, ItemDefinition> = {
   },
 } as const
 
-// ============================================================================
-// LEGACY: AGENT COSTS (Kept for migration compatibility)
-// ============================================================================
-
-export const COSTS = {
-  AGENT_BASE_COST: 100,               // Base cost to create an agent
-  TRAIT_COST_PER_LEVEL: 50,           // Additional cost per trait level
-  REPAIR_COST_MULTIPLIER: 0.5,        // Repair costs 50% of creation cost
-  STARTING_USER_POINTS: 1000,         // Points given to new users
-  STARTING_AGENT_FUEL: 500,           // Initial fuel for new agents
-  REPAIR_FUEL_AMOUNT: 100,            // Fuel given after repair
-} as const
-
 // ============ SIMULATION RATES ============
 
 export const RATES = {
   TICK_INTERVAL_MS: 1000,             // Milliseconds per simulation tick
+  TIME_MULTIPLIER: 288,               // Speed up simulation (288 = 24h in 5min real time)
   BASE_BURN_RATE: 1.0,                // Points per second (base fuel consumption)
   BASE_SPEED: 0.1,                    // Units per second (traveling speed)
   BASE_SEARCH_SPEED: 0.03,            // Units per second (searching/exploring speed)
@@ -271,10 +240,6 @@ export interface TraitEffect {
   luckyChance?: number       // Chance per level for lucky bonus
   luckyMultiplier?: number   // Multiplier when lucky triggers
   collaborativeBonus?: number // Bonus per additional solver
-  tranceDurationBase?: number    // Base trance duration (seconds)
-  tranceDurationPerLevel?: number // Additional duration per level
-  tranceSlowdownPerLevel?: number // Time scale slowdown per level
-  tranceTimeScale?: number       // Base time scale during trance
 }
 
 export const TRAIT_EFFECTS: Record<string, TraitEffect> = {
@@ -305,14 +270,6 @@ export const TRAIT_EFFECTS: Record<string, TraitEffect> = {
   collaborative: {
     type: 'collaborative',
     collaborativeBonus: 0.10,          // +10% solve bonus per other solver, per level
-  },
-  // Trance trait (client-side only, will be migrated to server)
-  trance: {
-    type: 'trance',
-    tranceDurationBase: 5,             // Base 5 seconds
-    tranceDurationPerLevel: 3,         // +3 seconds per level
-    tranceSlowdownPerLevel: 0.05,      // +5% slowdown per level
-    tranceTimeScale: 0.05,             // 20x slowdown (0.05 = 1/20)
   },
 } as const
 
@@ -354,21 +311,6 @@ export function getAgentLimit(tier: string, stakedAmount: number): number {
 }
 
 // ============ CALCULATION HELPERS ============
-
-/**
- * Calculate agent creation cost based on traits
- */
-export function calculateAgentCost(traits: Array<{ type: string; level: number }>): number {
-  const traitCost = traits.reduce((sum, t) => sum + t.level * COSTS.TRAIT_COST_PER_LEVEL, 0)
-  return COSTS.AGENT_BASE_COST + traitCost
-}
-
-/**
- * Calculate repair cost (50% of creation cost)
- */
-export function calculateRepairCost(creationCost: number): number {
-  return Math.ceil(creationCost * COSTS.REPAIR_COST_MULTIPLIER)
-}
 
 /**
  * Calculate effective burn rate with efficient trait
@@ -421,14 +363,6 @@ export function calculateLootShare(
   return Math.floor(baseShare * stakerBonus * luckyBonus)
 }
 
-/**
- * Calculate trance duration based on trait level
- */
-export function calculateTranceDuration(tranceLevel: number): number {
-  const { tranceDurationBase, tranceDurationPerLevel } = TRAIT_EFFECTS.trance
-  return (tranceDurationBase! + tranceLevel * tranceDurationPerLevel!) * 1000  // Returns milliseconds
-}
-
 // ============ CONFIG EXPORT ============
 
 /**
@@ -441,8 +375,6 @@ export interface GameConfig {
   userLevels: typeof USER_LEVEL_CONFIG
   items: typeof ITEM_DEFINITIONS
 
-  // Legacy (for migration)
-  costs: typeof COSTS
   rates: typeof RATES
   world: typeof WORLD
   traits: typeof TRAIT_EFFECTS
@@ -460,8 +392,6 @@ export function getGameConfig(): GameConfig {
     userLevels: USER_LEVEL_CONFIG,
     items: ITEM_DEFINITIONS,
 
-    // Legacy (for migration)
-    costs: COSTS,
     rates: RATES,
     world: WORLD,
     traits: TRAIT_EFFECTS,

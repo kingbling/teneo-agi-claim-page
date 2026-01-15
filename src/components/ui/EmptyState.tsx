@@ -1,6 +1,6 @@
 import type { Component } from 'solid-js'
 import { Show } from 'solid-js'
-import { Rocket, Sparkles, Search, Target, Zap } from 'lucide-solid'
+import { Sparkles, Zap } from 'lucide-solid'
 import { Button } from './button'
 
 interface EmptyStateProps {
@@ -9,7 +9,7 @@ interface EmptyStateProps {
   description: string
   actionLabel?: string
   onAction?: () => void
-  variant?: 'default' | 'agents' | 'discoveries' | 'search' | 'deploy'
+  variant?: 'default'
   size?: 'sm' | 'default' | 'lg'
 }
 
@@ -19,30 +19,6 @@ const variantConfig = {
     gradient: 'from-[var(--brand-teal-1)]/20 to-[var(--brand-blue-2)]/20',
     iconColor: 'text-[var(--brand-teal-1)]',
     iconBg: 'bg-[var(--brand-teal-1)]/10',
-  },
-  agents: {
-    icon: Rocket,
-    gradient: 'from-[var(--tier-trait)]/20 to-[var(--tier-mythic)]/20',
-    iconColor: 'text-[var(--tier-trait)]',
-    iconBg: 'bg-[var(--tier-trait)]/10',
-  },
-  discoveries: {
-    icon: Sparkles,
-    gradient: 'from-[var(--state-solving)]/20 to-[var(--state-limping)]/20',
-    iconColor: 'text-[var(--state-solving)]',
-    iconBg: 'bg-[var(--state-solving)]/10',
-  },
-  search: {
-    icon: Search,
-    gradient: 'from-[var(--state-wandering)]/20 to-[var(--brand-blue-2)]/20',
-    iconColor: 'text-[var(--state-wandering)]',
-    iconBg: 'bg-[var(--state-wandering)]/10',
-  },
-  deploy: {
-    icon: Target,
-    gradient: 'from-[var(--brand-green-4)]/20 to-[var(--brand-green-2)]/20',
-    iconColor: 'text-[var(--brand-green-4)]',
-    iconBg: 'bg-[var(--brand-green-4)]/10',
   },
 }
 
@@ -125,50 +101,5 @@ export function EmptyState(props: EmptyStateProps) {
         </Button>
       </Show>
     </div>
-  )
-}
-
-// Preset variants for common empty states
-export function NoAgentsEmpty(props: { onCreate?: () => void }) {
-  return (
-    <EmptyState
-      variant="agents"
-      title="No Agents Yet"
-      description="Create your first agent to start exploring the neural network and earning rewards."
-      actionLabel="Create Your First Agent"
-      onAction={props.onCreate}
-    />
-  )
-}
-
-export function NoDiscoveriesEmpty() {
-  return (
-    <EmptyState
-      variant="discoveries"
-      title="No Discoveries Yet"
-      description="Deploy your agents to explore the network. They'll find hidden spaces and earn you AGI rewards!"
-    />
-  )
-}
-
-export function NoSearchResultsEmpty(props: { query: string }) {
-  return (
-    <EmptyState
-      variant="search"
-      title="No Results Found"
-      description={`We couldn't find anything matching "${props.query}". Try adjusting your search or filters.`}
-      size="sm"
-    />
-  )
-}
-
-export function NoIdleAgentsEmpty() {
-  return (
-    <EmptyState
-      variant="deploy"
-      title="All Agents Busy"
-      description="All your agents are currently exploring. Wait for them to return or create a new agent."
-      size="sm"
-    />
   )
 }

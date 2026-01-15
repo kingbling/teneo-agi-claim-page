@@ -5,7 +5,7 @@ services:
   # Backend API server with SQLite database
   - name: server
     github:
-      repo: your-github-username/teneo  # Update with your repo
+      repo: kingbling/teneo-agi-claim-page
       branch: main
       deploy_on_push: true
     dockerfile_path: server/Dockerfile
@@ -23,6 +23,10 @@ services:
         value: production
       - key: SIMULATION_ENABLED
         value: "true"
+      - key: JWT_SECRET
+        type: SECRET
+      - key: JWT_EXPIRES_IN
+        value: "7d"
     health_check:
       http_path: /health
       initial_delay_seconds: 30
@@ -36,7 +40,7 @@ services:
   # Frontend static site
   - name: frontend
     github:
-      repo: your-github-username/teneo  # Update with your repo
+      repo: kingbling/teneo-agi-claim-page
       branch: main
       deploy_on_push: true
     dockerfile_path: Dockerfile

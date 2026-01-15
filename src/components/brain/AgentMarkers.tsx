@@ -18,17 +18,18 @@ const SHIP_POINT_SIZE = 6.0  // Reduced from 40 for clean look
 
 // State-based colors as vec3 for shader
 const STATE_COLORS: Record<ShipStatus, [number, number, number]> = {
-  idle: [0.6, 0.7, 0.85],      // BRIGHTENED blue-gray for visibility (was 0.4, 0.5, 0.65)
-  exploring: [0.0, 0.87, 0.87], // Bright cyan
-  deploying: [0.87, 0.67, 0.0], // Bright orange
-  returning: [0.53, 0.87, 0.53] // Bright green
+  idle: [0.6, 0.7, 0.85],       // BRIGHTENED blue-gray for visibility (was 0.4, 0.5, 0.65)
+  searching: [0.87, 0.53, 0.87], // Magenta/purple - actively searching
+  exploring: [0.0, 0.87, 0.87],  // Bright cyan
+  deploying: [0.87, 0.67, 0.0],  // Bright orange
+  returning: [0.53, 0.87, 0.53]  // Bright green
 }
 
 // Vertex shader for ship markers
 const SHIP_VERTEX_SHADER = `
   attribute vec3 aColor;
   attribute float aSize;
-  attribute float aState;  // 0=idle, 1=exploring, 2=deploying, 3=returning
+  attribute float aState;  // 0=idle, 1=searching, 2=exploring, 3=deploying, 4=returning
 
   uniform float uTime;
 
@@ -48,9 +49,12 @@ const SHIP_VERTEX_SHADER = `
       // Idle: subtle breathing
       pulse = 1.0 + sin(uTime * 1.0) * 0.1;
     } else if (aState < 1.5) {
+      // Searching: wandering pulse
+      pulse = 1.0 + sin(uTime * 2.5) * 0.18;
+    } else if (aState < 2.5) {
       // Exploring: active pulsing
       pulse = 1.0 + sin(uTime * 3.0) * 0.2;
-    } else if (aState < 2.5) {
+    } else if (aState < 3.5) {
       // Deploying: rapid pulse
       pulse = 1.0 + sin(uTime * 5.0) * 0.25;
     } else {
@@ -203,6 +207,11 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
   // Ship positions for raycasting
   let shipPositions: THREE.Vector3[] = []
 
+  // Smooth position interpolation - tracks rendered position per ship for smooth movement
+  const renderedPositions = new Map<string, THREE.Vector3>()
+  const LERP_SPEED = 4.0  // Lerp factor per second - higher = faster catch up
+  let lastFrameTime = 0
+
   // Hover state signal for tooltip
   const [hoveredShipId, setHoveredShipId] = createSignal<string | null>(null)
   const [tooltipPosition, setTooltipPosition] = createSignal<{ x: number; y: number } | null>(null)
@@ -257,9 +266,10 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       // State as float for shader
       const stateMap: Record<ShipStatus, number> = {
         idle: 0,
-        exploring: 1,
-        deploying: 2,
-        returning: 3
+        searching: 1,
+        exploring: 2,
+        deploying: 3,
+        returning: 4
       }
       states[i] = stateMap[ship.state]
     })
@@ -411,26 +421,56 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     })
   })
 
-  // Update geometry when ships change
+  // Update geometry structure when ship COUNT changes (add/remove ships)
+  // Does NOT update positions - that's handled by useFrame with interpolation
+  let lastShipCount = 0
   createEffect(() => {
     const data = computeBufferData()
+    const ships = visibleShips()
 
     if (!geometry || !data) {
       // Clear geometry if no ships
       if (geometry) {
         geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3))
+        geometry.setAttribute('aColor', new THREE.BufferAttribute(new Float32Array(0), 3))
+        geometry.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(0), 1))
+        geometry.setAttribute('aState', new THREE.BufferAttribute(new Float32Array(0), 1))
       }
       shipPositions = []
+      lastShipCount = 0
       return
     }
 
-    // Update buffer attributes
-    geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
-    geometry.setAttribute('aColor', new THREE.BufferAttribute(data.colors, 3))
-    geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
-    geometry.setAttribute('aState', new THREE.BufferAttribute(data.states, 1))
+    // Only rebuild buffers when ship count changes (structural change)
+    // Position updates are handled smoothly in useFrame
+    if (ships.length !== lastShipCount) {
+      geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
+      geometry.setAttribute('aColor', new THREE.BufferAttribute(data.colors, 3))
+      geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
+      geometry.setAttribute('aState', new THREE.BufferAttribute(data.states, 1))
+      shipPositions = data.positionsArray
 
-    shipPositions = data.positionsArray
+      // Initialize rendered positions for new ships
+      ships.forEach(ship => {
+        if (!renderedPositions.has(ship.id)) {
+          renderedPositions.set(ship.id, new THREE.Vector3(
+            ship.positionX,
+            ship.positionY,
+            ship.positionZ
+          ))
+        }
+      })
+
+      // Clean up old ship positions
+      const currentIds = new Set(ships.map(s => s.id))
+      for (const id of renderedPositions.keys()) {
+        if (!currentIds.has(id)) {
+          renderedPositions.delete(id)
+        }
+      }
+
+      lastShipCount = ships.length
+    }
   })
 
   // Animation loop
@@ -447,49 +487,117 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       selectionRingMaterial.uniforms.uTime.value = elapsedTime
     }
 
-    // Update positions in real-time
+    // Update positions in real-time with smooth interpolation
+    // OPTIMIZATION: Only update ships that are actually moving
     const ships = visibleShips()
+    const now = Date.now()
     if (geometry && ships.length > 0) {
       const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
       const stateAttr = geometry.getAttribute('aState') as THREE.BufferAttribute
       const colorAttr = geometry.getAttribute('aColor') as THREE.BufferAttribute
 
       if (posAttr && posAttr.count === ships.length) {
-        ships.forEach((ship, i) => {
-          // Update position
-          posAttr.setXYZ(
-            i,
-            ship.positionX * BRAIN_SCALE.x,
-            ship.positionY * BRAIN_SCALE.y,
-            ship.positionZ * BRAIN_SCALE.z
-          )
+        let positionChanged = false
+        let stateChanged = false
+        const CONVERGE_THRESHOLD = 0.0001 // Skip updates when position delta is tiny
 
-          // Update state
+        ships.forEach((ship, i) => {
+          // Calculate target position from ship data
+          let targetX = ship.positionX
+          let targetY = ship.positionY
+          let targetZ = ship.positionZ
+
+          // Check if ship is actively traveling
+          const isTraveling = ship.travelStartTime && ship.travelDuration &&
+              ship.startPositionX !== undefined && ship.startPositionX !== null
+
+          // For traveling ships, calculate the interpolated target based on travel progress
+          if (isTraveling) {
+            const elapsed = now - ship.travelStartTime!
+            const progress = Math.min(elapsed / ship.travelDuration!, 1)
+            // Ease-out cubic for smooth deceleration
+            const eased = 1 - Math.pow(1 - progress, 3)
+
+            // Interpolate from start to target (positionX/Y/Z is the target)
+            targetX = ship.startPositionX! + (ship.positionX - ship.startPositionX!) * eased
+            targetY = ship.startPositionY! + (ship.positionY - ship.startPositionY!) * eased
+            targetZ = ship.startPositionZ! + (ship.positionZ - ship.startPositionZ!) * eased
+          }
+
+          // Get or create rendered position for this ship
+          let rendered = renderedPositions.get(ship.id)
+          if (!rendered) {
+            // Initialize at target position
+            rendered = new THREE.Vector3(targetX, targetY, targetZ)
+            renderedPositions.set(ship.id, rendered)
+            positionChanged = true
+          }
+
+          // Calculate delta to check if we need to update
+          const deltaX = targetX - rendered.x
+          const deltaY = targetY - rendered.y
+          const deltaZ = targetZ - rendered.z
+          const totalDelta = Math.abs(deltaX) + Math.abs(deltaY) + Math.abs(deltaZ)
+
+          // Only lerp and update if the ship hasn't converged
+          if (totalDelta > CONVERGE_THRESHOLD) {
+            // Calculate frame-rate independent lerp factor
+            const currentTime = elapsedTime
+            const deltaTime = lastFrameTime > 0 ? Math.min(currentTime - lastFrameTime, 0.1) : 0.016
+            const lerpFactor = 1.0 - Math.exp(-LERP_SPEED * deltaTime)
+
+            // Smoothly lerp rendered position towards target
+            rendered.x += deltaX * lerpFactor
+            rendered.y += deltaY * lerpFactor
+            rendered.z += deltaZ * lerpFactor
+
+            // Update position using the smoothed rendered position
+            posAttr.setXYZ(
+              i,
+              rendered.x * BRAIN_SCALE.x,
+              rendered.y * BRAIN_SCALE.y,
+              rendered.z * BRAIN_SCALE.z
+            )
+
+            // Update ship positions for raycasting
+            if (shipPositions[i]) {
+              shipPositions[i].set(
+                rendered.x * BRAIN_SCALE.x,
+                rendered.y * BRAIN_SCALE.y,
+                rendered.z * BRAIN_SCALE.z
+              )
+            }
+
+            positionChanged = true
+          }
+
+          // Update state (check if changed)
           const stateMap: Record<ShipStatus, number> = {
             idle: 0,
-            exploring: 1,
-            deploying: 2,
-            returning: 3
+            searching: 1,
+            exploring: 2,
+            deploying: 3,
+            returning: 4
           }
-          stateAttr.setX(i, stateMap[ship.state])
+          const newState = stateMap[ship.state]
+          if (stateAttr.getX(i) !== newState) {
+            stateAttr.setX(i, newState)
+            stateChanged = true
 
-          // Update color
-          const color = STATE_COLORS[ship.state]
-          colorAttr.setXYZ(i, color[0], color[1], color[2])
-
-          // Update ship positions for raycasting
-          if (shipPositions[i]) {
-            shipPositions[i].set(
-              ship.positionX * BRAIN_SCALE.x,
-              ship.positionY * BRAIN_SCALE.y,
-              ship.positionZ * BRAIN_SCALE.z
-            )
+            // Update color only when state changes
+            const color = STATE_COLORS[ship.state]
+            colorAttr.setXYZ(i, color[0], color[1], color[2])
           }
         })
 
-        posAttr.needsUpdate = true
-        stateAttr.needsUpdate = true
-        colorAttr.needsUpdate = true
+        // Only trigger GPU upload if something actually changed
+        if (positionChanged) {
+          posAttr.needsUpdate = true
+        }
+        if (stateChanged) {
+          stateAttr.needsUpdate = true
+          colorAttr.needsUpdate = true
+        }
       }
     }
 
@@ -535,6 +643,9 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     } else {
       setTooltipPosition(null)
     }
+
+    // Update last frame time for delta calculation
+    lastFrameTime = elapsedTime
   })
 
   // Get hovered ship for tooltip

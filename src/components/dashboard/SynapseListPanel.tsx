@@ -54,6 +54,9 @@ interface SynapseListPanelProps {
   onNavigate: (cluster: SynapseCluster, position: THREE.Vector3) => void
   isExpanded: boolean
   onToggle: () => void
+  // Filter state lifted to parent for sharing with 3D scene
+  filterType: SynapseType | 'all'
+  onFilterChange: (type: SynapseType | 'all') => void
 }
 
 /**
@@ -61,7 +64,6 @@ interface SynapseListPanelProps {
  * Click to navigate camera to synapse location
  */
 export function SynapseListPanel(props: SynapseListPanelProps) {
-  const [filterType, setFilterType] = createSignal<SynapseType | 'all'>('all')
   const [showFilters, setShowFilters] = createSignal(false)
 
   // Get clusters from store (use LOD0 for most detail)
@@ -73,7 +75,7 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
   // Filter clusters
   const filteredClusters = createMemo(() => {
     const all = clusters()
-    const type = filterType()
+    const type = props.filterType
 
     // Return all clusters when 'all' filter is selected
     if (type === 'all') return all
@@ -140,7 +142,10 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
         <div class="mt-2 rounded-lg bg-black/60 backdrop-blur-sm border border-gray-700 overflow-hidden">
           {/* Filter toggle */}
           <button
-            onClick={() => setShowFilters(!showFilters())}
+            onClick={(e) => {
+              e.stopPropagation()
+              setShowFilters(!showFilters())
+            }}
             class="w-full flex items-center justify-between px-3 py-2 border-b border-gray-700/50 hover:bg-gray-800/50 transition-colors"
           >
             <span class="text-xs text-gray-400">Filter by type</span>
@@ -151,9 +156,12 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
           <Show when={showFilters()}>
             <div class="px-3 py-2 border-b border-gray-700/50 flex flex-wrap gap-1">
               <button
-                onClick={() => setFilterType('all')}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  props.onFilterChange('all')
+                }}
                 class={`px-2 py-0.5 rounded text-[10px] transition-colors ${
-                  filterType() === 'all'
+                  props.filterType === 'all'
                     ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50'
                     : 'bg-gray-700/50 text-gray-400 border border-gray-600/50 hover:bg-gray-700'
                 }`}
@@ -163,9 +171,12 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
               <For each={SYNAPSE_TYPES}>
                 {(type) => (
                   <button
-                    onClick={() => setFilterType(type)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      props.onFilterChange(type)
+                    }}
                     class={`px-2 py-0.5 rounded text-[10px] capitalize transition-colors ${
-                      filterType() === type
+                      props.filterType === type
                         ? `${TYPE_COLORS[type].bg} ${TYPE_COLORS[type].text} border border-current/50`
                         : 'bg-gray-700/50 text-gray-400 border border-gray-600/50 hover:bg-gray-700'
                     }`}

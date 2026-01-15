@@ -25,14 +25,13 @@ db.pragma('synchronous = NORMAL')
 
 // Initialize database schema
 export function initializeDatabase() {
-  // Run migrations FIRST to add any missing columns to existing tables
-  // This ensures indexes in schema.sql can be created on columns that exist
-  runMigrations(db)
-
-  // Then apply schema (CREATE TABLE IF NOT EXISTS won't modify existing tables,
-  // but will create new tables and indexes)
+  // Apply schema FIRST to create tables (CREATE TABLE IF NOT EXISTS)
   const schema = readFileSync(join(__dirname, 'schema.sql'), 'utf-8')
   db.exec(schema)
+
+  // Then run migrations to modify existing tables
+  runMigrations(db)
+
   console.log('Database initialized at:', DB_PATH)
 }
 
@@ -74,30 +73,12 @@ export function updateSpace(space: Partial<Space> & { id: string }) {
   const values: any[] = []
 
   if (space.state !== undefined) { updates.push('state = ?'); values.push(space.state) }
-  if (space.solveProgress !== undefined) { updates.push('solve_progress = ?'); values.push(space.solveProgress) }
   if (space.discoveredAt !== undefined) { updates.push('discovered_at = ?'); values.push(space.discoveredAt) }
 
   if (updates.length > 0) {
     values.push(space.id)
     db.prepare(`UPDATE spaces SET ${updates.join(', ')} WHERE id = ?`).run(...values)
   }
-}
-
-export function getSpaceSolvers(spaceId: string): string[] {
-  const rows = db.prepare('SELECT agent_id FROM space_solvers WHERE space_id = ?').all(spaceId) as any[]
-  return rows.map(r => r.agent_id)
-}
-
-export function addSpaceSolver(spaceId: string, agentId: string) {
-  db.prepare('INSERT OR IGNORE INTO space_solvers (space_id, agent_id, started_at) VALUES (?, ?, ?)').run(spaceId, agentId, Date.now())
-}
-
-export function removeSpaceSolver(spaceId: string, agentId: string) {
-  db.prepare('DELETE FROM space_solvers WHERE space_id = ? AND agent_id = ?').run(spaceId, agentId)
-}
-
-export function clearSpaceSolvers(spaceId: string) {
-  db.prepare('DELETE FROM space_solvers WHERE space_id = ?').run(spaceId)
 }
 
 function rowToSpace(row: any): Space {
@@ -109,10 +90,7 @@ function rowToSpace(row: any): Space {
     region: row.region,
     zone: row.zone,
     synapseCount: row.synapse_count,
-    baseProbability: row.base_probability,
     state: row.state as SpaceState,
-    solveProgress: row.solve_progress,
-    lootPool: row.loot_pool,
     discoveredAt: row.discovered_at,
   }
 }
@@ -181,10 +159,10 @@ export function createAgent(agent: Agent) {
       wander_dir_x, wander_dir_y, wander_dir_z, wander_phase,
       target_space_id, current_space_id, solve_start_time,
       travel_start_time, travel_duration,
-      points_balance, points_burn_rate, traits, spaces_discovered,
-      total_loot, total_points_burned, distance_traveled, created_at, deployed_at,
+      traits, spaces_discovered,
+      distance_traveled, created_at, deployed_at,
       creation_cost, needs_repair
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     agent.id, agent.ownerId, agent.name, agent.state,
     agent.positionX, agent.positionY, agent.positionZ,
@@ -194,8 +172,8 @@ export function createAgent(agent: Agent) {
     agent.wanderDirX, agent.wanderDirY, agent.wanderDirZ, agent.wanderPhase,
     agent.targetSpaceId, agent.currentSpaceId, agent.solveStartTime,
     agent.travelStartTime, agent.travelDuration,
-    agent.pointsBalance, agent.pointsBurnRate, JSON.stringify(agent.traits),
-    agent.spacesDiscovered, agent.totalLoot, agent.totalPointsBurned,
+    JSON.stringify(agent.traits),
+    agent.spacesDiscovered,
     agent.distanceTraveled ?? 0, agent.createdAt, agent.deployedAt,
     agent.creationCost ?? 100, agent.needsRepair ? 1 : 0
   )
@@ -227,10 +205,7 @@ export function updateAgent(agent: Partial<Agent> & { id: string }) {
   if (agent.solveStartTime !== undefined) { updates.push('solve_start_time = ?'); values.push(agent.solveStartTime) }
   if (agent.travelStartTime !== undefined) { updates.push('travel_start_time = ?'); values.push(agent.travelStartTime) }
   if (agent.travelDuration !== undefined) { updates.push('travel_duration = ?'); values.push(agent.travelDuration) }
-  if (agent.pointsBalance !== undefined) { updates.push('points_balance = ?'); values.push(agent.pointsBalance) }
   if (agent.spacesDiscovered !== undefined) { updates.push('spaces_discovered = ?'); values.push(agent.spacesDiscovered) }
-  if (agent.totalLoot !== undefined) { updates.push('total_loot = ?'); values.push(agent.totalLoot) }
-  if (agent.totalPointsBurned !== undefined) { updates.push('total_points_burned = ?'); values.push(agent.totalPointsBurned) }
   if (agent.distanceTraveled !== undefined) { updates.push('distance_traveled = ?'); values.push(agent.distanceTraveled) }
   if (agent.deployedAt !== undefined) { updates.push('deployed_at = ?'); values.push(agent.deployedAt) }
   if (agent.creationCost !== undefined) { updates.push('creation_cost = ?'); values.push(agent.creationCost) }
@@ -278,12 +253,8 @@ function rowToAgent(row: any): Agent {
     solveStartTime: row.solve_start_time,
     travelStartTime: row.travel_start_time,
     travelDuration: row.travel_duration,
-    pointsBalance: row.points_balance,
-    pointsBurnRate: row.points_burn_rate,
     traits: JSON.parse(row.traits) as AgentTrait[],
     spacesDiscovered: row.spaces_discovered,
-    totalLoot: row.total_loot,
-    totalPointsBurned: row.total_points_burned,
     distanceTraveled: row.distance_traveled,
     createdAt: row.created_at,
     deployedAt: row.deployed_at,
@@ -341,9 +312,6 @@ function rowToUser(row: any): User {
     totalLootEarned: row.total_loot_earned,
     createdAt: row.created_at,
     // Masterplan 2026 fields
-    brain_level: row.brain_level,
-    brain_xp: row.brain_xp,
-    total_brain_xp: row.total_brain_xp,
     usdc_spent: row.usdc_spent,
     agentic_balance: row.agentic_balance,
     total_agi_earned: row.total_agi_earned,
@@ -387,7 +355,6 @@ function rowToSpaceCluster(row: any): SpaceCluster {
     spaceCount: row.space_count,
     discoveredCount: row.discovered_count,
     beingSolvedCount: row.being_solved_count,
-    avgLootPool: row.avg_loot_pool,
     updatedAt: row.updated_at,
   }
 }
@@ -439,10 +406,9 @@ export function recomputeSpaceClusters() {
       spaceCount: number
       discoveredCount: number
       beingSolvedCount: number
-      totalLoot: number
     }>()
 
-    const spaces = db.prepare('SELECT position_x, position_y, position_z, state, loot_pool FROM spaces').all() as any[]
+    const spaces = db.prepare('SELECT position_x, position_y, position_z, state FROM spaces').all() as any[]
 
     for (const space of spaces) {
       const gx = Math.floor((space.position_x + 1.5) / gridCellSize)
@@ -456,7 +422,6 @@ export function recomputeSpaceClusters() {
           spaceCount: 0,
           discoveredCount: 0,
           beingSolvedCount: 0,
-          totalLoot: 0,
         })
       }
 
@@ -465,7 +430,6 @@ export function recomputeSpaceClusters() {
       cluster.spaceCount++
       if (space.state === 'discovered') cluster.discoveredCount++
       if (space.state === 'being_solved') cluster.beingSolvedCount++
-      cluster.totalLoot += space.loot_pool
     }
 
     // Clear and reinsert clusters for this LOD
@@ -474,8 +438,8 @@ export function recomputeSpaceClusters() {
     const insertStmt = db.prepare(`
       INSERT INTO space_clusters (
         id, lod_level, position_x, position_y, position_z,
-        space_count, discovered_count, being_solved_count, avg_loot_pool, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        space_count, discovered_count, being_solved_count, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     const now = Date.now()
@@ -483,12 +447,11 @@ export function recomputeSpaceClusters() {
       const cx = data.positions.reduce((s, p) => s + p[0], 0) / data.positions.length
       const cy = data.positions.reduce((s, p) => s + p[1], 0) / data.positions.length
       const cz = data.positions.reduce((s, p) => s + p[2], 0) / data.positions.length
-      const avgLoot = data.totalLoot / data.spaceCount
 
       insertStmt.run(
         uuid(), lod.level, cx, cy, cz,
         data.spaceCount, data.discoveredCount, data.beingSolvedCount,
-        avgLoot, now
+        now
       )
     }
   }

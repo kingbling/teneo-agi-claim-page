@@ -108,8 +108,9 @@ export function DiscoveryBurst(props: DiscoveryBurstProps) {
       processedIds = new Set(ids.slice(-25))
     }
 
-    // Calculate loot amount for intensity
-    const lootAmount = latestDiscovery.lootDistribution.reduce((s, d) => s + d.amount, 0)
+    // Calculate loot amount for intensity (guard against undefined)
+    const lootDistribution = Array.isArray(latestDiscovery.lootDistribution) ? latestDiscovery.lootDistribution : []
+    const lootAmount = lootDistribution.reduce((s, d) => s + d.amount, 0)
 
     // Only burst for significant discoveries
     if (lootAmount < LOOT_THRESHOLDS.MIN_NOTIFY) return
@@ -139,11 +140,18 @@ export function DiscoveryBurst(props: DiscoveryBurstProps) {
   })
 
   onMount(() => {
-    // Remove expired bursts periodically
+    // Remove expired bursts periodically - only filter when bursts exist
     const interval = setInterval(() => {
+      const current = activeBursts()
+      if (current.length === 0) return // Skip if no bursts to clean
+
       const now = Date.now() / 1000
-      setActiveBursts(prev => prev.filter(b => now - b.startTime < b.duration))
-    }, 200)
+      const remaining = current.filter(b => now - b.startTime < b.duration)
+      // Only update if something was removed
+      if (remaining.length !== current.length) {
+        setActiveBursts(remaining)
+      }
+    }, 500) // Reduced from 200ms
 
     onCleanup(() => {
       clearInterval(interval)

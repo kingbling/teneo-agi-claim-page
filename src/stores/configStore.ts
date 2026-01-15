@@ -56,10 +56,6 @@ export interface TraitEffect {
   luckyChance?: number
   luckyMultiplier?: number
   collaborativeBonus?: number
-  tranceDurationBase?: number
-  tranceDurationPerLevel?: number
-  tranceSlowdownPerLevel?: number
-  tranceTimeScale?: number
 }
 
 export interface AgentTrait {

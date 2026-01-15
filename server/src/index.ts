@@ -1,4 +1,9 @@
 import 'dotenv/config'
+
+// Install log capture BEFORE any other imports that might log
+import { installLogCapture, onLogEntry } from './utils/logCapture.js'
+installLogCapture()
+
 import express from 'express'
 import cors from 'cors'
 import { WebSocketServer, WebSocket } from 'ws'
@@ -26,7 +31,6 @@ import {
   stopSimulation,
   deployAgentToSearch,
   recallAgent,
-  refuelAgent,
   onSpaceDiscovered,
   onLootDistributed,
   onAgentsUpdated,
@@ -40,12 +44,16 @@ import {
   onExplorationProgress,
   onUserLevelUp,
 } from './simulation/engine.js'
-import type { Agent, AgentTrait, ClientMessage, ServerMessage, WorldState, User } from './types/index.js'
+import type { Agent, AgentTrait, ClientMessage, ServerMessage, WorldState, User, ShipDTO, ShipState } from './types/index.js'
 import { getAgentLimit } from './types/index.js'
-import { getGameConfig, COSTS, WORLD, calculateAgentCost, calculateRepairCost } from './config/gameConfig.js'
+import { getGameConfig, WORLD } from './config/gameConfig.js'
 import { mountMasterplanRoutes } from './routes/index.js'
+import { verifyToken } from './utils/jwt.js'
 
 const PORT = process.env.PORT
+
+// Starting points for new users (legacy - used for backward compatibility)
+const STARTING_USER_POINTS = 1000
 
 // Helper to get all LOD clusters (reduces duplication)
 function getAllClusters() {
@@ -60,6 +68,54 @@ function getAllClusters() {
       ...getAgentClusters(1),
       ...getAgentClusters(2),
     ],
+  }
+}
+
+// ============ SHIP SYNC HELPERS ============
+
+// Map server agent state to client-friendly ship state
+const agentStateToShipState: Record<string, ShipState> = {
+  idle: 'idle',
+  searching: 'searching',
+  traveling: 'deploying',
+  solving: 'exploring',
+  returning: 'returning',
+}
+
+// Transform server Agent to client-friendly ShipDTO
+function agentToShipDTO(agent: Agent): ShipDTO {
+  // Query additional ship data from DB if needed
+  const shipData = db.prepare(`
+    SELECT autopilot_enabled, current_points_per_min, total_agi_earned
+    FROM agents WHERE id = ?
+  `).get(agent.id) as {
+    autopilot_enabled: number | null
+    current_points_per_min: number | null
+    total_agi_earned: number | null
+  } | undefined
+
+  return {
+    id: agent.id,
+    ownerId: agent.ownerId,
+    name: agent.name,
+    state: agentStateToShipState[agent.state] || 'idle',
+    positionX: agent.positionX,
+    positionY: agent.positionY,
+    positionZ: agent.positionZ,
+    startPositionX: agent.startPositionX,
+    startPositionY: agent.startPositionY,
+    startPositionZ: agent.startPositionZ,
+    targetPositionX: agent.targetX,
+    targetPositionY: agent.targetY,
+    targetPositionZ: agent.targetZ,
+    currentSynapseId: agent.currentSpaceId || agent.targetSpaceId,
+    travelStartTime: agent.travelStartTime,
+    travelDuration: agent.travelDuration,
+    autopilotEnabled: shipData?.autopilot_enabled === 1,
+    currentPointsPerMin: shipData?.current_points_per_min || 0,
+    spacesDiscovered: agent.spacesDiscovered,
+    totalAgiEarned: shipData?.total_agi_earned || 0,
+    createdAt: agent.createdAt,
   }
 }
 
@@ -120,7 +176,7 @@ app.post('/api/users', (req, res) => {
       wallet,
       tier: 'free',
       stakedAmount: 0,
-      points: COSTS.STARTING_USER_POINTS,
+      points: STARTING_USER_POINTS,
       totalLootEarned: 0,
       createdAt: Date.now(),
     }
@@ -134,96 +190,6 @@ app.post('/api/users', (req, res) => {
 app.get('/api/users/:userId/agents', (req, res) => {
   const agents = getAgentsByOwner(req.params.userId)
   res.json(agents)
-})
-
-// Create agent
-app.post('/api/agents', (req, res) => {
-  const { userId, name, traits } = req.body as {
-    userId: string
-    name: string
-    traits: AgentTrait[]
-  }
-
-  const user = getUser(userId)
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' })
-  }
-
-  // Check agent limit
-  const existingAgents = getAgentsByOwner(userId)
-  const limit = getAgentLimit(user.tier, user.stakedAmount)
-  if (existingAgents.length >= limit) {
-    return res.status(400).json({ error: 'Agent limit reached' })
-  }
-
-  // Calculate creation cost based on traits
-  const totalCost = calculateAgentCost(traits)
-
-  if (user.points < totalCost) {
-    return res.status(400).json({ error: 'Insufficient points' })
-  }
-
-  // Use transaction to ensure atomicity
-  try {
-    const result = db.transaction(() => {
-      // Deduct points
-      updateUser({ id: userId, points: user.points - totalCost })
-
-      // Create agent at brain center
-      const agent: Agent = {
-        id: uuid(),
-        ownerId: userId,
-        name,
-        state: 'idle',
-        positionX: 0,
-        positionY: 0,
-        positionZ: 0,
-        homeX: 0,
-        homeY: 0,
-        homeZ: 0,
-        targetX: null,
-        targetY: null,
-        targetZ: null,
-        startPositionX: null,
-        startPositionY: null,
-        startPositionZ: null,
-        wanderDirX: 0,
-        wanderDirY: 0,
-        wanderDirZ: 0,
-        wanderPhase: 0,
-        targetSpaceId: null,
-        currentSpaceId: null,
-        solveStartTime: null,
-        travelStartTime: null,
-        travelDuration: null,
-        pointsBalance: COSTS.STARTING_AGENT_FUEL,
-        pointsBurnRate: 1.0,
-        traits,
-        spacesDiscovered: 0,
-        totalLoot: 0,
-        totalPointsBurned: 0,
-        distanceTraveled: 0,
-        createdAt: Date.now(),
-        deployedAt: null,
-        creationCost: totalCost,  // Store for repair cost calculation
-        needsRepair: false,
-        tranceActive: false,
-        tranceEndTime: null,
-        tranceLevel: traits.find(t => t.type === 'trance')?.level || 0,
-      }
-
-      createAgent(agent)
-
-      // Return agent and updated user
-      const updatedUser = getUser(userId)
-      return { agent, user: updatedUser }
-    })()
-
-    res.json(result)
-  } catch (error) {
-    console.error('Agent creation transaction failed:', error)
-    return res.status(500).json({ error: 'Failed to create agent' })
-  }
 })
 
 // Deploy agent to region - starts in searching mode, wandering and auto-discovering
@@ -253,9 +219,6 @@ app.post('/api/agents/:agentId/deploy-to-region', (req, res) => {
   if (agent.state !== 'idle') {
     return res.status(400).json({ error: `Agent is not idle (state: ${agent.state})` })
   }
-  if (agent.pointsBalance <= 0) {
-    return res.status(400).json({ error: 'Agent has no fuel (points)' })
-  }
 
   // Deploy agent in searching mode at the given position
   const success = deployAgentToSearch(req.params.agentId, {
@@ -284,38 +247,7 @@ app.post('/api/agents/:agentId/recall', (req, res) => {
   }
 })
 
-// Refuel agent
-app.post('/api/agents/:agentId/refuel', (req, res) => {
-  const { points } = req.body
-  const agent = getAgent(req.params.agentId)
-
-  if (!agent) {
-    return res.status(404).json({ error: 'Agent not found' })
-  }
-
-  const user = getUser(agent.ownerId)
-  if (!user || user.points < points) {
-    return res.status(400).json({ error: 'Insufficient points' })
-  }
-
-  // Use transaction to ensure atomicity
-  try {
-    const result = db.transaction(() => {
-      const newUserPoints = user.points - points
-      updateUser({ id: user.id, points: newUserPoints })
-      refuelAgent(req.params.agentId, points)
-
-      return { agent: getAgent(req.params.agentId), userPoints: newUserPoints }
-    })()
-
-    res.json(result)
-  } catch (error) {
-    console.error('Refuel transaction failed:', error)
-    return res.status(500).json({ error: 'Failed to refuel agent' })
-  }
-})
-
-// Repair exhausted agent (costs 50% of creation cost)
+// Repair exhausted agent (no cost in Masterplan 2026)
 app.post('/api/agents/:agentId/repair', (req, res) => {
   const agent = getAgent(req.params.agentId)
 
@@ -327,40 +259,14 @@ app.post('/api/agents/:agentId/repair', (req, res) => {
     return res.status(400).json({ error: 'Agent does not need repair' })
   }
 
-  // Calculate repair cost (50% of creation cost)
-  const repairCost = calculateRepairCost(agent.creationCost || COSTS.AGENT_BASE_COST)
+  // Repair the agent (clear needsRepair flag)
+  updateAgent({
+    id: agent.id,
+    needsRepair: false,
+  })
 
-  const user = getUser(agent.ownerId)
-  if (!user || user.points < repairCost) {
-    return res.status(400).json({ error: `Insufficient points (need ${repairCost})` })
-  }
-
-  // Use transaction to ensure atomicity
-  try {
-    const result = db.transaction(() => {
-      // Deduct repair cost from user
-      const newUserPoints = user.points - repairCost
-      updateUser({ id: user.id, points: newUserPoints })
-
-      // Repair the agent (clear needsRepair flag, give some initial fuel)
-      updateAgent({
-        id: agent.id,
-        needsRepair: false,
-        pointsBalance: COSTS.REPAIR_FUEL_AMOUNT,
-      })
-
-      return {
-        agent: { ...agent, needsRepair: false, pointsBalance: COSTS.REPAIR_FUEL_AMOUNT },
-        userPoints: newUserPoints,
-        repairCost,
-      }
-    })()
-
-    res.json(result)
-  } catch (error) {
-    console.error('Repair transaction failed:', error)
-    return res.status(500).json({ error: 'Failed to repair agent' })
-  }
+  const updatedAgent = getAgent(req.params.agentId)
+  res.json({ agent: updatedAgent })
 })
 
 // Get world state
@@ -409,24 +315,49 @@ wss.on('connection', (ws) => {
       const message = JSON.parse(data.toString()) as ClientMessage
 
       switch (message.type) {
-        case 'agent:recall': {
-          const { agentId } = message.data
-          recallAgent(agentId)
-          break
-        }
+        case 'auth:identify': {
+          const { token } = message.data
+          const payload = verifyToken(token)
 
-        case 'agent:refuel': {
-          const { agentId, points } = message.data
-          const agent = getAgent(agentId)
-          if (agent) {
-            const user = getUser(agent.ownerId)
-            if (user && user.points >= points) {
-              updateUser({ id: user.id, points: user.points - points })
-              refuelAgent(agentId, points)
+          if (payload) {
+            const client = clients.get(clientId)
+            if (client) {
+              client.userId = payload.userId
+              console.log(`Client ${clientId} authenticated as user ${payload.userId}`)
+
+              // Send auth success
+              ws.send(JSON.stringify({
+                type: 'auth:success',
+                data: { userId: payload.userId },
+              } as ServerMessage))
+
+              // Send initial ships for this user
+              sendUserShips(clientId)
             }
+          } else {
+            ws.send(JSON.stringify({
+              type: 'auth:error',
+              data: { message: 'Invalid or expired token' },
+            } as ServerMessage))
           }
           break
         }
+
+        case 'auth:logout': {
+          const client = clients.get(clientId)
+          if (client) {
+            console.log(`Client ${clientId} logged out (was user ${client.userId})`)
+            client.userId = null
+          }
+          break
+        }
+
+        case 'ping':
+          // Heartbeat - no response needed
+          break
+
+        default:
+          console.log('Unknown WebSocket message type:', (message as any).type)
       }
     } catch (error) {
       console.error('WebSocket message error:', error)
@@ -449,6 +380,42 @@ function broadcast(message: ServerMessage) {
   }
 }
 
+// Broadcast to a specific user (all their connected clients)
+function broadcastToUser(userId: string, message: ServerMessage) {
+  const data = JSON.stringify(message)
+  for (const client of clients.values()) {
+    if (client.userId === userId && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(data)
+    }
+  }
+}
+
+// Send user's ships to a specific client
+function sendUserShips(clientId: string) {
+  const client = clients.get(clientId)
+  if (!client || !client.userId || client.ws.readyState !== WebSocket.OPEN) return
+
+  const agents = getAgentsByOwner(client.userId)
+  const ships = agents.map(agentToShipDTO)
+
+  const message: ServerMessage = {
+    type: 'ships:sync',
+    data: { ships, timestamp: Date.now() },
+  }
+  client.ws.send(JSON.stringify(message))
+}
+
+// Trigger ship sync for a user (called from REST routes after mutations)
+export function triggerShipUpdate(userId: string) {
+  const agents = getAgentsByOwner(userId)
+  const ships = agents.map(agentToShipDTO)
+
+  broadcastToUser(userId, {
+    type: 'ships:sync',
+    data: { ships, timestamp: Date.now() },
+  })
+}
+
 // Set up simulation event handlers
 onSpaceDiscovered((event) => {
   broadcast({ type: 'space:discovered', data: event as any })
@@ -459,6 +426,28 @@ onLootDistributed((event) => {
 })
 
 onAgentsUpdated((agents) => {
+  // Group agents by owner and send user-specific ships:sync messages
+  const agentsByOwner = new Map<string, Agent[]>()
+
+  for (const agent of agents) {
+    const existing = agentsByOwner.get(agent.ownerId) || []
+    existing.push(agent)
+    agentsByOwner.set(agent.ownerId, existing)
+  }
+
+  // Send updates to each user
+  for (const [ownerId] of agentsByOwner) {
+    // Get ALL ships for this user (not just updated ones) for consistency
+    const allUserAgents = getAgentsByOwner(ownerId)
+    const ships = allUserAgents.map(agentToShipDTO)
+
+    broadcastToUser(ownerId, {
+      type: 'ships:sync',
+      data: { ships, timestamp: Date.now() },
+    })
+  }
+
+  // Also broadcast legacy agents:update for backwards compatibility (can be removed later)
   broadcast({ type: 'agents:update', data: agents as any })
 })
 
@@ -475,9 +464,16 @@ onUserLevelUp((event) => {
   broadcast({ type: 'user:levelup', data: event as any })
 })
 
+// Stream server logs to connected clients (admin dashboard)
+onLogEntry((entry) => {
+  broadcast({ type: 'log:entry', data: entry })
+})
+
 // Periodic state broadcast (every 5 seconds)
 setInterval(() => {
   const stats = getDiscoveryStats()
+
+  // Broadcast world state (clusters, progress) to all clients
   broadcast({
     type: 'state:sync',
     data: {
@@ -486,6 +482,13 @@ setInterval(() => {
       discoveryProgress: stats,
     },
   })
+
+  // Send user-specific ships to each authenticated client
+  for (const [clientId, client] of clients) {
+    if (client.userId) {
+      sendUserShips(clientId)
+    }
+  }
 }, 5000)
 
 // ============ START SERVER ============

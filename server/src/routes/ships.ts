@@ -15,7 +15,7 @@ import {
   getUser,
 } from '../db/index.js'
 import { deployAgentToSearch, recallAgent } from '../simulation/engine.js'
-import { WORLD, USER_LEVEL_CONFIG, calculateUserLevel } from '../config/gameConfig.js'
+import { WORLD, USER_LEVEL_CONFIG, calculateUserLevel, calculateTravelTime } from '../config/gameConfig.js'
 import type { Agent } from '../types/index.js'
 import {
   asyncHandler,
@@ -23,11 +23,12 @@ import {
   validateUserExists,
   sendError,
 } from '../middleware/errorHandler.js'
+import { triggerShipUpdate } from '../index.js'
 
 const router = Router()
 
 // Type for ship response (transformed from Agent)
-interface ShipResponse {
+export interface ShipResponse {
   id: string
   ownerId: string
   name: string
@@ -46,23 +47,20 @@ interface ShipResponse {
   equippedItems: string[]
   currentPointsPerMin: number
   spacesDiscovered: number
-  totalLoot: number
   totalAgiEarned: number
-  totalBrainXpEarned: number
   createdAt: number
 }
 
 // Helper to transform Agent to Ship response
-function agentToShip(agent: Agent): ShipResponse {
+export function agentToShip(agent: Agent): ShipResponse {
   // Get autopilot settings and stats from DB
   const shipData = db.prepare(`
-    SELECT autopilot_enabled, current_points_per_min, total_agi_earned, total_brain_xp_earned
+    SELECT autopilot_enabled, current_points_per_min, total_agi_earned
     FROM agents WHERE id = ?
   `).get(agent.id) as {
     autopilot_enabled: number
     current_points_per_min: number
     total_agi_earned: number
-    total_brain_xp_earned: number
   } | undefined
 
   // Get equipped items for this ship
@@ -75,8 +73,8 @@ function agentToShip(agent: Agent): ShipResponse {
     id: agent.id,
     ownerId: agent.ownerId,
     name: agent.name,
-    // Map server states to frontend states: searching/solving -> exploring, traveling -> deploying
-    state: (agent.state === 'solving' || agent.state === 'searching') ? 'exploring'
+    // Map server states to frontend states: solving -> exploring, traveling -> deploying, searching stays as searching
+    state: agent.state === 'solving' ? 'exploring'
          : agent.state === 'traveling' ? 'deploying'
          : agent.state,
     positionX: agent.positionX,
@@ -93,9 +91,7 @@ function agentToShip(agent: Agent): ShipResponse {
     equippedItems: equippedItems.map(e => e.id),
     currentPointsPerMin: shipData?.current_points_per_min || 100,
     spacesDiscovered: agent.spacesDiscovered,
-    totalLoot: agent.totalLoot,
     totalAgiEarned: shipData?.total_agi_earned || 0,
-    totalBrainXpEarned: shipData?.total_brain_xp_earned || 0,
     createdAt: agent.createdAt,
   }
 }
@@ -158,12 +154,8 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     solveStartTime: null,
     travelStartTime: null,
     travelDuration: null,
-    pointsBalance: 0,         // No fuel system in Masterplan 2026
-    pointsBurnRate: 0,        // No fuel system
     traits: [],               // No traits in Masterplan 2026
     spacesDiscovered: 0,
-    totalLoot: 0,
-    totalPointsBurned: 0,
     distanceTraveled: 0,
     createdAt: Date.now(),
     deployedAt: null,
@@ -176,7 +168,11 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
 
   createAgent(ship)
 
-  res.status(201).json({ ship: agentToShip(ship) })
+  // Trigger WebSocket update for the user
+  triggerShipUpdate(userId)
+
+  // Return full ship object (client expects { ship: ... })
+  res.status(201).json({ success: true, ship: agentToShip(ship) })
 }))
 
 /**
@@ -243,11 +239,16 @@ router.post('/:id/deploy', validateShipExists, asyncHandler(async (req: Request,
   const success = deployAgentToSearch(agent.id, { x: targetX, y: targetY, z: targetZ })
 
   if (success) {
+    // Trigger WebSocket update for the user
+    triggerShipUpdate(agent.ownerId)
+
+    // Get updated agent and return as ship (client expects { ship: ... })
     const updatedAgent = getAgent(agent.id)
-    res.json({
-      ship: agentToShip(updatedAgent!),
-      deployedTo: synapseId ? { synapseId } : { positionX: targetX, positionY: targetY, positionZ: targetZ }
-    })
+    if (updatedAgent) {
+      res.json({ success: true, ship: agentToShip(updatedAgent) })
+    } else {
+      res.json({ success: true })
+    }
   } else {
     sendError(res, 400, 'Failed to deploy ship')
   }
@@ -268,11 +269,121 @@ router.post('/:id/recall', validateShipExists, asyncHandler(async (_req: Request
   const success = recallAgent(agent.id)
 
   if (success) {
+    // Trigger WebSocket update for the user
+    triggerShipUpdate(agent.ownerId)
+
+    // Get updated agent and return as ship (client expects { ship: ... })
     const updatedAgent = getAgent(agent.id)
-    res.json({ ship: agentToShip(updatedAgent!) })
+    if (updatedAgent) {
+      res.json({ success: true, ship: agentToShip(updatedAgent) })
+    } else {
+      res.json({ success: true })
+    }
   } else {
     sendError(res, 400, 'Failed to recall ship')
   }
+}))
+
+/**
+ * POST /api/ships/:id/travel-to-synapse
+ * Start traveling to a specific synapse (from idle or searching state)
+ * Ship will auto-start exploring when it arrives
+ */
+router.post('/:id/travel-to-synapse', validateShipExists, asyncHandler(async (req: Request, res: Response) => {
+  const agent = res.locals.agent as Agent
+  const { synapseId, pointsPerMin } = req.body as {
+    synapseId: string
+    pointsPerMin?: number
+  }
+
+  if (!synapseId) {
+    sendError(res, 400, 'synapseId is required')
+    return
+  }
+
+  // Ship must be idle or searching to travel to synapse
+  if (agent.state !== 'idle' && agent.state !== 'searching') {
+    sendError(res, 400, `Ship must be idle or searching to travel (current state: ${agent.state})`)
+    return
+  }
+
+  // Get synapse position and validate
+  const synapse = db.prepare(`
+    SELECT id, position_x, position_y, position_z, state, synapse_type
+    FROM spaces WHERE id = ?
+  `).get(synapseId) as {
+    id: string
+    position_x: number
+    position_y: number
+    position_z: number
+    state: string
+    synapse_type: string
+  } | undefined
+
+  if (!synapse) {
+    sendError(res, 404, 'Synapse not found')
+    return
+  }
+
+  if (synapse.state === 'discovered') {
+    sendError(res, 400, 'Synapse has already been completed')
+    return
+  }
+
+  // V1 Masterplan: Single player - check if synapse is already being explored
+  const explorerCount = db.prepare(`
+    SELECT COUNT(*) as count FROM synapse_explorers WHERE synapse_id = ?
+  `).get(synapseId) as { count: number }
+
+  if (explorerCount.count >= 1) {
+    sendError(res, 400, 'Synapse is already being explored')
+    return
+  }
+
+  // Calculate distance and travel duration
+  const distance = Math.sqrt(
+    Math.pow(synapse.position_x - agent.positionX, 2) +
+    Math.pow(synapse.position_y - agent.positionY, 2) +
+    Math.pow(synapse.position_z - agent.positionZ, 2)
+  )
+
+  // Use calculateTravelTime from gameConfig (returns ms)
+  // swiftLevel = 0 (no traits in Masterplan 2026)
+  const travelDuration = calculateTravelTime(distance, 0)
+
+  const now = Date.now()
+
+  // Update agent to traveling state
+  db.prepare(`
+    UPDATE agents SET
+      state = 'traveling',
+      target_space_id = ?,
+      start_position_x = position_x,
+      start_position_y = position_y,
+      start_position_z = position_z,
+      travel_start_time = ?,
+      travel_duration = ?,
+      current_points_per_min = ?
+    WHERE id = ?
+  `).run(
+    synapseId,
+    now,
+    travelDuration,
+    pointsPerMin || 100,
+    agent.id
+  )
+
+  // Trigger WebSocket update for the user
+  triggerShipUpdate(agent.ownerId)
+
+  // Get updated agent and return as ship
+  const updatedAgent = getAgent(agent.id)
+  res.json({
+    success: true,
+    ship: updatedAgent ? agentToShip(updatedAgent) : null,
+    travelDuration,
+    estimatedArrival: now + travelDuration,
+  })
 }))
 
 /**
@@ -299,13 +410,14 @@ router.post('/:id/autopilot', validateShipExists, asyncHandler(async (req: Reque
     UPDATE agents SET autopilot_target_types = ? WHERE id = ?
   `).run(JSON.stringify(filteredTypes), agent.id)
 
+  // Trigger WebSocket update for the user
+  triggerShipUpdate(agent.ownerId)
+
+  // Get updated agent and return as ship (client expects { ship: ... })
   const updatedAgent = getAgent(agent.id)
   res.json({
-    ship: {
-      ...agentToShip(updatedAgent!),
-      autopilotEnabled: enabled,
-      autopilotTargetTypes: filteredTypes,
-    },
+    success: true,
+    ship: updatedAgent ? agentToShip(updatedAgent) : null,
     message: enabled
       ? `Autopilot enabled${filteredTypes.length > 0 ? ` for ${filteredTypes.join(', ')} synapses` : ''}`
       : 'Autopilot disabled'
@@ -359,10 +471,16 @@ router.post('/:id/autopilot/preferences', validateShipExists, asyncHandler(async
     WHERE id = ?
   `).run(newTargetTypes, newMaxPointsCap, newAvoidCrowded, agent.id)
 
+  // Trigger WebSocket update for the user
+  triggerShipUpdate(agent.ownerId)
+
   const parsedTargetTypes = JSON.parse(newTargetTypes) as string[]
 
+  // Get updated agent and return as ship (client expects { ship: ... })
+  const updatedAgent = getAgent(agent.id)
   res.json({
     success: true,
+    ship: updatedAgent ? agentToShip(updatedAgent) : null,
     preferences: {
       targetSynapseTypes: parsedTargetTypes,
       maxPointsCap: newMaxPointsCap,
@@ -449,21 +567,14 @@ router.post('/:id/equip', validateShipExists, asyncHandler(async (req: Request, 
     UPDATE user_purchases SET ship_id = ? WHERE id = ?
   `).run(agent.id, itemId)
 
-  // Get all equipped items for this ship
-  const equippedItems = db.prepare(`
-    SELECT up.id, up.item_id, ish.effect_type
-    FROM user_purchases up
-    JOIN item_shop ish ON up.item_id = ish.id
-    WHERE up.ship_id = ? AND up.is_active = 1
-  `).all(agent.id) as Array<{ id: string; item_id: string; effect_type: string }>
+  // Trigger WebSocket update for the user
+  triggerShipUpdate(agent.ownerId)
 
-  const equippedItemIds = equippedItems.map(e => e.id)
-
+  // Get updated agent and return as ship (client expects { ship: ... })
+  const updatedAgent = getAgent(agent.id)
   res.json({
-    ship: {
-      ...agentToShip(agent),
-      equippedItems: equippedItemIds,
-    },
+    success: true,
+    ship: updatedAgent ? agentToShip(updatedAgent) : null,
     message: `Item ${item.item_name || item.effect_type || itemId} equipped to ship ${agent.name}`
   })
 }))

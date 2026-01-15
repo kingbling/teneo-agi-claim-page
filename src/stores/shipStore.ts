@@ -13,7 +13,7 @@ const WS_URL = import.meta.env.VITE_WS_URL ?? ''
 // ============================================================================
 
 // Ship Status (simplified from Agent)
-export type ShipStatus = 'idle' | 'exploring' | 'deploying' | 'returning'
+export type ShipStatus = 'idle' | 'searching' | 'exploring' | 'deploying' | 'returning'
 
 // Equipped Item on a Ship
 export interface EquippedItem {
@@ -60,7 +60,6 @@ export interface Ship {
 
   // Stats
   spacesDiscovered: number
-  totalLoot: number
   totalAgiEarned: number
   createdAt: number
 }
@@ -251,6 +250,10 @@ export type ServerMessage =
   | { type: 'synapse:completed'; data: SynapseDiscoveryEvent }
   | { type: 'loot:distributed'; data: LootEvent }
   | { type: 'ships:update'; data: Ship[] }
+  | { type: 'ships:sync'; data: { ships: Ship[]; timestamp: number } }  // Full ship state from server
+  | { type: 'auth:success'; data: { userId: string } }
+  | { type: 'auth:error'; data: { message: string } }
+  | { type: 'agents:update'; data: any[] }  // Legacy - server agent updates
   | { type: 'exploration:progress'; data: { synapseId: string; pointsAccumulated: number; eta: number } }
   | { type: 'lottery:winner'; data: { synapseId: string; winnerId: string; winnerShipId: string; reward: number } }
   | { type: 'error'; data: { message: string } }
@@ -278,6 +281,9 @@ export interface ShipStoreState {
   // Current Exploration (for selected ship)
   currentExplorationSynapse: Synapse | null
   currentExplorers: ExplorerInfo[]
+
+  // Exploration Target (synapse selected for a searching ship to explore)
+  explorationTarget: Synapse | null
 
   // Discovery Progress
   discoveryProgress: {
@@ -324,6 +330,9 @@ const initialState: ShipStoreState = {
   // Current Exploration
   currentExplorationSynapse: null,
   currentExplorers: [],
+
+  // Exploration Target (for searching ships)
+  explorationTarget: null,
 
   // Progress
   discoveryProgress: { total: 0, discovered: 0, beingExplored: 0 },
@@ -389,6 +398,31 @@ function createShipStore() {
         break
       }
 
+      case 'ships:sync': {
+        // Full ship state from server - replaces local state
+        const { ships } = message.data
+        if (!Array.isArray(ships)) break
+
+        setState({
+          userShips: ships,
+          isLoadingShips: false,
+        })
+
+        // Update ship count in userStore
+        userStore.setCurrentShipCount(ships.length)
+        break
+      }
+
+      case 'auth:success': {
+        console.log('WebSocket authenticated as user:', message.data.userId)
+        break
+      }
+
+      case 'auth:error': {
+        console.error('WebSocket auth failed:', message.data.message)
+        break
+      }
+
       case 'synapse:completed': {
         const event = message.data
         setState(produce((s) => {
@@ -427,6 +461,38 @@ function createShipStore() {
         break
       }
 
+      case 'agents:update': {
+        // Legacy handler - ships:sync is now preferred
+        // This can be used as fallback for position-only updates
+        const agents = message.data
+        if (!Array.isArray(agents)) break
+
+        // Only use this if we have ships but no ships:sync message came
+        // (backwards compatibility during transition)
+        if (safeUserShips(state).length === 0) break
+
+        setState(produce((s) => {
+          s.userShips = safeUserShips(s).map((ship) => {
+            const agent = agents.find(a => a.id === ship.id)
+            if (!agent) return ship
+
+            // Only update position/travel data, not state (ships:sync handles state)
+            return {
+              ...ship,
+              positionX: agent.positionX ?? ship.positionX,
+              positionY: agent.positionY ?? ship.positionY,
+              positionZ: agent.positionZ ?? ship.positionZ,
+              startPositionX: agent.startPositionX ?? ship.startPositionX,
+              startPositionY: agent.startPositionY ?? ship.startPositionY,
+              startPositionZ: agent.startPositionZ ?? ship.startPositionZ,
+              travelStartTime: agent.travelStartTime ?? ship.travelStartTime,
+              travelDuration: agent.travelDuration ?? ship.travelDuration,
+            }
+          })
+        }))
+        break
+      }
+
       case 'exploration:progress': {
         const { synapseId, pointsAccumulated, eta } = message.data
         if (state.currentExplorationSynapse?.id === synapseId) {
@@ -453,6 +519,11 @@ function createShipStore() {
 
   // ============ CONNECTION ============
 
+  // Exponential backoff for WebSocket reconnection
+  const INITIAL_RECONNECT_DELAY = 3000 // 3 seconds
+  const MAX_RECONNECT_DELAY = 30000 // 30 seconds
+  let reconnectDelay = INITIAL_RECONNECT_DELAY
+
   const connect = () => {
     if (state.ws) return
 
@@ -460,6 +531,17 @@ function createShipStore() {
 
     socket.onopen = () => {
       setState({ isConnected: true, ws: socket })
+      // Reset backoff on successful connection
+      reconnectDelay = INITIAL_RECONNECT_DELAY
+
+      // Send auth token if available
+      const token = localStorage.getItem('teneo_auth_token')
+      if (token) {
+        socket.send(JSON.stringify({
+          type: 'auth:identify',
+          data: { token },
+        }))
+      }
     }
 
     socket.onmessage = (event) => {
@@ -474,12 +556,15 @@ function createShipStore() {
     socket.onclose = () => {
       setState({ isConnected: false, ws: null })
 
-      // Auto-reconnect after 3 seconds
+      // Auto-reconnect with exponential backoff
       setTimeout(() => {
         if (!state.ws) {
           connect()
         }
-      }, 3000)
+      }, reconnectDelay)
+
+      // Increase delay for next attempt (exponential backoff)
+      reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY)
     }
 
     socket.onerror = (error) => {
@@ -551,6 +636,22 @@ function createShipStore() {
     }
   }
 
+  // Set exploration target (synapse selected for a searching ship)
+  const setExplorationTarget = async (synapseId: string | null) => {
+    if (synapseId) {
+      const synapse = await fetchSynapseDetails(synapseId)
+      setState({ explorationTarget: synapse })
+    } else {
+      setState({ explorationTarget: null })
+    }
+  }
+
+  // Set exploration target by position (for cluster clicks)
+  const setExplorationTargetByPosition = async (x: number, y: number, z: number) => {
+    const synapse = await fetchSynapseByPosition(x, y, z)
+    setState({ explorationTarget: synapse })
+  }
+
   // ============ EXPLORATION ACTIONS ============
 
   const startExploration = async (shipId: string, synapseId: string, pointsPerMin: number): Promise<boolean> => {
@@ -559,8 +660,9 @@ function createShipStore() {
       console.error('Ship not found:', shipId)
       return false
     }
-    if (ship.state !== 'idle') {
-      console.error('Ship must be idle to start exploration:', ship.state)
+    // Allow starting exploration from idle or searching state
+    if (ship.state !== 'idle' && ship.state !== 'searching') {
+      console.error('Ship must be idle or searching to start exploration:', ship.state)
       return false
     }
 
@@ -579,6 +681,7 @@ function createShipStore() {
         setState(produce((s) => {
           updateShipInList(s, updatedShip)
           s.currentExplorationSynapse = synapse
+          s.explorationTarget = null  // Clear target after starting exploration
         }))
         return true
       }
@@ -595,7 +698,8 @@ function createShipStore() {
   const leaveExploration = async (shipId: string): Promise<boolean> => {
     const ship = state.userShips.find(s => s.id === shipId)
     if (!ship || ship.state !== 'exploring' || !ship.currentSynapseId) {
-      console.error('Ship is not exploring:', shipId)
+      // This can happen due to race condition with WebSocket updates - not an error
+      console.debug('Ship is not exploring (state may have changed):', shipId, ship?.state)
       return false
     }
 
@@ -797,6 +901,43 @@ function createShipStore() {
     return deployShip(shipId, synapse.positionX, synapse.positionY, synapse.positionZ)
   }
 
+  // Travel to synapse - ship moves to synapse position and auto-starts exploring on arrival
+  const travelToSynapse = async (shipId: string, synapseId: string, pointsPerMin?: number): Promise<boolean> => {
+    const ship = state.userShips.find(s => s.id === shipId)
+    if (!ship) {
+      console.error('Ship not found:', shipId)
+      return false
+    }
+    if (ship.state !== 'idle' && ship.state !== 'searching') {
+      console.error('Ship must be idle or searching to travel:', ship.state)
+      return false
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/api/ships/${shipId}/travel-to-synapse`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ synapseId, pointsPerMin: pointsPerMin || ship.currentPointsPerMin || 100 }),
+      })
+
+      if (response.ok) {
+        const { ship: updatedShip } = await response.json()
+        setState(produce((s) => {
+          updateShipInList(s, updatedShip)
+          s.explorationTarget = null  // Clear target after travel starts
+        }))
+        return true
+      }
+
+      const error = await response.json()
+      console.error('Travel to synapse failed:', error.error || error)
+      return false
+    } catch (error) {
+      console.error('Failed to travel to synapse:', error)
+      return false
+    }
+  }
+
   const recallShip = async (shipId: string) => {
     try {
       const response = await fetch(`${API_URL}/api/ships/${shipId}/recall`, {
@@ -900,6 +1041,21 @@ function createShipStore() {
     }
   }
 
+  const fetchSynapseByPosition = async (x: number, y: number, z: number): Promise<Synapse | null> => {
+    try {
+      const response = await fetch(`${API_URL}/api/synapses/near?x=${x}&y=${y}&z=${z}`)
+      if (!response.ok) return null
+
+      const data = await response.json()
+      const synapse = data.synapse
+      setState({ currentExplorationSynapse: synapse })
+      return synapse
+    } catch (error) {
+      console.error('Failed to fetch synapse by position:', error)
+      return null
+    }
+  }
+
   const fetchSynapseExplorers = async (synapseId: string): Promise<ExplorerInfo[]> => {
     try {
       const response = await fetch(`${API_URL}/api/synapses/${synapseId}`)
@@ -972,6 +1128,9 @@ function createShipStore() {
     get currentExplorationSynapse() { return state.currentExplorationSynapse },
     get currentExplorers() { return state.currentExplorers },
 
+    // Exploration Target (for searching ships)
+    get explorationTarget() { return state.explorationTarget },
+
     // Discovery Progress
     get discoveryProgress() { return state.discoveryProgress },
 
@@ -1023,6 +1182,8 @@ function createShipStore() {
     selectShip,
 
     // Exploration Actions
+    setExplorationTarget,
+    setExplorationTargetByPosition,
     startExploration,
     leaveExploration,
     updateSpendingRate,
@@ -1038,6 +1199,7 @@ function createShipStore() {
     // Deploy/Recall
     deployShip,
     deployToSynapse,
+    travelToSynapse,
     recallShip,
 
     // API Actions
@@ -1056,33 +1218,6 @@ function createShipStore() {
     getSynapseClustersForLod,
     getShipClustersForLod,
     canCreateShip,
-
-    // Debug: Inject test ship for development
-    _debugInjectShip: (ship: Partial<Ship>) => {
-      const testShip: Ship = {
-        id: ship.id || `test-ship-${Date.now()}`,
-        ownerId: ship.ownerId || 'test-user',
-        name: ship.name || 'Test Ship',
-        state: ship.state || 'idle',
-        positionX: ship.positionX ?? 0,
-        positionY: ship.positionY ?? 0,
-        positionZ: ship.positionZ ?? 0,
-        currentSynapseId: ship.currentSynapseId || null,
-        travelStartTime: ship.travelStartTime || null,
-        travelDuration: ship.travelDuration || null,
-        autopilotEnabled: ship.autopilotEnabled || false,
-        equippedItems: ship.equippedItems || [],
-        currentPointsPerMin: ship.currentPointsPerMin || 0,
-        spacesDiscovered: ship.spacesDiscovered || 0,
-        totalLoot: ship.totalLoot || 0,
-        totalAgiEarned: ship.totalAgiEarned || 0,
-        createdAt: ship.createdAt || Date.now(),
-      }
-      setState(produce(s => {
-        s.userShips = [...safeUserShips(s), testShip]
-      }))
-      return testShip
-    },
   }
 }
 

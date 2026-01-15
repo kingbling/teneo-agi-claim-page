@@ -11,10 +11,7 @@ CREATE TABLE IF NOT EXISTS spaces (
   region TEXT NOT NULL,
   zone TEXT NOT NULL,
   synapse_count INTEGER NOT NULL,
-  base_probability REAL NOT NULL,
   state TEXT NOT NULL DEFAULT 'undiscovered',
-  solve_progress REAL NOT NULL DEFAULT 0,
-  loot_pool INTEGER NOT NULL,
   discovered_at INTEGER,
 
   -- Masterplan 2026: Synapse Type System
@@ -23,8 +20,7 @@ CREATE TABLE IF NOT EXISTS spaces (
   points_accumulated INTEGER NOT NULL DEFAULT 0,        -- Current accumulated points
   current_eta_minutes INTEGER,                          -- Calculated ETA with collaboration
   sector_id TEXT,                                       -- Season/sector this synapse belongs to
-  agi_reward INTEGER NOT NULL DEFAULT 10,               -- $AGI reward for completion
-  brain_xp_reward INTEGER NOT NULL DEFAULT 100          -- Brain XP for completion
+  agi_reward INTEGER NOT NULL DEFAULT 10                -- $AGI reward for completion
 );
 
 CREATE INDEX IF NOT EXISTS idx_spaces_region ON spaces(region);
@@ -51,11 +47,7 @@ CREATE TABLE IF NOT EXISTS agents (
   travel_start_time INTEGER,
   travel_duration INTEGER,
 
-  -- DEPRECATED: Fuel system (kept for migration compatibility)
-  points_balance REAL NOT NULL DEFAULT 0,
-  points_burn_rate REAL NOT NULL DEFAULT 1.0,
   traits TEXT NOT NULL DEFAULT '[]',
-  total_points_burned REAL NOT NULL DEFAULT 0,
 
   -- Masterplan 2026: Ship System
   autopilot_enabled INTEGER NOT NULL DEFAULT 0,         -- Auto-find next synapse when done
@@ -64,9 +56,7 @@ CREATE TABLE IF NOT EXISTS agents (
 
   -- Stats
   spaces_discovered INTEGER NOT NULL DEFAULT 0,
-  total_loot INTEGER NOT NULL DEFAULT 0,
   total_agi_earned INTEGER NOT NULL DEFAULT 0,          -- Total $AGI earned by this ship
-  total_brain_xp_earned INTEGER NOT NULL DEFAULT 0,     -- Total brain XP earned by this ship
   created_at INTEGER NOT NULL,
   FOREIGN KEY (target_space_id) REFERENCES spaces(id)
 );
@@ -74,16 +64,6 @@ CREATE TABLE IF NOT EXISTS agents (
 CREATE INDEX IF NOT EXISTS idx_agents_owner ON agents(owner_id);
 CREATE INDEX IF NOT EXISTS idx_agents_state ON agents(state);
 CREATE INDEX IF NOT EXISTS idx_agents_target ON agents(target_space_id);
-
--- DEPRECATED: Space solvers (kept for migration compatibility)
-CREATE TABLE IF NOT EXISTS space_solvers (
-  space_id TEXT NOT NULL,
-  agent_id TEXT NOT NULL,
-  started_at INTEGER NOT NULL,
-  PRIMARY KEY (space_id, agent_id),
-  FOREIGN KEY (space_id) REFERENCES spaces(id),
-  FOREIGN KEY (agent_id) REFERENCES agents(id)
-);
 
 -- ============================================================================
 -- SYNAPSE EXPLORERS - Tracks ships exploring synapses with points contribution
@@ -131,7 +111,6 @@ CREATE TABLE IF NOT EXISTS space_clusters (
   space_count INTEGER NOT NULL,
   discovered_count INTEGER NOT NULL DEFAULT 0,
   being_solved_count INTEGER NOT NULL DEFAULT 0,
-  avg_loot_pool REAL NOT NULL,
   updated_at INTEGER NOT NULL
 );
 
@@ -153,11 +132,6 @@ CREATE TABLE IF NOT EXISTS users (
   user_level INTEGER NOT NULL DEFAULT 1,                -- 1-5 based on cumulative USDC spent
   usdc_spent REAL NOT NULL DEFAULT 0,                   -- Cumulative USDC spent (for level calculation)
 
-  -- Masterplan 2026: Brain Levels (248 levels with XP)
-  brain_level INTEGER NOT NULL DEFAULT 1,               -- Current brain level (1-248)
-  brain_xp INTEGER NOT NULL DEFAULT 0,                  -- Current brain XP towards next level
-  total_brain_xp INTEGER NOT NULL DEFAULT 0,            -- Total lifetime brain XP
-
   -- Masterplan 2026: Token Balances
   agentic_balance INTEGER NOT NULL DEFAULT 0,           -- $AGENTIC for shop purchases
   total_agi_earned INTEGER NOT NULL DEFAULT 0,          -- Total $AGI earned
@@ -168,12 +142,11 @@ CREATE TABLE IF NOT EXISTS users (
   nft_count INTEGER NOT NULL DEFAULT 0,                 -- Number of NFTs owned
 
   -- Masterplan 2026: Ship Management
-  max_ships INTEGER NOT NULL DEFAULT 1                  -- Maximum ships allowed (from user level + brain level)
+  max_ships INTEGER NOT NULL DEFAULT 1                  -- Maximum ships allowed (from user level)
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_wallet ON users(wallet);
 CREATE INDEX IF NOT EXISTS idx_users_level ON users(user_level);
-CREATE INDEX IF NOT EXISTS idx_users_brain_level ON users(brain_level);
 
 -- Discovery events (history)
 CREATE TABLE IF NOT EXISTS discovery_events (
@@ -286,7 +259,7 @@ CREATE INDEX IF NOT EXISTS idx_lottery_draws_date ON lottery_draws(drawn_at);
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS leaderboard_snapshots (
   id TEXT PRIMARY KEY,
-  leaderboard_type TEXT NOT NULL,                       -- weekly_agi|total_discoveries|brain_level|sector
+  leaderboard_type TEXT NOT NULL,                       -- weekly_agi|total_discoveries|sector
   user_id TEXT NOT NULL,
   score INTEGER NOT NULL,
   rank INTEGER NOT NULL,
