@@ -1,6 +1,6 @@
-import { createSignal, createEffect, onCleanup, Show, type JSX, type Component } from 'solid-js'
+import { createSignal, onCleanup, Show, type JSX } from 'solid-js'
 import { Portal } from 'solid-js/web'
-import { HelpCircle, Zap, Sparkles, Fuel, Target, TrendingUp } from 'lucide-solid'
+import { Zap, Sparkles, Fuel, Target, TrendingUp } from 'lucide-solid'
 
 interface TooltipProps {
   content: JSX.Element
@@ -148,103 +148,6 @@ export function Tooltip(props: TooltipProps) {
         </Portal>
       </Show>
     </>
-  )
-}
-
-// Info tooltip trigger (small ? icon)
-interface InfoTooltipProps {
-  content: JSX.Element
-  position?: 'top' | 'bottom' | 'left' | 'right'
-  size?: 'sm' | 'default'
-}
-
-export function InfoTooltip(props: InfoTooltipProps) {
-  const position = () => props.position ?? 'top'
-  const size = () => props.size ?? 'default'
-  const iconSize = () => (size() === 'sm' ? 'h-[var(--size-3)] w-[var(--size-3)]' : 'h-[var(--size-4)] w-[var(--size-4)]')
-
-  return (
-    <Tooltip content={props.content} position={position()}>
-      <button
-        type="button"
-        class="inline-flex items-center justify-center p-[var(--padding-1)] rounded-full hover:bg-[var(--background-primary)] transition-colors"
-      >
-        <HelpCircle class={`${iconSize()} text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors`} />
-      </button>
-    </Tooltip>
-  )
-}
-
-// Stat card with built-in tooltip
-interface StatCardTooltipProps {
-  icon: JSX.Element
-  label: string
-  value: string | number
-  suffix?: string
-  tooltipContent?: JSX.Element
-  color?: string
-  colorClass?: string
-  class?: string
-  trend?: 'up' | 'down' | 'neutral'
-  trendValue?: string
-}
-
-export function StatCardWithTooltip(props: StatCardTooltipProps) {
-  const color = () => props.color ?? 'var(--brand-teal-1)'
-  const colorClass = () => props.colorClass ?? 'text-[var(--brand-teal-1)]'
-
-  return (
-    <div
-      class={`group relative px-[var(--padding-5)] py-[var(--padding-4)] rounded-xl bg-[var(--background-primary)]/60 border border-transparent hover:border-[${color()}]/20 transition-all duration-200 cursor-default hover:scale-[1.02] hover:-translate-y-0.5 ${props.class ?? ''}`}
-    >
-      {/* Hover glow */}
-      <div
-        class="absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity"
-        style={{ background: `linear-gradient(135deg, ${color()}10, transparent)` }}
-      />
-
-      <div class="relative flex items-start justify-between gap-[var(--gap-3)]">
-        <div class="flex items-center gap-[var(--gap-3)]">
-          <div
-            class="w-[var(--size-9)] h-[var(--size-9)] rounded-lg flex items-center justify-center"
-            style={{ background: `${color()}20` }}
-          >
-            {props.icon}
-          </div>
-          <div>
-            <div class="flex items-center gap-[var(--gap-1)] mb-[var(--margin-1)]">
-              <span class="text-xs text-[var(--text-muted)] uppercase tracking-wider font-medium">{props.label}</span>
-              <Show when={props.tooltipContent}>
-                <InfoTooltip content={props.tooltipContent!} size="sm" />
-              </Show>
-            </div>
-            <div class="flex items-baseline gap-[var(--gap-1)]">
-              <span class={`text-xl font-bold tabular-nums ${colorClass()}`}>
-                {typeof props.value === 'number' ? props.value.toLocaleString() : props.value}
-              </span>
-              <Show when={props.suffix}>
-                <span class="text-xs text-[var(--text-muted)]">{props.suffix}</span>
-              </Show>
-            </div>
-          </div>
-        </div>
-
-        <Show when={props.trend && props.trendValue}>
-          <div
-            class={`flex items-center gap-[var(--gap-1)] px-[var(--padding-2)] py-[var(--padding-1)] rounded-md text-xs font-medium ${
-              props.trend === 'up'
-                ? 'bg-[hsl(var(--success))]/10 text-[hsl(var(--success))]'
-                : props.trend === 'down'
-                ? 'bg-[hsl(var(--destructive))]/10 text-[hsl(var(--destructive))]'
-                : 'bg-[var(--background-secondary)] text-[var(--text-muted)]'
-            }`}
-          >
-            {props.trend === 'up' ? '↑' : props.trend === 'down' ? '↓' : '→'}
-            {props.trendValue}
-          </div>
-        </Show>
-      </div>
-    </div>
   )
 }
 

@@ -1,4 +1,4 @@
-import { Show, onMount } from 'solid-js'
+import { Show, onMount, lazy, Suspense } from 'solid-js'
 import { Router, Route } from '@solidjs/router'
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query'
 import { Landing } from './pages/Landing'
@@ -6,6 +6,20 @@ import { DiscoveryDashboard } from './pages/DiscoveryDashboard'
 import { configStore } from './stores/configStore'
 import { authStore } from './stores/authStore'
 import { userStore } from './stores/userStore'
+
+// Admin pages (lazy loaded)
+const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'))
+const UsersPage = lazy(() => import('./pages/admin/UsersPage'))
+const UserDetailPage = lazy(() => import('./pages/admin/UserDetailPage'))
+const AnalyticsPage = lazy(() => import('./pages/admin/AnalyticsPage'))
+const DataPage = lazy(() => import('./pages/admin/DataPage'))
+const InterventionsPage = lazy(() => import('./pages/admin/InterventionsPage'))
+const EventsPage = lazy(() => import('./pages/admin/EventsPage'))
+const LogsPage = lazy(() => import('./pages/admin/LogsPage'))
+
+// Admin components
+import { AdminGuard } from './components/admin/AdminGuard'
+import { AdminLayout } from './components/admin/AdminLayout'
 
 // Create a client
 const queryClient = new QueryClient({
@@ -73,6 +87,80 @@ function App() {
         <Router>
           <Route path="/" component={Landing} />
           <Route path="/discovery" component={DiscoveryDashboard} />
+
+          {/* Admin routes - wrapped with guard and layout */}
+          <Route path="/admin" component={() => (
+            <AdminGuard>
+              <AdminLayout>
+                <Suspense fallback={<div class="p-8">Loading...</div>}>
+                  <AdminDashboard />
+                </Suspense>
+              </AdminLayout>
+            </AdminGuard>
+          )} />
+          <Route path="/admin/users" component={() => (
+            <AdminGuard>
+              <AdminLayout>
+                <Suspense fallback={<div class="p-8">Loading...</div>}>
+                  <UsersPage />
+                </Suspense>
+              </AdminLayout>
+            </AdminGuard>
+          )} />
+          <Route path="/admin/users/:id" component={() => (
+            <AdminGuard>
+              <AdminLayout>
+                <Suspense fallback={<div class="p-8">Loading...</div>}>
+                  <UserDetailPage />
+                </Suspense>
+              </AdminLayout>
+            </AdminGuard>
+          )} />
+          <Route path="/admin/analytics" component={() => (
+            <AdminGuard>
+              <AdminLayout>
+                <Suspense fallback={<div class="p-8">Loading...</div>}>
+                  <AnalyticsPage />
+                </Suspense>
+              </AdminLayout>
+            </AdminGuard>
+          )} />
+          <Route path="/admin/data" component={() => (
+            <AdminGuard>
+              <AdminLayout>
+                <Suspense fallback={<div class="p-8">Loading...</div>}>
+                  <DataPage />
+                </Suspense>
+              </AdminLayout>
+            </AdminGuard>
+          )} />
+          <Route path="/admin/interventions" component={() => (
+            <AdminGuard>
+              <AdminLayout>
+                <Suspense fallback={<div class="p-8">Loading...</div>}>
+                  <InterventionsPage />
+                </Suspense>
+              </AdminLayout>
+            </AdminGuard>
+          )} />
+          <Route path="/admin/events" component={() => (
+            <AdminGuard>
+              <AdminLayout>
+                <Suspense fallback={<div class="p-8">Loading...</div>}>
+                  <EventsPage />
+                </Suspense>
+              </AdminLayout>
+            </AdminGuard>
+          )} />
+          <Route path="/admin/logs" component={() => (
+            <AdminGuard>
+              <AdminLayout>
+                <Suspense fallback={<div class="p-8">Loading...</div>}>
+                  <LogsPage />
+                </Suspense>
+              </AdminLayout>
+            </AdminGuard>
+          )} />
         </Router>
       </Show>
     </QueryClientProvider>

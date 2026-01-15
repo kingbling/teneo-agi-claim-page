@@ -18,6 +18,7 @@ export { default as shopRouter } from './shop.js'
 export { default as sectorsRouter } from './sectors.js'
 export { default as leaderboardsRouter } from './leaderboards.js'
 export { default as eventsRouter } from './events.js'
+export { default as adminRouter } from './admin/index.js'
 
 /**
  * Route mounting helper
@@ -35,6 +36,7 @@ import shopRouter from './shop.js'
 import sectorsRouter from './sectors.js'
 import leaderboardsRouter from './leaderboards.js'
 import eventsRouter from './events.js'
+import adminRouter from './admin/index.js'
 
 export function mountMasterplanRoutes(app: Express): void {
   // Auth routes (unauthenticated)
@@ -72,4 +74,7 @@ export function mountMasterplanRoutes(app: Express): void {
 
   // Event routes
   app.use('/api/events', eventsRouter)
+
+  // Admin routes (requires admin auth)
+  app.use('/api/admin', adminRouter)
 }

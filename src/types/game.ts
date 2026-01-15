@@ -227,15 +227,17 @@ export const USER_LEVEL_COLORS: Record<UserLevel, string> = {
 // HELPER FUNCTIONS
 // ============================================================================
 
-export function getSynapseTypeLabel(type: SynapseType): string {
-  return type.charAt(0).toUpperCase() + type.slice(1)
+export function getSynapseTypeLabel(type: SynapseType | undefined): string {
+  const t = type || 'minor'
+  return t.charAt(0).toUpperCase() + t.slice(1)
 }
 
 export function getUserLevelLabel(level: UserLevel): string {
   return `L${level} ${USER_LEVEL_CONFIG[level].label}`
 }
 
-export function formatPoints(points: number): string {
+export function formatPoints(points: number | undefined | null): string {
+  if (points == null) return '0'
   if (points >= 1_000_000_000) return `${(points / 1_000_000_000).toFixed(1)}B`
   if (points >= 1_000_000) return `${(points / 1_000_000).toFixed(1)}M`
   if (points >= 1_000) return `${(points / 1_000).toFixed(1)}K`

@@ -16,9 +16,11 @@ import {
   normalizeWalletAddress,
 } from '../utils/walletAuth.js'
 import { asyncHandler, sendError } from '../middleware/errorHandler.js'
-import { COSTS } from '../config/gameConfig.js'
 
 const router = Router()
+
+// Starting points for new users
+const STARTING_USER_POINTS = 1000
 
 // Nonce expiry time (5 minutes)
 const NONCE_EXPIRY_MS = 5 * 60 * 1000
@@ -61,7 +63,7 @@ router.get('/nonce', asyncHandler(async (req: Request, res: Response) => {
     db.prepare(`
       INSERT INTO users (id, wallet, tier, staked_amount, points, total_loot_earned, created_at, auth_nonce, auth_nonce_issued_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(userId, normalizedWallet, 'free', 0, COSTS.STARTING_USER_POINTS, 0, Date.now(), nonce, issuedAt)
+    `).run(userId, normalizedWallet, 'free', 0, STARTING_USER_POINTS, 0, Date.now(), nonce, issuedAt)
   }
 
   res.json({

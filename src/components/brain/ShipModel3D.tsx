@@ -1,8 +1,8 @@
 /**
- * ShipModel3D - Sci-Fi Fighter Ship for close-up inspection
+ * ShipModel3D - Sci-Fi Interceptor Fighter
  *
- * Renders a detailed 3D spaceship mesh when the camera is zoomed in close.
- * Design: Sleek fighter with pointed nose, swept-back wings, and glowing engine.
+ * A sleek, aggressive fighter design inspired by modern stealth aircraft.
+ * Features: needle nose, diamond fuselage, swept wings, twin engines, canted stabilizers.
  */
 
 import { onMount, onCleanup, createEffect, type Component } from 'solid-js'
@@ -16,192 +16,487 @@ interface ShipModel3DProps {
   isVisible: boolean
 }
 
-// State-based colors - bright and contrasting against brain particles
+// State-based accent colors
 const STATE_COLORS: Record<ShipStatus, number> = {
-  idle: 0xffcc44,      // Gold/yellow - contrasts with cyan/blue particles
-  exploring: 0x00ffff, // Bright cyan
-  deploying: 0xff6633, // Orange-red
-  returning: 0x66ff66, // Green
+  idle: 0xffcc44,
+  searching: 0x44aaff,
+  exploring: 0x00ffff,
+  deploying: 0xff6633,
+  returning: 0x66ff66,
 }
 
-// Engine glow colors (extra bright)
+// Engine glow colors
 const ENGINE_COLORS: Record<ShipStatus, number> = {
-  idle: 0xffaa22,      // Warm gold glow
+  idle: 0xffaa22,
+  searching: 0x2288ff,
   exploring: 0x00ffff,
   deploying: 0xff4400,
   returning: 0x44ff44,
 }
 
-// Ship scale - visible at close zoom
 const SHIP_SCALE = 0.1
+const ENGINE_TRAIL_PARTICLES = 40 // More particles for twin engines
 
-// Engine trail particle count - keep subtle
-const ENGINE_TRAIL_PARTICLES = 20
+// Helper to safely get colors for any state
+function getStateColor(state: ShipStatus | undefined): number {
+  if (state && state in STATE_COLORS) {
+    return STATE_COLORS[state]
+  }
+  return STATE_COLORS.idle
+}
+
+function getEngineColor(state: ShipStatus | undefined): number {
+  if (state && state in ENGINE_COLORS) {
+    return ENGINE_COLORS[state]
+  }
+  return ENGINE_COLORS.idle
+}
 
 /**
- * Creates sci-fi fighter ship geometry - all parts connected
+ * Creates the main hull - a sleek diamond-cross-section fuselage
+ * Tapers from needle nose to wider cockpit area to engine section
+ */
+function createHullGeometry(S: number): THREE.BufferGeometry {
+  // Hull profile points (Z axis is length, 0 = center)
+  // Cross section is diamond shape (4 vertices per station)
+
+  const stations = [
+    // Z position, width (X), height (Y) - half dimensions
+    { z: -S * 0.85, w: 0, h: 0 },           // Nose tip
+    { z: -S * 0.65, w: S * 0.025, h: S * 0.02 },  // Nose taper
+    { z: -S * 0.4, w: S * 0.06, h: S * 0.04 },   // Forward fuselage
+    { z: -S * 0.15, w: S * 0.09, h: S * 0.055 }, // Cockpit area (widest)
+    { z: S * 0.1, w: S * 0.085, h: S * 0.05 },   // Mid fuselage
+    { z: S * 0.35, w: S * 0.07, h: S * 0.04 },   // Rear taper
+    { z: S * 0.5, w: S * 0.04, h: S * 0.03 },    // Engine mount
+  ]
+
+  const vertices: number[] = []
+  const indices: number[] = []
+
+  // Generate diamond cross-section at each station
+  // 4 points per station: top, right, bottom, left
+  for (let i = 0; i < stations.length; i++) {
+    const s = stations[i]
+    if (s.w === 0) {
+      // Nose tip - single point repeated 4x for indexing
+      vertices.push(0, 0, s.z)
+      vertices.push(0, 0, s.z)
+      vertices.push(0, 0, s.z)
+      vertices.push(0, 0, s.z)
+    } else {
+      vertices.push(0, s.h, s.z)      // Top
+      vertices.push(s.w, 0, s.z)      // Right
+      vertices.push(0, -s.h, s.z)     // Bottom
+      vertices.push(-s.w, 0, s.z)     // Left
+    }
+  }
+
+  // Connect stations with triangles
+  for (let i = 0; i < stations.length - 1; i++) {
+    const base = i * 4
+    const next = (i + 1) * 4
+
+    // 4 quad faces between stations (each split into 2 triangles)
+    for (let j = 0; j < 4; j++) {
+      const j2 = (j + 1) % 4
+      // Triangle 1
+      indices.push(base + j, next + j, next + j2)
+      // Triangle 2
+      indices.push(base + j, next + j2, base + j2)
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
+  geometry.setIndex(indices)
+  geometry.computeVertexNormals()
+
+  return geometry
+}
+
+/**
+ * Creates aggressive swept delta wing with thickness
+ */
+function createWingGeometry(S: number, isLeft: boolean): THREE.BufferGeometry {
+  const xSign = isLeft ? 1 : -1
+
+  // Wing profile - aggressive swept delta
+  const rootLead = -S * 0.05   // Leading edge at root
+  const rootTrail = S * 0.35   // Trailing edge at root
+  const tipLead = S * 0.25     // Leading edge at tip (swept back)
+  const tipTrail = S * 0.4     // Trailing edge at tip
+  const span = S * 0.5         // Wing span
+  const rootThick = S * 0.018  // Thickness at root
+  const tipThick = S * 0.006   // Thickness at tip (tapered)
+
+  // Vertices: root section (4 points) + tip section (4 points)
+  const vertices = new Float32Array([
+    // Root - leading edge top/bottom
+    xSign * S * 0.08, rootThick / 2, rootLead,
+    xSign * S * 0.08, -rootThick / 2, rootLead,
+    // Root - trailing edge top/bottom
+    xSign * S * 0.08, rootThick / 2, rootTrail,
+    xSign * S * 0.08, -rootThick / 2, rootTrail,
+
+    // Tip - leading edge top/bottom
+    xSign * span, tipThick / 2, tipLead,
+    xSign * span, -tipThick / 2, tipLead,
+    // Tip - trailing edge top/bottom
+    xSign * span, tipThick / 2, tipTrail,
+    xSign * span, -tipThick / 2, tipTrail,
+  ])
+
+  // Indices for wing surfaces
+  const idx = isLeft ? new Uint16Array([
+    // Top surface
+    0, 4, 2,  2, 4, 6,
+    // Bottom surface
+    1, 3, 5,  3, 7, 5,
+    // Leading edge
+    0, 1, 4,  1, 5, 4,
+    // Trailing edge
+    2, 6, 3,  3, 6, 7,
+    // Tip cap
+    4, 5, 6,  5, 7, 6,
+    // Root cap
+    0, 2, 1,  1, 2, 3,
+  ]) : new Uint16Array([
+    // Top surface (reversed winding)
+    0, 2, 4,  2, 6, 4,
+    // Bottom surface
+    1, 5, 3,  3, 5, 7,
+    // Leading edge
+    0, 4, 1,  1, 4, 5,
+    // Trailing edge
+    2, 3, 6,  3, 7, 6,
+    // Tip cap
+    4, 6, 5,  5, 6, 7,
+    // Root cap
+    0, 1, 2,  1, 3, 2,
+  ])
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3))
+  geometry.setIndex(new THREE.BufferAttribute(idx, 1))
+  geometry.computeVertexNormals()
+
+  return geometry
+}
+
+/**
+ * Creates canted vertical stabilizer (like F-22 style)
+ */
+function createStabilizerGeometry(S: number, isLeft: boolean): THREE.BufferGeometry {
+  const xSign = isLeft ? 1 : -1
+  const cant = 0.25 // Outward cant angle
+
+  const baseX = xSign * S * 0.06
+  const height = S * 0.12
+  const thickness = S * 0.008
+
+  // Canted fin - leans outward
+  const topX = baseX + xSign * height * Math.sin(cant)
+  const topY = height * Math.cos(cant)
+
+  const vertices = new Float32Array([
+    // Base quad (on fuselage)
+    baseX - thickness, S * 0.03, S * 0.2,    // 0: base front left
+    baseX + thickness, S * 0.03, S * 0.2,    // 1: base front right
+    baseX - thickness, S * 0.03, S * 0.45,   // 2: base rear left
+    baseX + thickness, S * 0.03, S * 0.45,   // 3: base rear right
+
+    // Top edge (swept back, canted outward)
+    topX, S * 0.03 + topY, S * 0.32,         // 4: top front
+    topX, S * 0.03 + topY, S * 0.48,         // 5: top rear
+  ])
+
+  const idx = new Uint16Array([
+    // Outer face
+    0, 4, 2,  2, 4, 5,
+    // Inner face
+    1, 3, 4,  3, 5, 4,
+    // Front edge
+    0, 1, 4,
+    // Rear edge
+    2, 5, 3,
+    // Top edge
+    4, 5, 4, // degenerate, skip
+    // Base
+    0, 2, 1,  1, 2, 3,
+  ])
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3))
+  geometry.setIndex(new THREE.BufferAttribute(idx, 1))
+  geometry.computeVertexNormals()
+
+  return geometry
+}
+
+/**
+ * Creates sleek teardrop cockpit canopy
+ */
+function createCockpitGeometry(S: number): THREE.BufferGeometry {
+  // Elongated bubble canopy
+  const length = S * 0.22
+  const width = S * 0.055
+  const height = S * 0.045
+
+  const segments = 8
+  const vertices: number[] = []
+  const indices: number[] = []
+
+  // Front point
+  vertices.push(0, S * 0.055, -S * 0.35)
+
+  // Generate elongated dome sections
+  for (let i = 1; i <= segments; i++) {
+    const t = i / segments
+    const z = -S * 0.35 + t * length
+    const profileScale = Math.sin(t * Math.PI) // Bulge in middle
+    const w = width * profileScale
+    const h = height * profileScale
+
+    // 4 points per section (simplified)
+    vertices.push(0, S * 0.055 + h, z)           // Top
+    vertices.push(w, S * 0.055 + h * 0.5, z)     // Right
+    vertices.push(0, S * 0.055, z)               // Bottom (on hull)
+    vertices.push(-w, S * 0.055 + h * 0.5, z)    // Left
+  }
+
+  // Connect front point to first section
+  for (let j = 0; j < 4; j++) {
+    const j2 = (j + 1) % 4
+    indices.push(0, 1 + j, 1 + j2)
+  }
+
+  // Connect sections
+  for (let i = 0; i < segments - 1; i++) {
+    const base = 1 + i * 4
+    const next = base + 4
+    for (let j = 0; j < 4; j++) {
+      const j2 = (j + 1) % 4
+      indices.push(base + j, next + j, next + j2)
+      indices.push(base + j, next + j2, base + j2)
+    }
+  }
+
+  // Close rear
+  const lastBase = 1 + (segments - 1) * 4
+  for (let j = 0; j < 4; j++) {
+    const j2 = (j + 1) % 4
+    indices.push(lastBase + j, lastBase + j2, lastBase) // Converge to center-ish
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
+  geometry.setIndex(indices)
+  geometry.computeVertexNormals()
+
+  return geometry
+}
+
+/**
+ * Creates complete ship geometry group
  */
 function createShipGeometry(): THREE.Group {
   const shipGroup = new THREE.Group()
   const S = SHIP_SCALE
 
-  // === MAIN FUSELAGE ===
-  // Central body - all other parts attach to this
-  const fuselageGeom = new THREE.BoxGeometry(S * 0.2, S * 0.1, S * 0.6)
-  const fuselage = new THREE.Mesh(fuselageGeom)
-  fuselage.name = 'hull'
-  shipGroup.add(fuselage)
-
-  // === NOSE CONE ===
-  // Connects directly to front of fuselage (z = 0.3S)
-  const noseGeom = new THREE.ConeGeometry(S * 0.1, S * 0.4, 6)
-  const nose = new THREE.Mesh(noseGeom)
-  nose.rotation.x = -Math.PI / 2  // Point forward (+Z)
-  nose.position.z = S * 0.5       // Tip at 0.7S, base at 0.3S (connects to fuselage)
-  nose.name = 'hull'
-  shipGroup.add(nose)
+  // === MAIN HULL ===
+  const hullGeom = createHullGeometry(S)
+  const hull = new THREE.Mesh(hullGeom)
+  hull.name = 'hull'
+  shipGroup.add(hull)
 
   // === WINGS ===
-  // Simple flat box wings attached to fuselage sides
-  const wingGeom = new THREE.BoxGeometry(S * 0.5, S * 0.02, S * 0.25)
-
-  // Left wing - flush with fuselage
-  const leftWing = new THREE.Mesh(wingGeom)
-  leftWing.position.set(S * 0.35, 0, -S * 0.05)  // Offset back slightly
-  leftWing.rotation.z = -0.1  // Slight anhedral
+  const leftWingGeom = createWingGeometry(S, true)
+  const leftWing = new THREE.Mesh(leftWingGeom)
   leftWing.name = 'wing'
   shipGroup.add(leftWing)
 
-  // Right wing
-  const rightWing = new THREE.Mesh(wingGeom)
-  rightWing.position.set(-S * 0.35, 0, -S * 0.05)
-  rightWing.rotation.z = 0.1
+  const rightWingGeom = createWingGeometry(S, false)
+  const rightWing = new THREE.Mesh(rightWingGeom)
   rightWing.name = 'wing'
   shipGroup.add(rightWing)
 
-  // === VERTICAL STABILIZER ===
-  // Single center fin on top at rear
-  const finGeom = new THREE.BoxGeometry(S * 0.02, S * 0.15, S * 0.2)
-  const fin = new THREE.Mesh(finGeom)
-  fin.position.set(0, S * 0.12, -S * 0.2)  // On top, at rear
-  fin.name = 'wing'
-  shipGroup.add(fin)
+  // === CANTED STABILIZERS ===
+  const leftStab = new THREE.Mesh(createStabilizerGeometry(S, true))
+  leftStab.name = 'wing'
+  shipGroup.add(leftStab)
 
-  // === ENGINE SECTION ===
-  // Tapered rear section connecting to fuselage back (z = -0.3S)
-  const engineGeom = new THREE.CylinderGeometry(S * 0.06, S * 0.1, S * 0.2, 8)
-  const engine = new THREE.Mesh(engineGeom)
-  engine.rotation.x = Math.PI / 2
-  engine.position.z = -S * 0.4  // Connects to fuselage back
-  engine.name = 'engine'
-  shipGroup.add(engine)
+  const rightStab = new THREE.Mesh(createStabilizerGeometry(S, false))
+  rightStab.name = 'wing'
+  shipGroup.add(rightStab)
 
-  // === ENGINE GLOW ===
-  const glowGeom = new THREE.SphereGeometry(S * 0.06, 16, 16)  // Smaller glow
-  const glow = new THREE.Mesh(glowGeom)
-  glow.position.z = -S * 0.5
-  glow.name = 'engineGlow'
-  shipGroup.add(glow)
-
-  // Bright core
-  const coreGlowGeom = new THREE.SphereGeometry(S * 0.03, 12, 12)  // Smaller core
-  const coreGlow = new THREE.Mesh(coreGlowGeom)
-  coreGlow.position.z = -S * 0.5
-  coreGlow.name = 'engineCore'
-  shipGroup.add(coreGlow)
-
-  // === COCKPIT ===
-  // Small bubble on top of fuselage, near front
-  const cockpitGeom = new THREE.SphereGeometry(S * 0.06, 12, 12, 0, Math.PI * 2, 0, Math.PI / 2)
+  // === COCKPIT CANOPY ===
+  const cockpitGeom = createCockpitGeometry(S)
   const cockpit = new THREE.Mesh(cockpitGeom)
-  cockpit.position.set(0, S * 0.05, S * 0.15)  // On top, forward
   cockpit.name = 'cockpit'
   shipGroup.add(cockpit)
 
-  // === POINT LIGHT ===
-  const shipLight = new THREE.PointLight(0xffffff, 2, S * 4)
-  shipLight.position.set(0, S * 0.2, 0)
+  // === TWIN ENGINES ===
+  const engineRadius = S * 0.028
+  const engineLength = S * 0.18
+  const engineSpacing = S * 0.055
+
+  const engineGeom = new THREE.CylinderGeometry(
+    engineRadius * 0.7,  // Front (smaller)
+    engineRadius,        // Rear
+    engineLength,
+    8
+  )
+
+  // Left engine
+  const leftEngine = new THREE.Mesh(engineGeom)
+  leftEngine.rotation.x = Math.PI / 2
+  leftEngine.position.set(engineSpacing, -S * 0.01, S * 0.42)
+  leftEngine.name = 'engine'
+  shipGroup.add(leftEngine)
+
+  // Right engine
+  const rightEngine = new THREE.Mesh(engineGeom.clone())
+  rightEngine.rotation.x = Math.PI / 2
+  rightEngine.position.set(-engineSpacing, -S * 0.01, S * 0.42)
+  rightEngine.name = 'engine'
+  shipGroup.add(rightEngine)
+
+  // === ENGINE GLOWS ===
+  const glowGeom = new THREE.CircleGeometry(engineRadius * 1.2, 16)
+
+  const leftGlow = new THREE.Mesh(glowGeom)
+  leftGlow.rotation.x = Math.PI / 2
+  leftGlow.position.set(engineSpacing, -S * 0.01, S * 0.52)
+  leftGlow.name = 'engineGlow'
+  shipGroup.add(leftGlow)
+
+  const rightGlow = new THREE.Mesh(glowGeom.clone())
+  rightGlow.rotation.x = Math.PI / 2
+  rightGlow.position.set(-engineSpacing, -S * 0.01, S * 0.52)
+  rightGlow.name = 'engineGlow'
+  shipGroup.add(rightGlow)
+
+  // Engine cores (bright center)
+  const coreGeom = new THREE.CircleGeometry(engineRadius * 0.5, 12)
+
+  const leftCore = new THREE.Mesh(coreGeom)
+  leftCore.rotation.x = Math.PI / 2
+  leftCore.position.set(engineSpacing, -S * 0.01, S * 0.521)
+  leftCore.name = 'engineCore'
+  shipGroup.add(leftCore)
+
+  const rightCore = new THREE.Mesh(coreGeom.clone())
+  rightCore.rotation.x = Math.PI / 2
+  rightCore.position.set(-engineSpacing, -S * 0.01, S * 0.521)
+  rightCore.name = 'engineCore'
+  shipGroup.add(rightCore)
+
+  // === ACCENT LIGHTS === (small glowing strips)
+  const accentGeom = new THREE.BoxGeometry(S * 0.005, S * 0.003, S * 0.08)
+
+  // Wing accent lights
+  const leftAccent = new THREE.Mesh(accentGeom)
+  leftAccent.position.set(S * 0.25, S * 0.01, S * 0.2)
+  leftAccent.name = 'accent'
+  shipGroup.add(leftAccent)
+
+  const rightAccent = new THREE.Mesh(accentGeom.clone())
+  rightAccent.position.set(-S * 0.25, S * 0.01, S * 0.2)
+  rightAccent.name = 'accent'
+  shipGroup.add(rightAccent)
+
+  // === POINT LIGHT === (subtle fill light)
+  const shipLight = new THREE.PointLight(0xffffff, 0.5, S * 2)
+  shipLight.position.set(0, S * 0.1, -S * 0.2)
   shipGroup.add(shipLight)
 
   return shipGroup
 }
 
 /**
- * Creates bright, highly visible materials for the ship
+ * Creates materials - red metallic hull with accent lighting
  */
-function createShipMaterials(state: ShipStatus) {
-  const baseColor = STATE_COLORS[state]
-  const engineColor = ENGINE_COLORS[state]
+function createShipMaterials(state: ShipStatus | undefined) {
+  // Defensive: ensure we have valid colors even if state is undefined or unknown
+  const safeState = state && state in STATE_COLORS ? state : 'idle'
+  const accentColor = STATE_COLORS[safeState]
+  const engineColor = ENGINE_COLORS[safeState]
 
   return {
-    // Hull - BRIGHT and self-illuminating
+    // Hull - bright cherry red (BasicMaterial for guaranteed visibility)
     hull: new THREE.MeshBasicMaterial({
-      color: baseColor,
-    }),
-    // Wings - slightly darker but still visible
-    wing: new THREE.MeshStandardMaterial({
-      color: 0x556677,
-      emissive: baseColor,
-      emissiveIntensity: 0.7,
-      metalness: 0.5,
-      roughness: 0.3,
+      color: 0xdd4444,
       side: THREE.DoubleSide,
     }),
-    // Engine housing
-    engine: new THREE.MeshStandardMaterial({
-      color: 0x334455,
-      emissive: baseColor,
-      emissiveIntensity: 0.3,
-      metalness: 0.8,
-      roughness: 0.2,
+    // Wings - slightly darker red
+    wing: new THREE.MeshBasicMaterial({
+      color: 0xbb3333,
+      side: THREE.DoubleSide,
     }),
-    // Engine glow - subtle
+    // Engine housing - dark grey
+    engine: new THREE.MeshBasicMaterial({
+      color: 0x444455,
+    }),
+    // Engine glow - subtle thruster glow
     engineGlow: new THREE.MeshBasicMaterial({
       color: engineColor,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.4,
+      side: THREE.DoubleSide,
     }),
-    // Engine core - bright but smaller
+    // Engine core - small bright center
     engineCore: new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: 0.8,
+      opacity: 0.6,
     }),
-    // Cockpit - glowing canopy
-    cockpit: new THREE.MeshBasicMaterial({
-      color: 0x88ddff,
+    // Cockpit - bright tinted glass canopy
+    cockpit: new THREE.MeshStandardMaterial({
+      color: 0x66aacc,
+      emissive: 0x224455,
+      emissiveIntensity: 0.15,
+      metalness: 0.1,
+      roughness: 0.05,
       transparent: true,
-      opacity: 0.7,
+      opacity: 0.8,
+      side: THREE.DoubleSide,
+    }),
+    // Accent lights - full brightness for small detail strips
+    accent: new THREE.MeshBasicMaterial({
+      color: accentColor,
     }),
   }
 }
 
 /**
- * Creates engine trail particle system
+ * Creates twin engine trail particle system
  */
 function createEngineTrail(engineColor: number): {
   points: THREE.Points
   geometry: THREE.BufferGeometry
   material: THREE.ShaderMaterial
-  particleData: Float32Array
 } {
   const S = SHIP_SCALE
   const count = ENGINE_TRAIL_PARTICLES
+  const engineSpacing = S * 0.055
 
   const positions = new Float32Array(count * 3)
-  const particleData = new Float32Array(count * 4) // x: life offset, y: speed, z: size, w: radial offset
+  const particleData = new Float32Array(count * 4)
 
   for (let i = 0; i < count; i++) {
-    // Start at engine position
-    positions[i * 3] = 0
-    positions[i * 3 + 1] = 0
-    positions[i * 3 + 2] = -S * 0.5
+    // Alternate between left and right engine
+    const isLeft = i % 2 === 0
+    const engineX = isLeft ? engineSpacing : -engineSpacing
 
-    // Random particle data
-    particleData[i * 4] = Math.random()           // life offset
-    particleData[i * 4 + 1] = 0.5 + Math.random() // speed multiplier
-    particleData[i * 4 + 2] = 1 + Math.random() * 2 // size - smaller
-    particleData[i * 4 + 3] = Math.random() * Math.PI * 2 // radial angle
+    positions[i * 3] = engineX
+    positions[i * 3 + 1] = -S * 0.01
+    positions[i * 3 + 2] = S * 0.52
+
+    particleData[i * 4] = Math.random()
+    particleData[i * 4 + 1] = 0.5 + Math.random() * 0.8
+    particleData[i * 4 + 2] = 2 + Math.random() * 3
+    particleData[i * 4 + 3] = Math.random() * Math.PI * 2
   }
 
   const geometry = new THREE.BufferGeometry()
@@ -214,12 +509,10 @@ function createEngineTrail(engineColor: number): {
     uniforms: {
       uTime: { value: 0 },
       uColor: { value: color },
-      uEngineZ: { value: -S * 0.5 },
     },
     vertexShader: `
       attribute vec4 aParticleData;
       uniform float uTime;
-      uniform float uEngineZ;
 
       varying float vAlpha;
       varying float vLife;
@@ -230,29 +523,25 @@ function createEngineTrail(engineColor: number): {
         float size = aParticleData.z;
         float angle = aParticleData.w;
 
-        // Particle life cycle (0 to 1)
-        float life = mod(uTime * speed * 0.8 + lifeOffset, 1.0);
+        float life = mod(uTime * speed * 1.2 + lifeOffset, 1.0);
         vLife = life;
 
-        // Flow backward from engine
-        float trailLength = 0.15;
-        float z = uEngineZ - life * trailLength;
+        // Trail flows backward from engine
+        float trailLength = 0.2;
+        vec3 pos = position;
+        pos.z += life * trailLength;
 
-        // Expand outward as it flows
-        float spread = life * 0.02;
-        float x = cos(angle) * spread;
-        float y = sin(angle) * spread;
-
-        vec3 pos = vec3(x, y, z);
+        // Slight spread
+        float spread = life * 0.015;
+        pos.x += cos(angle) * spread;
+        pos.y += sin(angle) * spread;
 
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
 
-        // Size decreases with distance
         float lifeFade = 1.0 - life;
-        gl_PointSize = size * lifeFade * (100.0 / -mvPosition.z);
+        gl_PointSize = size * lifeFade * (80.0 / -mvPosition.z);
 
-        // Alpha based on life - keep subtle
-        vAlpha = lifeFade * 0.4;
+        vAlpha = lifeFade * lifeFade * 0.35;
 
         gl_Position = projectionMatrix * mvPosition;
       }
@@ -266,25 +555,24 @@ function createEngineTrail(engineColor: number): {
         vec2 center = gl_PointCoord - vec2(0.5);
         float dist = length(center);
 
-        // Soft circular shape
         float alpha = smoothstep(0.5, 0.0, dist) * vAlpha;
 
-        // Color fades from white core to engine color
-        vec3 color = mix(vec3(1.0), uColor, vLife * 0.7);
+        // Hot white core fading to color
+        vec3 color = mix(vec3(1.0), uColor, vLife * 0.6 + 0.2);
 
         gl_FragColor = vec4(color, alpha);
       }
     `,
     transparent: true,
     depthWrite: false,
-    blending: THREE.NormalBlending,  // Normal blending to prevent blow-out
+    blending: THREE.AdditiveBlending,
   })
 
   const points = new THREE.Points(geometry, material)
   points.frustumCulled = false
-  points.renderOrder = 200  // Render after ship
+  points.renderOrder = 200
 
-  return { points, geometry, material, particleData }
+  return { points, geometry, material }
 }
 
 export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
@@ -297,15 +585,12 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
     const sceneObj = scene()
     if (!sceneObj) return
 
-    // Create ship geometry
     shipGroup = createShipGeometry()
     materials = createShipMaterials(props.ship.state)
 
-    // Create engine trail particles
-    engineTrail = createEngineTrail(ENGINE_COLORS[props.ship.state])
+    engineTrail = createEngineTrail(getEngineColor(props.ship.state))
     shipGroup.add(engineTrail.points)
 
-    // Apply materials to meshes
     shipGroup.traverse((child) => {
       if (child instanceof THREE.Mesh && materials) {
         const materialKey = child.name as keyof typeof materials
@@ -315,11 +600,8 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
       }
     })
 
-    // Set initial position
     const pos = getShipWorldPosition(props.ship)
     shipGroup.position.copy(pos)
-
-    // Set visibility
     shipGroup.visible = props.isVisible
 
     sceneObj.add(shipGroup)
@@ -329,7 +611,6 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
     const sceneObj = scene()
     if (sceneObj && shipGroup) {
       sceneObj.remove(shipGroup)
-      // Dispose geometries and materials
       shipGroup.traverse((child) => {
         if (child instanceof THREE.Mesh) {
           child.geometry.dispose()
@@ -345,37 +626,43 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
         }
       })
     }
-    // Dispose engine trail
     if (engineTrail) {
       engineTrail.geometry.dispose()
       engineTrail.material.dispose()
     }
   })
 
-  // Update position when ship moves
+  // Track target position for smooth interpolation
+  let targetPosition = new THREE.Vector3()
+  let positionInitialized = false
+
   createEffect(() => {
     if (!shipGroup) return
     const pos = getShipWorldPosition(props.ship)
-    shipGroup.position.copy(pos)
+    targetPosition.copy(pos)
+
+    // Initialize position immediately on first set
+    if (!positionInitialized) {
+      shipGroup.position.copy(pos)
+      positionInitialized = true
+    }
+    // Otherwise, position will be lerped in useFrame
   })
 
-  // Update visibility
   createEffect(() => {
     if (!shipGroup) return
     shipGroup.visible = props.isVisible
   })
 
-  // Update materials when state changes
   createEffect(() => {
     if (!shipGroup) return
 
     const newMaterials = createShipMaterials(props.ship.state)
     materials = newMaterials
 
-    // Update point light color to match state
     shipGroup.traverse((child) => {
       if (child instanceof THREE.PointLight) {
-        child.color.setHex(STATE_COLORS[props.ship.state])
+        child.color.setHex(getStateColor(props.ship.state))
       }
       if (child instanceof THREE.Mesh) {
         const materialKey = child.name as keyof typeof newMaterials
@@ -388,69 +675,71 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
       }
     })
 
-    // Update engine trail color
     if (engineTrail) {
-      const newColor = new THREE.Color(ENGINE_COLORS[props.ship.state])
+      const newColor = new THREE.Color(getEngineColor(props.ship.state))
       engineTrail.material.uniforms.uColor.value = newColor
     }
   })
 
-  // Animation loop - gentle hover and engine pulse
-  useFrame(() => {
+  useFrame(({ clock }) => {
     if (!shipGroup || !props.isVisible) return
 
     const time = performance.now() * 0.001
+    const deltaTime = Math.min(clock.getDelta(), 0.1)  // Cap delta to avoid jumps
 
-    // Gentle hover motion
-    shipGroup.rotation.x = Math.sin(time * 0.7) * 0.03
-    shipGroup.rotation.z = Math.sin(time * 0.5) * 0.02
-    shipGroup.position.y += Math.sin(time * 1.2) * 0.0001
+    // Smooth position interpolation (lerp towards target)
+    const lerpFactor = 1.0 - Math.exp(-4.0 * deltaTime)  // Same speed as AgentMarkers
+    shipGroup.position.lerp(targetPosition, lerpFactor)
 
-    // Engine glow pulse based on state
+    // Very subtle hover motion - reduced 75% to minimize camera jitter during follow
+    shipGroup.rotation.x = Math.sin(time * 0.8) * 0.015
+    shipGroup.rotation.z = Math.sin(time * 0.6) * 0.01
+    shipGroup.position.y += Math.sin(time * 1.2) * 0.0005
+
+    // Engine pulse based on state
     let pulseSpeed = 2.0
-    let pulseMin = 0.5
-    let pulseMax = 0.9
+    let pulseMin = 0.6
+    let pulseMax = 1.0
 
     switch (props.ship.state) {
       case 'idle':
         pulseSpeed = 1.5
-        pulseMin = 0.4
-        pulseMax = 0.7
+        pulseMin = 0.5
+        pulseMax = 0.8
         break
       case 'exploring':
-        pulseSpeed = 3.0
-        pulseMin = 0.6
+        pulseSpeed = 3.5
+        pulseMin = 0.7
         pulseMax = 1.0
         break
       case 'deploying':
-        pulseSpeed = 5.0
-        pulseMin = 0.7
+        pulseSpeed = 6.0
+        pulseMin = 0.8
         pulseMax = 1.0
         break
       case 'returning':
         pulseSpeed = 2.5
-        pulseMin = 0.5
-        pulseMax = 0.85
+        pulseMin = 0.6
+        pulseMax = 0.9
         break
     }
 
     const pulse = pulseMin + (Math.sin(time * pulseSpeed) * 0.5 + 0.5) * (pulseMax - pulseMin)
 
-    // Update engine glow
-    const glowMesh = shipGroup.getObjectByName('engineGlow') as THREE.Mesh | undefined
-    if (glowMesh && glowMesh.material instanceof THREE.MeshBasicMaterial) {
-      glowMesh.material.opacity = pulse
-      glowMesh.scale.setScalar(0.9 + pulse * 0.2)
-    }
+    // Update all engine glows (subtle pulse)
+    shipGroup.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        if (child.name === 'engineGlow' && child.material instanceof THREE.MeshBasicMaterial) {
+          child.material.opacity = pulse * 0.4
+          child.scale.setScalar(0.95 + pulse * 0.08)
+        }
+        if (child.name === 'engineCore' && child.material instanceof THREE.MeshBasicMaterial) {
+          const corePulse = 0.5 + Math.sin(time * pulseSpeed * 2) * 0.15
+          child.material.opacity = corePulse
+        }
+      }
+    })
 
-    // Update core glow (faster pulse)
-    const coreMesh = shipGroup.getObjectByName('engineCore') as THREE.Mesh | undefined
-    if (coreMesh && coreMesh.material instanceof THREE.MeshBasicMaterial) {
-      const corePulse = 0.7 + Math.sin(time * pulseSpeed * 2) * 0.3
-      coreMesh.material.opacity = corePulse
-    }
-
-    // Update engine trail particles
     if (engineTrail) {
       engineTrail.material.uniforms.uTime.value = time
     }
@@ -459,9 +748,6 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
   return null
 }
 
-/**
- * Helper to get ship world position with BRAIN_SCALE applied
- */
 function getShipWorldPosition(ship: Ship): THREE.Vector3 {
   return new THREE.Vector3(
     ship.positionX * BRAIN_SCALE.x,

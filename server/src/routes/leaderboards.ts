@@ -4,7 +4,7 @@
  * Leaderboards track player rankings across different metrics:
  * - weekly_agi: $AGI earned in the current week
  * - total_discoveries: Total synapses discovered all-time
- * - brain_level: Current brain level progression
+ * - user_level: User level based on USDC spent
  */
 
 import { Router, Request, Response } from 'express'
@@ -13,7 +13,7 @@ import { db } from '../db/index.js'
 const router = Router()
 
 // Valid leaderboard types
-type LeaderboardType = 'weekly_agi' | 'total_discoveries' | 'brain_level'
+type LeaderboardType = 'weekly_agi' | 'total_discoveries' | 'user_level'
 
 // Type for leaderboard entry
 interface LeaderboardEntry {
@@ -62,7 +62,7 @@ function formatValue(value: number, type: LeaderboardType): string {
       if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
       if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
       return value.toString()
-    case 'brain_level':
+    case 'user_level':
       return `Level ${value}`
     default:
       return value.toString()
@@ -78,7 +78,7 @@ router.get('/:type', (req: Request, res: Response) => {
     const { type } = req.params as { type: LeaderboardType }
     const { limit, offset, userId } = req.query
 
-    const validTypes: LeaderboardType[] = ['weekly_agi', 'total_discoveries', 'brain_level']
+    const validTypes: LeaderboardType[] = ['weekly_agi', 'total_discoveries', 'user_level']
     if (!validTypes.includes(type)) {
       return res.status(400).json({
         error: `Invalid leaderboard type. Must be one of: ${validTypes.join(', ')}`
@@ -148,25 +148,25 @@ router.get('/:type', (req: Request, res: Response) => {
         description = 'All-time synapse discoveries'
         break
 
-      case 'brain_level':
-        // Use brain_level directly from users table
+      case 'user_level':
+        // Use user_level based on USDC spent (Masterplan 2026)
         query = `
           SELECT
             u.id as userId,
             u.wallet as username,
-            u.brain_level as value
+            u.user_level as value
           FROM users u
-          WHERE u.brain_level > 1
-          ORDER BY u.brain_level DESC, u.brain_xp DESC
+          WHERE u.user_level > 1
+          ORDER BY u.user_level DESC, u.usdc_spent DESC
           LIMIT ? OFFSET ?
         `
         countQuery = `
           SELECT COUNT(*) as total FROM users
-          WHERE brain_level > 1
+          WHERE user_level > 1
         `
         params = [queryLimit, queryOffset]
-        title = 'Brain Level'
-        description = 'Highest brain levels achieved'
+        title = 'User Level'
+        description = 'Highest user levels achieved (USDC-based)'
         break
 
       default:
@@ -247,13 +247,13 @@ router.get('/:type', (req: Request, res: Response) => {
           userParams = [userId, userId]
           break
 
-        case 'brain_level':
+        case 'user_level':
           userQuery = `
             SELECT
-              (SELECT COUNT(*) + 1 FROM users WHERE brain_level > (
-                SELECT COALESCE(brain_level, 1) FROM users WHERE id = ?
+              (SELECT COUNT(*) + 1 FROM users WHERE user_level > (
+                SELECT COALESCE(user_level, 1) FROM users WHERE id = ?
               )) as rank,
-              COALESCE(brain_level, 1) as value
+              COALESCE(user_level, 1) as value
             FROM users
             WHERE id = ?
           `

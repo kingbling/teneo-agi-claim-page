@@ -82,6 +82,7 @@ export const SYNAPSE_VERTEX_SHADER = `
   attribute float aSynapseType;
   attribute float aProgress;  // 0.0-1.0 for exploration progress
   attribute float aHovered;   // 1.0 if hovered, 0.0 otherwise
+  attribute float aFiltered;  // 1.0 if filtered out, 0.0 if matches filter
 
   uniform float uTime;
 
@@ -90,6 +91,7 @@ export const SYNAPSE_VERTEX_SHADER = `
   varying float vSynapseType;
   varying float vProgress;
   varying float vHovered;
+  varying float vFiltered;
 
   void main() {
     vColor = aColor;
@@ -97,11 +99,17 @@ export const SYNAPSE_VERTEX_SHADER = `
     vSynapseType = aSynapseType;
     vProgress = aProgress;
     vHovered = aHovered;
+    vFiltered = aFiltered;
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
     float pulse = 1.0;
     float sizeMultiplier = 1.0;
+
+    // Filtered out synapses are smaller
+    if (aFiltered > 0.5) {
+      sizeMultiplier *= 0.6;
+    }
 
     // State-based animation: 0=undiscovered, 1=exploring, 2=discovered
     if (aState < 0.5) {
@@ -162,6 +170,7 @@ export const SYNAPSE_FRAGMENT_SHADER = `
   varying float vSynapseType;
   varying float vProgress;
   varying float vHovered;
+  varying float vFiltered;
 
   // Helper: Calculate angle from center (0-1 normalized)
   float getAngle(vec2 coord) {
@@ -304,6 +313,15 @@ export const SYNAPSE_FRAGMENT_SHADER = `
       alpha = max(alpha, 0.95);
     }
 
+    // FILTER DIMMING: Reduce brightness and alpha for filtered-out synapses
+    if (vFiltered > 0.5) {
+      // Desaturate and dim significantly
+      float gray = dot(finalColor, vec3(0.299, 0.587, 0.114));
+      finalColor = mix(finalColor, vec3(gray), 0.7);  // 70% desaturation
+      finalColor *= 0.25;  // Much dimmer
+      alpha *= 0.3;  // Much more transparent
+    }
+
     // Allow rarer types to exceed 1.0 for bloom effect
     finalColor = min(finalColor, vec3(1.5));
     gl_FragColor = vec4(finalColor, alpha);
@@ -314,6 +332,7 @@ interface SynapseMarkersProps {
   clusters: SynapseCluster[]
   userLevel?: UserLevel  // For showing locked synapse types (Masterplan 2026: USDC-based level)
   onSynapseClick?: (cluster: SynapseCluster, position: THREE.Vector3) => void
+  filterType?: string | null  // Filter by synapse type - dims and disables non-matching
 }
 
 export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
@@ -327,6 +346,11 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
   // Raycaster for click/hover detection
   let raycaster: THREE.Raycaster | null = null
   let pointer = new THREE.Vector2()
+  let lastPointer = new THREE.Vector2()
+  let frameCounter = 0
+  const HOVER_CHECK_INTERVAL = 3 // Only check hover every N frames
+  let lastCamPosForTooltip = new THREE.Vector3()
+  const TOOLTIP_CAM_THRESHOLD = 0.01
 
   // Track cluster positions for raycasting
   let clusterPositions: THREE.Vector3[] = []
@@ -334,6 +358,10 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
   // Hover attribute buffer (updated each frame)
   let hoveredAttrBuffer: Float32Array | null = null
   let hoveredAttr: THREE.BufferAttribute | null = null
+
+  // Filter attribute buffer (updated when filter changes)
+  let filteredAttrBuffer: Float32Array | null = null
+  let filteredAttr: THREE.BufferAttribute | null = null
 
   // Track drag state
   let pointerDownPos: { x: number; y: number } | null = null
@@ -432,6 +460,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
   })
 
   // Find closest cluster to pointer for hover/click
+  // Skips filtered-out clusters so they can't be selected
   const findClosestCluster = (): number | null => {
     const sceneObj = scene()
     const cam = camera()
@@ -444,6 +473,11 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     let closestDist = threshold
 
     clusterPositions.forEach((pos, i) => {
+      // Skip filtered-out clusters (can't hover/select them)
+      if (filteredAttrBuffer && filteredAttrBuffer[i] > 0.5) {
+        return
+      }
+
       const dist = raycaster!.ray.distanceToPoint(pos)
       if (dist < closestDist) {
         closestDist = dist
@@ -570,6 +604,11 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     hoveredAttr = new THREE.BufferAttribute(hoveredAttrBuffer, 1)
     hoveredAttr.setUsage(THREE.DynamicDrawUsage)  // Will be updated frequently
 
+    // Initialize filtered attribute buffer (all zeros = not filtered)
+    filteredAttrBuffer = new Float32Array(props.clusters.length)
+    filteredAttr = new THREE.BufferAttribute(filteredAttrBuffer, 1)
+    filteredAttr.setUsage(THREE.DynamicDrawUsage)  // Will be updated when filter changes
+
     // Update geometry attributes
     geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
     geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3))
@@ -578,7 +617,32 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     geometry.setAttribute('aSynapseType', new THREE.BufferAttribute(data.synapseTypes, 1))
     geometry.setAttribute('aProgress', new THREE.BufferAttribute(data.progress, 1))
     geometry.setAttribute('aHovered', hoveredAttr)
+    geometry.setAttribute('aFiltered', filteredAttr)
     geometry.computeBoundingSphere()
+  })
+
+  // Update filtered attribute when filterType OR clusters change
+  // Must track props.clusters to re-apply filter when buffers are recreated
+  createEffect(() => {
+    const filterType = props.filterType
+    const clusters = props.clusters  // Track clusters to re-run when they change
+    if (!filteredAttrBuffer || !filteredAttr) return
+
+    // Update filtered state for each cluster
+    clusters.forEach((cluster, i) => {
+      if (i >= filteredAttrBuffer!.length) return
+
+      if (!filterType || filterType === 'all') {
+        // No filter - all visible
+        filteredAttrBuffer![i] = 0.0
+      } else {
+        // Check if cluster matches filter
+        const dominant = getDominantSynapseType(cluster.typeCounts)
+        filteredAttrBuffer![i] = (dominant === filterType) ? 0.0 : 1.0
+      }
+    })
+
+    filteredAttr.needsUpdate = true
   })
 
   // Animation frame for hover detection and time updates
@@ -596,31 +660,60 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
       material.uniforms.uTime.value = scaledTime
     }
 
-    // Hover detection
-    const closestIndex = findClosestCluster()
-    const currentHovered = hoveredIndex()
+    // Hover detection - throttled to every N frames and only when pointer moves
+    frameCounter++
+    const pointerMoved = pointer.x !== lastPointer.x || pointer.y !== lastPointer.y
+    const shouldCheckHover = (frameCounter % HOVER_CHECK_INTERVAL === 0) || pointerMoved
 
-    if (closestIndex !== currentHovered) {
-      setHoveredIndex(closestIndex)
-      document.body.style.cursor = closestIndex !== null ? 'pointer' : 'auto'
+    if (shouldCheckHover) {
+      lastPointer.copy(pointer)
+      const closestIndex = findClosestCluster()
+      const currentHovered = hoveredIndex()
 
-      // Update hovered attribute for shader highlight
-      if (hoveredAttrBuffer && hoveredAttr) {
-        // Clear previous hover
-        if (currentHovered !== null && currentHovered < hoveredAttrBuffer.length) {
-          hoveredAttrBuffer[currentHovered] = 0.0
+      if (closestIndex !== currentHovered) {
+        setHoveredIndex(closestIndex)
+        document.body.style.cursor = closestIndex !== null ? 'pointer' : 'auto'
+
+        // Update hovered attribute for shader highlight
+        if (hoveredAttrBuffer && hoveredAttr) {
+          // Clear previous hover
+          if (currentHovered !== null && currentHovered < hoveredAttrBuffer.length) {
+            hoveredAttrBuffer[currentHovered] = 0.0
+          }
+          // Set new hover
+          if (closestIndex !== null && closestIndex < hoveredAttrBuffer.length) {
+            hoveredAttrBuffer[closestIndex] = 1.0
+          }
+          hoveredAttr.needsUpdate = true
         }
-        // Set new hover
-        if (closestIndex !== null && closestIndex < hoveredAttrBuffer.length) {
-          hoveredAttrBuffer[closestIndex] = 1.0
+
+        // Update tooltip position if hovering
+        if (closestIndex !== null && clusterPositions[closestIndex]) {
+          const pos = clusterPositions[closestIndex].clone()
+          pos.project(cam)
+          lastCamPosForTooltip.copy(cam.position)
+
+          const renderer = gl()
+          if (renderer) {
+            const rect = renderer.domElement.getBoundingClientRect()
+            const x = (pos.x * 0.5 + 0.5) * rect.width + rect.left
+            const y = (-pos.y * 0.5 + 0.5) * rect.height + rect.top
+            setTooltipPosition({ x, y })
+          }
+        } else {
+          setTooltipPosition(null)
         }
-        hoveredAttr.needsUpdate = true
       }
+    }
 
-      // Update tooltip position if hovering
-      if (closestIndex !== null && clusterPositions[closestIndex]) {
-        const pos = clusterPositions[closestIndex].clone()
+    // Update tooltip position only if camera moved significantly while hovering
+    const currentHovered = hoveredIndex()
+    if (currentHovered !== null && clusterPositions[currentHovered]) {
+      const camDelta = cam.position.distanceTo(lastCamPosForTooltip)
+      if (camDelta > TOOLTIP_CAM_THRESHOLD) {
+        const pos = clusterPositions[currentHovered].clone()
         pos.project(cam)
+        lastCamPosForTooltip.copy(cam.position)
 
         const renderer = gl()
         if (renderer) {
@@ -629,20 +722,6 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
           const y = (-pos.y * 0.5 + 0.5) * rect.height + rect.top
           setTooltipPosition({ x, y })
         }
-      } else {
-        setTooltipPosition(null)
-      }
-    } else if (closestIndex !== null && clusterPositions[closestIndex]) {
-      // Update tooltip position while hovering (in case of camera movement)
-      const pos = clusterPositions[closestIndex].clone()
-      pos.project(cam)
-
-      const renderer = gl()
-      if (renderer) {
-        const rect = renderer.domElement.getBoundingClientRect()
-        const x = (pos.x * 0.5 + 0.5) * rect.width + rect.left
-        const y = (-pos.y * 0.5 + 0.5) * rect.height + rect.top
-        setTooltipPosition({ x, y })
       }
     }
   })

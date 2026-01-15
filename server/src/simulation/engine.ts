@@ -5,10 +5,6 @@ import {
   getSpace,
   updateAgent,
   updateSpace,
-  getSpaceSolvers,
-  addSpaceSolver,
-  removeSpaceSolver,
-  clearSpaceSolvers,
   updateSimulationState,
   getSimulationState,
   batchUpdateAgents,
@@ -16,7 +12,7 @@ import {
   recomputeAgentClusters,
   findNearestUndiscoveredSpace,
 } from '../db/index.js'
-import type { Agent, Space, AgentTrait, SpaceDiscovery, LootEvent } from '../types/index.js'
+import type { Agent, Space, AgentTrait, SpaceDiscovery, LootEvent, AgentUpdate } from '../types/index.js'
 import { v4 as uuid } from 'uuid'
 import {
   RATES,
@@ -26,7 +22,6 @@ import {
   calculateTravelTime as configCalculateTravelTime,
   calculateSolveProbability as configCalculateSolveProbability,
   calculateLootShare as configCalculateLootShare,
-  calculateTranceDuration,
   // V1 Masterplan: Single player, USDC-based level system
   SYNAPSE_CONFIG,
   USER_LEVEL_CONFIG,
@@ -44,6 +39,8 @@ const SEARCH_SPEED = RATES.BASE_SEARCH_SPEED
 const DETECTION_RADIUS = RATES.DETECTION_RADIUS
 const WANDER_TURN_RATE = RATES.WANDER_TURN_RATE
 const BRAIN_BOUNDS = { min: WORLD.BRAIN_BOUNDS_MIN, max: WORLD.BRAIN_BOUNDS_MAX }
+// Ellipsoid scaling factors - must match synapse generation (generateSpaces.ts)
+const BRAIN_ELLIPSOID = { x: 1.3, y: 1.0, z: 1.1 }
 
 // Event emitter for broadcasting updates
 type DiscoveryCallback = (event: SpaceDiscovery) => void
@@ -130,12 +127,14 @@ function calculateTravelTime(distance: number, traits: AgentTrait[]): number {
   return configCalculateTravelTime(distance, swiftLevel)
 }
 
-function calculateSolveProbability(agent: Agent, space: Space, solverCount: number): number {
+function calculateSolveProbability(agent: Agent, _space: Space, solverCount: number): number {
   const explorerLevel = getTraitBonus(agent.traits, 'explorer')
   const collaborativeLevel = getTraitBonus(agent.traits, 'collaborative')
 
+  // Use default probability (legacy system - now using points-based system)
+  const defaultProbability = 0.01
   return configCalculateSolveProbability(
-    space.baseProbability,
+    defaultProbability,
     explorerLevel,
     collaborativeLevel,
     solverCount
@@ -213,38 +212,53 @@ function updateWanderDirection(
   return { dirX: newDirX, dirY: newDirY, dirZ: newDirZ }
 }
 
-// Keep position within brain bounds with soft boundary (steer away from edges)
+// Keep position within brain ELLIPSOID bounds with soft boundary (steer away from edges)
+// Uses ellipsoid bounds to match the brain shape where synapses are generated
 function applyBrainBounds(
   posX: number, posY: number, posZ: number,
   dirX: number, dirY: number, dirZ: number
 ): { dirX: number; dirY: number; dirZ: number } {
-  const margin = WORLD.BOUNDARY_MARGIN  // Start steering when this close to boundary
   const steerStrength = WORLD.BOUNDARY_STEER_STRENGTH
 
-  let steerX = 0, steerY = 0, steerZ = 0
+  // Normalize position to unit sphere using ellipsoid scaling
+  const normX = posX / BRAIN_ELLIPSOID.x
+  const normY = posY / BRAIN_ELLIPSOID.y
+  const normZ = posZ / BRAIN_ELLIPSOID.z
 
-  // Steer away from boundaries
-  if (posX < BRAIN_BOUNDS.min + margin) steerX = steerStrength
-  if (posX > BRAIN_BOUNDS.max - margin) steerX = -steerStrength
-  if (posY < BRAIN_BOUNDS.min + margin) steerY = steerStrength
-  if (posY > BRAIN_BOUNDS.max - margin) steerY = -steerStrength
-  if (posZ < BRAIN_BOUNDS.min + margin) steerZ = steerStrength
-  if (posZ > BRAIN_BOUNDS.max - margin) steerZ = -steerStrength
+  // Distance from center in normalized space (1.0 = on ellipsoid surface)
+  const distFromCenter = Math.sqrt(normX * normX + normY * normY + normZ * normZ)
 
-  // Apply steering
-  let newDirX = dirX + steerX
-  let newDirY = dirY + steerY
-  let newDirZ = dirZ + steerZ
+  // Start steering when past 80% of the ellipsoid radius (margin = 0.2)
+  const boundaryThreshold = 1.0 - WORLD.BOUNDARY_MARGIN
 
-  // Normalize
-  const len = Math.sqrt(newDirX * newDirX + newDirY * newDirY + newDirZ * newDirZ)
-  if (len > 0.001) {
-    newDirX /= len
-    newDirY /= len
-    newDirZ /= len
+  if (distFromCenter > boundaryThreshold) {
+    // Calculate steering force toward center, scaled by how far past threshold
+    const overshoot = (distFromCenter - boundaryThreshold) / WORLD.BOUNDARY_MARGIN
+    const steerScale = Math.min(overshoot, 1.0) * steerStrength
+
+    // Steer toward center (opposite of normalized position direction)
+    let steerX = -normX * steerScale
+    let steerY = -normY * steerScale
+    let steerZ = -normZ * steerScale
+
+    // Apply steering to direction
+    let newDirX = dirX + steerX
+    let newDirY = dirY + steerY
+    let newDirZ = dirZ + steerZ
+
+    // Normalize
+    const len = Math.sqrt(newDirX * newDirX + newDirY * newDirY + newDirZ * newDirZ)
+    if (len > 0.001) {
+      newDirX /= len
+      newDirY /= len
+      newDirZ /= len
+    }
+
+    return { dirX: newDirX, dirY: newDirY, dirZ: newDirZ }
   }
 
-  return { dirX: newDirX, dirY: newDirY, dirZ: newDirZ }
+  // Inside safe zone, no steering needed
+  return { dirX, dirY, dirZ }
 }
 
 // ============ AGENT ACTIONS ============
@@ -280,31 +294,31 @@ export function recallAgent(agentId: string): boolean {
   if (!agent) return false
   if (agent.state === 'idle') return false
 
-  // Remove from space solvers if solving
-  if (agent.state === 'solving' && agent.targetSpaceId) {
-    removeSpaceSolver(agent.targetSpaceId, agentId)
+  // If exploring a synapse, leave the exploration first
+  // leaveSynapseExploration handles setting state to idle
+  const leftExploration = leaveSynapseExploration(agentId)
+
+  if (!leftExploration) {
+    // Not exploring a synapse, just set to idle and return to home
+    updateAgent({
+      id: agentId,
+      state: 'idle',
+      positionX: agent.homeX,
+      positionY: agent.homeY,
+      positionZ: agent.homeZ,
+      targetSpaceId: null,
+      travelStartTime: null,
+      travelDuration: null,
+    })
+  } else {
+    // Left exploration, also reset position to home
+    updateAgent({
+      id: agentId,
+      positionX: agent.homeX,
+      positionY: agent.homeY,
+      positionZ: agent.homeZ,
+    })
   }
-
-  // Set to idle at current position
-  updateAgent({
-    id: agentId,
-    state: 'idle',
-    targetSpaceId: null,
-    travelStartTime: null,
-    travelDuration: null,
-  })
-
-  return true
-}
-
-export function refuelAgent(agentId: string, points: number): boolean {
-  const agent = getAgent(agentId)
-  if (!agent) return false
-
-  updateAgent({
-    id: agentId,
-    pointsBalance: agent.pointsBalance + points,
-  })
 
   return true
 }
@@ -319,7 +333,6 @@ export function startSimulation() {
   if (isRunning) return
 
   isRunning = true
-  console.log('Simulation started')
 
   // Resume from saved state
   const state = getSimulationState()
@@ -334,7 +347,6 @@ export function stopSimulation() {
     clearTimeout(tickTimer)
     tickTimer = null
   }
-  console.log('Simulation stopped at tick', tickCount)
 }
 
 async function tick() {
@@ -372,377 +384,203 @@ async function tick() {
   tickTimer = setTimeout(tick, delay)
 }
 
-async function processTick() {
-  const now = Date.now()
-  const deltaSeconds = TICK_INTERVAL_MS / 1000
+// Process searching agents - update positions and broadcast via WebSocket
+function processSearchingAgents(deltaSeconds: number) {
+  const searchingAgents = db.prepare(`
+    SELECT * FROM agents WHERE state = 'searching'
+  `).all() as any[]
 
-  // Check for agents with active trance that should end
-  const allAgents = getActiveAgents() // We'll use this later too
-  for (const agent of allAgents) {
-    if (agent.tranceActive && agent.tranceEndTime && now >= agent.tranceEndTime) {
-      // Trance ended - auto-continue exploration
-      const newDir = randomDirection()
-      updateAgent({
-        id: agent.id,
-        tranceActive: false,
-        tranceEndTime: null,
-        state: 'searching',
-        wanderDirX: newDir.x,
-        wanderDirY: newDir.y,
-        wanderDirZ: newDir.z,
-      })
-      console.log(`Agent ${agent.id} trance ended, continuing exploration`)
-    }
+  if (searchingAgents.length === 0) return
+
+  const updates: AgentUpdate[] = []
+
+  for (const row of searchingAgents) {
+    // Update wander direction (organic curves)
+    const newDir = updateWanderDirection(
+      row.wander_dir_x, row.wander_dir_y, row.wander_dir_z,
+      row.wander_phase, tickCount
+    )
+
+    // Apply boundary steering
+    const boundedDir = applyBrainBounds(
+      row.position_x, row.position_y, row.position_z,
+      newDir.dirX, newDir.dirY, newDir.dirZ
+    )
+
+    // Calculate new position (use real time, not accelerated time for movement)
+    const realDeltaSeconds = TICK_INTERVAL_MS / 1000
+    const speed = SEARCH_SPEED * realDeltaSeconds
+    const newX = row.position_x + boundedDir.dirX * speed
+    const newY = row.position_y + boundedDir.dirY * speed
+    const newZ = row.position_z + boundedDir.dirZ * speed
+
+    // Update database
+    db.prepare(`
+      UPDATE agents SET
+        position_x = ?, position_y = ?, position_z = ?,
+        wander_dir_x = ?, wander_dir_y = ?, wander_dir_z = ?
+      WHERE id = ?
+    `).run(newX, newY, newZ, boundedDir.dirX, boundedDir.dirY, boundedDir.dirZ, row.id)
+
+    updates.push({
+      id: row.id,
+      positionX: newX,
+      positionY: newY,
+      positionZ: newZ,
+      state: row.state,
+      targetSpaceId: row.target_space_id,
+    })
   }
 
-  // Get all active agents (traveling or solving)
-  const activeAgents = allAgents
+  // Broadcast every 5 ticks (not every tick for performance)
+  if (tickCount % 5 === 0 && updates.length > 0 && agentUpdateCallback) {
+    agentUpdateCallback(updates as unknown as Agent[])
+  }
+}
 
-  const agentUpdates: (Partial<Agent> & { id: string })[] = []
+// Process traveling agents - interpolate position toward target synapse, auto-explore on arrival
+function processTravelingAgents() {
+  const travelingAgents = db.prepare(`
+    SELECT a.*, s.position_x as target_x, s.position_y as target_y, s.position_z as target_z
+    FROM agents a
+    JOIN spaces s ON a.target_space_id = s.id
+    WHERE a.state = 'traveling'
+  `).all() as any[]
 
-  for (const agent of activeAgents) {
-    // Ships with pointsBurnRate 0 don't consume fuel (Masterplan 2026)
-    const hasFuelSystem = agent.pointsBurnRate !== 0
-    let newBalance = agent.pointsBalance
-    let pointsBurned = 0
+  if (travelingAgents.length === 0) return
 
-    if (hasFuelSystem) {
-      const burnRate = calculateBurnRate(agent.traits)
-      pointsBurned = burnRate * deltaSeconds
-      newBalance = agent.pointsBalance - pointsBurned
+  const now = Date.now()
+  const updates: AgentUpdate[] = []
 
-      if (newBalance <= 0) {
-        // Out of fuel - go idle and mark as needing repair
-        agentUpdates.push({
-          id: agent.id,
-          state: 'idle',
-          pointsBalance: 0,
-          totalPointsBurned: agent.totalPointsBurned + agent.pointsBalance,
-          targetSpaceId: null,
-          travelStartTime: null,
-          travelDuration: null,
-          needsRepair: true,  // Agent is exhausted and needs repair
-          // Return to center (home position)
-          positionX: 0,
-          positionY: 0,
-          positionZ: 0,
+  for (const row of travelingAgents) {
+    if (!row.travel_start_time || !row.travel_duration) continue
+
+    const elapsed = now - row.travel_start_time
+    const progress = Math.min(elapsed / row.travel_duration, 1.0)
+
+    // Interpolate position
+    const start = {
+      positionX: row.start_position_x,
+      positionY: row.start_position_y,
+      positionZ: row.start_position_z,
+    }
+    const end = {
+      positionX: row.target_x,
+      positionY: row.target_y,
+      positionZ: row.target_z,
+    }
+    const newPos = interpolatePosition(start, end, progress)
+
+    if (progress >= 1.0) {
+      // Arrived at synapse - auto-transition to exploring
+      const success = joinSynapseExploration(
+        row.target_space_id,
+        row.id,
+        row.owner_id,
+        row.current_points_per_min || 100
+      )
+
+      if (success) {
+        // joinSynapseExploration already sets state to 'solving', but we need to update position and clear travel fields
+        db.prepare(`
+          UPDATE agents SET
+            position_x = ?, position_y = ?, position_z = ?,
+            travel_start_time = NULL, travel_duration = NULL,
+            start_position_x = NULL, start_position_y = NULL, start_position_z = NULL
+          WHERE id = ?
+        `).run(newPos.positionX, newPos.positionY, newPos.positionZ, row.id)
+
+        updates.push({
+          id: row.id,
+          positionX: newPos.positionX,
+          positionY: newPos.positionY,
+          positionZ: newPos.positionZ,
+          state: 'solving',
+          targetSpaceId: row.target_space_id,
         })
 
-        // Remove from solvers if was solving
-        if (agent.state === 'solving' && agent.targetSpaceId) {
-          removeSpaceSolver(agent.targetSpaceId, agent.id)
-        }
-        continue
+        console.log(`[Travel] Ship ${row.id.slice(0, 8)} arrived at synapse ${row.target_space_id.slice(0, 8)}, auto-started exploring`)
+      } else {
+        // Failed to join (synapse might be occupied or completed) - return to searching
+        db.prepare(`
+          UPDATE agents SET
+            state = 'searching',
+            position_x = ?, position_y = ?, position_z = ?,
+            target_space_id = NULL,
+            travel_start_time = NULL, travel_duration = NULL,
+            start_position_x = NULL, start_position_y = NULL, start_position_z = NULL
+          WHERE id = ?
+        `).run(newPos.positionX, newPos.positionY, newPos.positionZ, row.id)
+
+        updates.push({
+          id: row.id,
+          positionX: newPos.positionX,
+          positionY: newPos.positionY,
+          positionZ: newPos.positionZ,
+          state: 'searching',
+          targetSpaceId: null,
+        })
+
+        console.log(`[Travel] Ship ${row.id.slice(0, 8)} arrived but couldn't explore synapse, returning to searching`)
       }
-    }
+    } else {
+      // Still traveling - update position
+      db.prepare(`
+        UPDATE agents SET position_x = ?, position_y = ?, position_z = ? WHERE id = ?
+      `).run(newPos.positionX, newPos.positionY, newPos.positionZ, row.id)
 
-    switch (agent.state) {
-      case 'searching': {
-        // Update wander direction with organic movement
-        let { dirX, dirY, dirZ } = updateWanderDirection(
-          agent.wanderDirX, agent.wanderDirY, agent.wanderDirZ,
-          agent.wanderPhase, tickCount
-        )
-
-        // Apply brain bounds steering
-        const bounded = applyBrainBounds(
-          agent.positionX, agent.positionY, agent.positionZ,
-          dirX, dirY, dirZ
-        )
-        dirX = bounded.dirX
-        dirY = bounded.dirY
-        dirZ = bounded.dirZ
-
-        // Move position based on direction and speed
-        const swiftLevel = getTraitBonus(agent.traits, 'swift')
-        const swiftBonus = 1 + (swiftLevel * TRAIT_EFFECTS.swift.speedBonus!)
-        const speed = SEARCH_SPEED * swiftBonus * deltaSeconds
-        const newPosX = agent.positionX + dirX * speed
-        const newPosY = agent.positionY + dirY * speed
-        const newPosZ = agent.positionZ + dirZ * speed
-
-        // Check for nearby undiscovered spaces
-        const nearbySpace = findNearestUndiscoveredSpace(newPosX, newPosY, newPosZ, DETECTION_RADIUS)
-
-        if (nearbySpace) {
-          // Found a space! Move to it and start solving
-          agentUpdates.push({
-            id: agent.id,
-            state: 'solving',
-            positionX: nearbySpace.positionX,
-            positionY: nearbySpace.positionY,
-            positionZ: nearbySpace.positionZ,
-            targetSpaceId: nearbySpace.id,
-            pointsBalance: newBalance,
-            totalPointsBurned: agent.totalPointsBurned + pointsBurned,
-          })
-
-          // Add to space solvers
-          addSpaceSolver(nearbySpace.id, agent.id)
-
-          // Update space state
-          if (nearbySpace.state === 'undiscovered') {
-            updateSpace({ id: nearbySpace.id, state: 'being_solved' })
-          }
-        } else {
-          // Continue searching
-          agentUpdates.push({
-            id: agent.id,
-            positionX: newPosX,
-            positionY: newPosY,
-            positionZ: newPosZ,
-            wanderDirX: dirX,
-            wanderDirY: dirY,
-            wanderDirZ: dirZ,
-            pointsBalance: newBalance,
-            totalPointsBurned: agent.totalPointsBurned + pointsBurned,
-          })
-        }
-        break
-      }
-
-      case 'traveling': {
-        const space = getSpace(agent.targetSpaceId!)
-        if (!space) {
-          // Invalid target - go idle
-          agentUpdates.push({
-            id: agent.id,
-            state: 'idle',
-            targetSpaceId: null,
-          })
-          continue
-        }
-
-        // Calculate travel progress
-        const elapsed = now - agent.travelStartTime!
-        const progress = elapsed / agent.travelDuration!
-
-        if (progress >= 1) {
-          // Arrived at destination - start solving
-          agentUpdates.push({
-            id: agent.id,
-            state: 'solving',
-            positionX: space.positionX,
-            positionY: space.positionY,
-            positionZ: space.positionZ,
-            pointsBalance: newBalance,
-            totalPointsBurned: agent.totalPointsBurned + pointsBurned,
-          })
-
-          // Add to space solvers
-          addSpaceSolver(space.id, agent.id)
-
-          // Update space state if not already being solved
-          if (space.state === 'undiscovered') {
-            updateSpace({ id: space.id, state: 'being_solved' })
-          }
-        } else {
-          // Still traveling - interpolate position from stored start position
-          const startPos = {
-            positionX: agent.startPositionX ?? agent.positionX,
-            positionY: agent.startPositionY ?? agent.positionY,
-            positionZ: agent.startPositionZ ?? agent.positionZ,
-          }
-          const endPos = {
-            positionX: space.positionX,
-            positionY: space.positionY,
-            positionZ: space.positionZ,
-          }
-
-          // Calculate current position based on travel progress
-          const newPos = interpolatePosition(startPos, endPos, progress)
-
-          agentUpdates.push({
-            id: agent.id,
-            positionX: newPos.positionX,
-            positionY: newPos.positionY,
-            positionZ: newPos.positionZ,
-            pointsBalance: newBalance,
-            totalPointsBurned: agent.totalPointsBurned + pointsBurned,
-          })
-        }
-        break
-      }
-
-      case 'solving': {
-        const space = getSpace(agent.targetSpaceId!)
-        if (!space || space.state === 'discovered') {
-          // Space already discovered or invalid - go idle
-          agentUpdates.push({
-            id: agent.id,
-            state: 'idle',
-            targetSpaceId: null,
-          })
-          continue
-        }
-
-        // Check for solve success
-        const solvers = getSpaceSolvers(space.id)
-        const solveChance = calculateSolveProbability(agent, space, solvers.length)
-
-        // Roll for success (per tick)
-        if (Math.random() < solveChance) {
-          // Space discovered!
-          await solveSpace(space.id, solvers)
-
-          // Generate new wander direction for continued searching
-          const newDir = randomDirection()
-
-          // Update this agent - go back to searching for more spaces
-          agentUpdates.push({
-            id: agent.id,
-            state: 'searching',
-            targetSpaceId: null,
-            spacesDiscovered: agent.spacesDiscovered + 1,
-            pointsBalance: newBalance,
-            totalPointsBurned: agent.totalPointsBurned + pointsBurned,
-            wanderDirX: newDir.x,
-            wanderDirY: newDir.y,
-            wanderDirZ: newDir.z,
-          })
-        } else {
-          // Still solving - increment progress slightly
-          const progressIncrement = solveChance * 10  // Visual progress
-          const newProgress = Math.min(99, space.solveProgress + progressIncrement)
-          updateSpace({ id: space.id, solveProgress: newProgress })
-
-          agentUpdates.push({
-            id: agent.id,
-            pointsBalance: newBalance,
-            totalPointsBurned: agent.totalPointsBurned + pointsBurned,
-          })
-        }
-        break
-      }
+      updates.push({
+        id: row.id,
+        positionX: newPos.positionX,
+        positionY: newPos.positionY,
+        positionZ: newPos.positionZ,
+        state: row.state,
+        targetSpaceId: row.target_space_id,
+      })
     }
   }
 
-  // Batch update all agents
-  if (agentUpdates.length > 0) {
-    batchUpdateAgents(agentUpdates)
+  // Broadcast every 5 ticks (not every tick for performance)
+  if (tickCount % 5 === 0 && updates.length > 0 && agentUpdateCallback) {
+    agentUpdateCallback(updates as unknown as Agent[])
+  }
+}
 
-    // Emit agent updates for broadcasting
-    if (agentUpdateCallback) {
-      // Get full agent objects for the updated agents
-      const updatedAgents = agentUpdates
-        .map((u) => getAgent(u.id))
-        .filter((a): a is Agent => a !== null)
+async function processTick() {
+  // Apply TIME_MULTIPLIER to speed up simulation (288 = 24h in 5min)
+  const deltaSeconds = (TICK_INTERVAL_MS / 1000) * RATES.TIME_MULTIPLIER
 
-      if (updatedAgents.length > 0) {
-        agentUpdateCallback(updatedAgents)
-      }
-    }
+  // Log every 10 ticks with ship state summary and positions
+  if (tickCount % 10 === 0) {
+    const shipStats = db.prepare(`
+      SELECT state, COUNT(*) as count FROM agents GROUP BY state
+    `).all() as { state: string; count: number }[]
+
+    const stateStr = shipStats.map(s => `${s.state}:${s.count}`).join(' ') || 'no ships'
+
+    // Get ship positions
+    const ships = db.prepare(`
+      SELECT id, name, position_x, position_y, position_z, state FROM agents LIMIT 10
+    `).all() as { id: string; name: string; position_x: number; position_y: number; position_z: number; state: string }[]
+
+    const posStr = ships.map(s =>
+      `${s.name || s.id.slice(0,4)}(${s.position_x.toFixed(1)},${s.position_y.toFixed(1)},${s.position_z.toFixed(1)})`
+    ).join(' ')
+
+    console.log(`[Tick ${tickCount}] ${RATES.TIME_MULTIPLIER}x speed | Ships: ${stateStr}`)
+    if (posStr) console.log(`  Positions: ${posStr}`)
   }
 
   // ============ MASTERPLAN 2026: Process synapse exploration ============
-  // Accumulate points for all active explorers and check for completion
+  // All exploration now uses the synapse system (completeSynapse)
+  // Legacy space discovery system has been removed
   await processSynapseExploration(deltaSeconds)
-}
 
-async function solveSpace(spaceId: string, solverAgentIds: string[]) {
-  const space = getSpace(spaceId)
-  if (!space) return
+  // Process traveling agents - interpolate position toward synapse, auto-explore on arrival
+  processTravelingAgents()
 
-  // Mark space as discovered
-  updateSpace({
-    id: spaceId,
-    state: 'discovered',
-    solveProgress: 100,
-    discoveredAt: Date.now(),
-  })
-
-  // Clear all solvers
-  clearSpaceSolvers(spaceId)
-
-  // Distribute loot and check for trance
-  const lootDistribution: { agentId: string; ownerId: string; amount: number }[] = []
-  const agentsWithTrance: string[] = []
-
-  for (const agentId of solverAgentIds) {
-    const agent = getAgent(agentId)
-    if (!agent) continue
-
-    const lootAmount = calculateLootShare(space.lootPool, agent.traits, solverAgentIds.length)
-
-    // Update agent loot
-    updateAgent({
-      id: agentId,
-      totalLoot: agent.totalLoot + lootAmount,
-    })
-
-    lootDistribution.push({
-      agentId,
-      ownerId: agent.ownerId,
-      amount: lootAmount,
-    })
-
-    // Check if agent has trance trait
-    if (agent.tranceLevel > 0) {
-      agentsWithTrance.push(agentId)
-    }
-
-    // Emit loot event
-    if (lootCallback) {
-      lootCallback({
-        userId: agent.ownerId,
-        agentId,
-        spaceId,
-        amount: lootAmount,
-        timestamp: Date.now(),
-      })
-    }
-  }
-
-  // Trigger trance for agents with trance trait
-  if (agentsWithTrance.length > 0) {
-    const now = Date.now()
-    for (const agentId of agentsWithTrance) {
-      const agent = getAgent(agentId)
-      if (!agent) continue
-
-      const tranceDuration = calculateTranceDuration(agent.tranceLevel)
-      const tranceEndTime = now + tranceDuration
-
-      updateAgent({
-        id: agentId,
-        tranceActive: true,
-        tranceEndTime,
-        state: 'idle', // Agent enters trance state (idle but will auto-resume)
-      })
-
-      console.log(`Agent ${agentId} entered trance for ${tranceDuration}ms (level ${agent.tranceLevel})`)
-    }
-  }
-
-  // Record discovery event
-  const eventId = uuid()
-  db.prepare(`
-    INSERT INTO discovery_events (id, space_id, discovered_at, total_loot)
-    VALUES (?, ?, ?, ?)
-  `).run(eventId, spaceId, Date.now(), space.lootPool)
-
-  // Record loot distributions
-  for (const dist of lootDistribution) {
-    db.prepare(`
-      INSERT INTO loot_distributions (id, discovery_event_id, agent_id, owner_id, amount)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(uuid(), eventId, dist.agentId, dist.ownerId, dist.amount)
-  }
-
-  // Emit discovery event
-  if (discoveryCallback) {
-    discoveryCallback({
-      spaceId,
-      positionX: space.positionX,
-      positionY: space.positionY,
-      positionZ: space.positionZ,
-      discoveredBy: solverAgentIds,
-      lootDistribution,
-      timestamp: Date.now(),
-    })
-  }
-
-  console.log(`Space ${spaceId} discovered by ${solverAgentIds.length} agents, ${space.lootPool} loot distributed`)
+  // Process searching agents - update positions and broadcast
+  processSearchingAgents(deltaSeconds)
 }
 
 // Export for external access
@@ -836,6 +674,49 @@ export async function processSynapseExploration(deltaSeconds: number) {
     SELECT DISTINCT synapse_id FROM synapse_explorers
   `).all() as { synapse_id: string }[]
 
+  // Auto-repair: Check for state mismatch between agents and synapse_explorers
+  const solvingShips = db.prepare(`
+    SELECT a.id, a.target_space_id, a.owner_id, a.current_points_per_min
+    FROM agents a
+    WHERE a.state = 'solving'
+  `).all() as { id: string; target_space_id: string | null; owner_id: string; current_points_per_min: number }[]
+
+  for (const ship of solvingShips) {
+    if (!ship.target_space_id) {
+      // No target - reset to idle
+      console.log(`[REPAIR] Ship ${ship.id.slice(0, 8)} solving with no target, resetting to idle`)
+      db.prepare(`UPDATE agents SET state = 'idle', target_space_id = NULL WHERE id = ?`).run(ship.id)
+      continue
+    }
+
+    // Check if ship has synapse_explorers entry
+    const hasExplorer = db.prepare(`SELECT 1 FROM synapse_explorers WHERE ship_id = ?`).get(ship.id)
+    if (!hasExplorer) {
+      // Check if target synapse is still available
+      const synapse = db.prepare(`SELECT state, synapse_type FROM spaces WHERE id = ?`).get(ship.target_space_id) as { state: string; synapse_type: string } | undefined
+
+      if (!synapse || synapse.state === 'discovered') {
+        console.log(`[REPAIR] Ship ${ship.id.slice(0, 8)} target synapse unavailable, resetting to idle`)
+        db.prepare(`UPDATE agents SET state = 'idle', target_space_id = NULL WHERE id = ?`).run(ship.id)
+      } else {
+        // Re-add explorer entry
+        const pointsPerMin = ship.current_points_per_min || 100
+        console.log(`[REPAIR] Re-adding ship ${ship.id.slice(0, 8)} to synapse_explorers for ${synapse.synapse_type} synapse`)
+        db.prepare(`
+          INSERT INTO synapse_explorers (id, synapse_id, ship_id, user_id, points_contributed, points_per_minute, joined_at, last_updated_at)
+          VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+        `).run(uuid(), ship.target_space_id, ship.id, ship.owner_id, pointsPerMin, Date.now(), Date.now())
+
+        // Update synapse state
+        db.prepare(`UPDATE spaces SET state = 'being_solved' WHERE id = ? AND state = 'undiscovered'`).run(ship.target_space_id)
+      }
+    }
+  }
+
+  if (exploringSynapses.length > 0 && tickCount % 10 === 0) {
+    console.log(`[Exploration] ${exploringSynapses.length} synapse(s) being explored`)
+  }
+
   for (const { synapse_id } of exploringSynapses) {
     await updateSynapseProgress(synapse_id, deltaSeconds)
   }
@@ -906,6 +787,12 @@ async function updateSynapseProgress(synapseId: string, deltaSeconds: number) {
   // Update synapse's total accumulated points
   const newAccumulated = synapse.points_accumulated + totalPointsThisTick
   const isCompleted = newAccumulated >= synapse.points_required
+  const progressPct = ((newAccumulated / synapse.points_required) * 100).toFixed(1)
+
+  // Log progress every 10 ticks
+  if (tickCount % 10 === 0) {
+    console.log(`[Progress] ${synapse.synapse_type} synapse: ${progressPct}% (${Math.floor(newAccumulated)}/${synapse.points_required} pts) +${totalPointsThisTick.toFixed(1)}/tick`)
+  }
 
   // V1 Masterplan: Calculate ETA based on user level + items (single player)
   // Get the single explorer's level and item effects
@@ -1060,7 +947,7 @@ async function completeSynapse(
     })
   }
 
-  console.log(`[Masterplan 2026] Synapse ${synapseId} (${synapseType}) completed! ${finalAgiReward} $AGI distributed via ${config.distribution}${eventMultipliers.eventName ? ` (${eventMultipliers.eventName} active)` : ''}`)
+  console.log(`\n[SOLVED] ✓ ${synapseType.toUpperCase()} synapse completed! +${finalAgiReward} $AGI${eventMultipliers.eventName ? ` (${eventMultipliers.eventName} active)` : ''}\n`)
 
   // Process autopilot for all ships that were exploring this synapse
   for (const explorer of explorers) {
@@ -1113,16 +1000,16 @@ export function joinSynapseExploration(
     UPDATE spaces SET state = 'being_solved' WHERE id = ? AND state = 'undiscovered'
   `).run(synapseId)
 
-  // Update ship state
+  // Update ship state (solving = actively exploring a synapse)
   db.prepare(`
     UPDATE agents
-    SET state = 'exploring',
+    SET state = 'solving',
         target_space_id = ?,
         current_points_per_min = ?
     WHERE id = ?
   `).run(synapseId, effectiveRate, shipId)
 
-  console.log(`[Masterplan 2026] Ship ${shipId} joined synapse ${synapseId} at ${effectiveRate} pts/min`)
+  console.log(`[Exploration] Ship ${shipId.slice(0, 8)} started exploring synapse ${synapseId.slice(0, 8)} at ${effectiveRate} pts/min`)
   return true
 }
 

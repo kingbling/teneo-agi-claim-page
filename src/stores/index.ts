@@ -5,13 +5,9 @@
 export { configStore } from './configStore'
 export type { GameConfig, ConfigState } from './configStore'
 
-// User store - user state, levels, currencies, brain progression
+// User store - user state, levels, currencies
 export { userStore } from './userStore'
-export type {
-  UserState,
-  LevelProgress,
-  BrainProgression,
-} from './userStore'
+export type { UserState } from './userStore'
 
 // Brain region store - UI state for brain visualization
 export { brainRegionStore } from './brainRegionStore'
@@ -30,7 +26,6 @@ export type {
   ExplorerInfo,
   SynapseDiscoveryEvent,
   LootEvent,
-  ShipState,
 } from './shipStore'
 
 // Event store - live events with multipliers and bonuses

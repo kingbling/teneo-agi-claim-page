@@ -5,9 +5,11 @@ import { userStore } from '@/stores/userStore'
 /**
  * useWebSocketConnection - Manages WebSocket connection lifecycle
  *
- * Masterplan 2026: Updated to use shipStore instead of agentStore
- * Automatically connects on mount, fetches initial world state and user ships,
- * and disconnects on unmount.
+ * Masterplan 2026: Full WebSocket state sync
+ * - Connects on mount and fetches world state (clusters, progress)
+ * - Sends auth token to receive user-specific ship data via WebSocket
+ * - Re-authenticates when user logs in/out
+ * - Ships are delivered via ships:sync messages, not REST
  */
 export function useWebSocketConnection() {
   // Connect on mount and fetch initial world state
@@ -16,11 +18,26 @@ export function useWebSocketConnection() {
     shipStore.fetchWorldState()
   })
 
-  // Fetch user ships when userId is available
+  // Re-authenticate when userId changes (login/logout)
   createEffect(() => {
     const userId = userStore.userId
-    if (userId) {
-      shipStore.fetchUserShips()
+    const ws = shipStore.ws
+
+    if (userId && ws && ws.readyState === WebSocket.OPEN) {
+      // User just logged in - send auth token
+      const token = localStorage.getItem('teneo_auth_token')
+      if (token) {
+        ws.send(JSON.stringify({
+          type: 'auth:identify',
+          data: { token },
+        }))
+      }
+    } else if (!userId && ws && ws.readyState === WebSocket.OPEN) {
+      // User logged out - clear auth
+      ws.send(JSON.stringify({
+        type: 'auth:logout',
+        data: {},
+      }))
     }
   })
 

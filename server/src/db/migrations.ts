@@ -537,6 +537,313 @@ const migrations: Migration[] = [
       console.log('  - raffle_winners_history: Historical record of winners')
     },
   },
+  {
+    version: 15,
+    name: 'deprecate_legacy_space_discovery_system',
+    up: (db) => {
+      // Legacy space discovery system is being removed.
+      // All exploration now uses the synapse system (completeSynapse).
+      //
+      // This migration:
+      // 1. Resets ships stuck in legacy states to 'idle'
+      // 2. Clears orphaned space_solvers entries
+      // 3. Marks legacy fields as deprecated (kept for data integrity)
+
+      // Count ships in legacy states for logging
+      const stuckShips = db.prepare(`
+        SELECT COUNT(*) as count FROM agents
+        WHERE state IN ('searching', 'traveling', 'solving')
+      `).get() as { count: number }
+
+      // Reset any ships stuck in legacy states to idle
+      db.exec(`
+        UPDATE agents
+        SET state = 'idle',
+            target_space_id = NULL,
+            current_space_id = NULL,
+            solve_start_time = NULL
+        WHERE state IN ('searching', 'traveling', 'solving')
+      `)
+
+      // Clear orphaned space_solvers entries (legacy tracking table) if it exists
+      try {
+        db.exec('DELETE FROM space_solvers')
+      } catch {
+        // Table doesn't exist on fresh databases, that's fine
+      }
+
+      // Reset solve_progress on spaces (legacy field, no longer used) if it exists
+      const spaceColumns = db.prepare("PRAGMA table_info(spaces)").all() as { name: string }[]
+      if (spaceColumns.some(c => c.name === 'solve_progress')) {
+        db.exec('UPDATE spaces SET solve_progress = 0 WHERE solve_progress > 0')
+      }
+
+      console.log('[Migration 15] Legacy space discovery system deprecated')
+      console.log(`  - ${stuckShips.count} ships reset from legacy states to idle`)
+      console.log('  - space_solvers table cleared')
+      console.log('  - All exploration now uses synapse system (completeSynapse)')
+      console.log('')
+      console.log('  DEPRECATED FIELDS (kept for data integrity):')
+      console.log('  - space_solvers table')
+      console.log('  - spaces.solve_progress, spaces.loot_pool, spaces.base_probability')
+      console.log('  - agents.total_loot (use total_agi_earned instead)')
+    },
+  },
+  {
+    version: 16,
+    name: 'add_admin_columns',
+    up: (db) => {
+      // Add admin and ban columns to users table
+      const tableInfo = db.prepare("PRAGMA table_info(users)").all() as { name: string }[]
+      const columnNames = tableInfo.map(c => c.name)
+
+      // Admin flag
+      if (!columnNames.includes('is_admin')) {
+        db.exec('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0')
+      }
+      // Ban tracking
+      if (!columnNames.includes('banned_at')) {
+        db.exec('ALTER TABLE users ADD COLUMN banned_at INTEGER')
+      }
+      if (!columnNames.includes('ban_reason')) {
+        db.exec('ALTER TABLE users ADD COLUMN ban_reason TEXT')
+      }
+
+      console.log('[Migration 16] Admin system columns added')
+      console.log('  - users.is_admin: Admin flag (0/1)')
+      console.log('  - users.banned_at: Ban timestamp')
+      console.log('  - users.ban_reason: Reason for ban')
+    },
+  },
+  {
+    version: 17,
+    name: 'remove_deprecated_fields',
+    up: (db) => {
+      // Remove deprecated fields from database tables
+      // This migration is idempotent - it checks if work needs to be done
+
+      console.log('[Migration 17] Removing deprecated fields from database...')
+
+      // Check if this migration is needed by looking for deprecated columns
+      const agentColumns = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[]
+      const agentColumnNames = agentColumns.map(c => c.name)
+      const hasDeprecatedAgentColumns = agentColumnNames.includes('total_loot') || agentColumnNames.includes('points_balance')
+
+      const spaceColumns = db.prepare("PRAGMA table_info(spaces)").all() as { name: string }[]
+      const spaceColumnNames = spaceColumns.map(c => c.name)
+      const hasDeprecatedSpaceColumns = spaceColumnNames.includes('loot_pool') || spaceColumnNames.includes('base_probability')
+
+      const userColumns = db.prepare("PRAGMA table_info(users)").all() as { name: string }[]
+      const userColumnNames = userColumns.map(c => c.name)
+      const hasDeprecatedUserColumns = userColumnNames.includes('brain_level') || userColumnNames.includes('brain_xp')
+
+      // If no deprecated columns exist, this is a fresh database - skip migration
+      if (!hasDeprecatedAgentColumns && !hasDeprecatedSpaceColumns && !hasDeprecatedUserColumns) {
+        console.log('  - No deprecated columns found, skipping migration (fresh database)')
+        db.exec('DROP TABLE IF EXISTS space_solvers')
+        return
+      }
+
+      // Clear synapse_explorers to avoid FK constraint issues when recreating tables
+      try {
+        db.exec('DELETE FROM synapse_explorers')
+        console.log('  - Cleared synapse_explorers table')
+      } catch {
+        console.log('  - synapse_explorers table does not exist, skipping')
+      }
+
+      // Transfer legacy loot to AGI if the column exists
+      if (agentColumnNames.includes('total_loot')) {
+        console.log('  - Transferring legacy loot to user AGI...')
+
+        const shipsWithLoot = db.prepare(`
+          SELECT owner_id, SUM(total_loot) as total_loot
+          FROM agents
+          WHERE total_loot > 0
+          GROUP BY owner_id
+        `).all() as Array<{ owner_id: string; total_loot: number }>
+
+        let totalTransferred = 0
+        for (const ship of shipsWithLoot) {
+          db.prepare(`UPDATE users SET total_agi_earned = total_agi_earned + ? WHERE id = ?`).run(ship.total_loot, ship.owner_id)
+          totalTransferred += ship.total_loot
+        }
+
+        db.exec(`UPDATE agents SET total_agi_earned = total_agi_earned + total_loot WHERE total_loot > 0`)
+        console.log(`  - Transferred ${totalTransferred} loot to AGI`)
+      }
+
+      // Drop deprecated tables
+      db.exec('DROP TABLE IF EXISTS space_solvers')
+      console.log('  - Dropped space_solvers table')
+
+      // Recreate spaces table if needed
+      if (hasDeprecatedSpaceColumns) {
+        db.exec(`
+          CREATE TABLE spaces_new (
+            id TEXT PRIMARY KEY,
+            position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL,
+            region TEXT NOT NULL, zone TEXT NOT NULL, synapse_count INTEGER NOT NULL,
+            state TEXT NOT NULL DEFAULT 'undiscovered', discovered_at INTEGER,
+            synapse_type TEXT NOT NULL DEFAULT 'minor', points_required INTEGER NOT NULL DEFAULT 6000,
+            points_accumulated INTEGER NOT NULL DEFAULT 0, current_eta_minutes INTEGER,
+            sector_id TEXT, agi_reward INTEGER NOT NULL DEFAULT 10
+          )
+        `)
+        db.exec(`
+          INSERT INTO spaces_new (id, position_x, position_y, position_z, region, zone, synapse_count,
+            state, discovered_at, synapse_type, points_required, points_accumulated, current_eta_minutes, sector_id, agi_reward)
+          SELECT id, position_x, position_y, position_z, region, zone, synapse_count,
+            state, discovered_at, synapse_type, points_required, points_accumulated, current_eta_minutes, sector_id, agi_reward
+          FROM spaces
+        `)
+        db.exec('DROP TABLE spaces')
+        db.exec('ALTER TABLE spaces_new RENAME TO spaces')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_spaces_region ON spaces(region)')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_spaces_state ON spaces(state)')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_spaces_zone ON spaces(zone)')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_spaces_synapse_type ON spaces(synapse_type)')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_spaces_sector ON spaces(sector_id)')
+        console.log('  - Recreated spaces table')
+      }
+
+      // Recreate agents table if needed
+      if (hasDeprecatedAgentColumns) {
+        db.exec(`
+          CREATE TABLE agents_new (
+            id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'idle', position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL,
+            start_position_x REAL, start_position_y REAL, start_position_z REAL, target_space_id TEXT,
+            travel_start_time INTEGER, travel_duration INTEGER, traits TEXT NOT NULL DEFAULT '[]',
+            autopilot_enabled INTEGER NOT NULL DEFAULT 0, equipped_items TEXT NOT NULL DEFAULT '[]',
+            current_points_per_min INTEGER NOT NULL DEFAULT 100, spaces_discovered INTEGER NOT NULL DEFAULT 0,
+            total_agi_earned INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+            home_x REAL DEFAULT 0, home_y REAL DEFAULT 0, home_z REAL DEFAULT 0,
+            target_x REAL, target_y REAL, target_z REAL, current_space_id TEXT, solve_start_time INTEGER,
+            distance_traveled REAL DEFAULT 0, deployed_at INTEGER,
+            wander_dir_x REAL DEFAULT 0, wander_dir_y REAL DEFAULT 0, wander_dir_z REAL DEFAULT 0, wander_phase REAL DEFAULT 0,
+            creation_cost INTEGER DEFAULT 100, needs_repair INTEGER DEFAULT 0,
+            trance_active INTEGER DEFAULT 0, trance_end_time INTEGER, trance_level INTEGER DEFAULT 0,
+            autopilot_target_types TEXT NOT NULL DEFAULT '[]', autopilot_max_points_cap INTEGER NOT NULL DEFAULT 0,
+            autopilot_avoid_crowded INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (target_space_id) REFERENCES spaces(id)
+          )
+        `)
+        db.exec(`
+          INSERT INTO agents_new (id, owner_id, name, state, position_x, position_y, position_z,
+            start_position_x, start_position_y, start_position_z, target_space_id,
+            travel_start_time, travel_duration, traits, autopilot_enabled, equipped_items,
+            current_points_per_min, spaces_discovered, total_agi_earned, created_at,
+            home_x, home_y, home_z, target_x, target_y, target_z, current_space_id,
+            solve_start_time, distance_traveled, deployed_at, wander_dir_x, wander_dir_y,
+            wander_dir_z, wander_phase, creation_cost, needs_repair, trance_active,
+            trance_end_time, trance_level, autopilot_target_types, autopilot_max_points_cap, autopilot_avoid_crowded)
+          SELECT id, owner_id, name, state, position_x, position_y, position_z,
+            start_position_x, start_position_y, start_position_z, target_space_id,
+            travel_start_time, travel_duration, traits, COALESCE(autopilot_enabled, 0), COALESCE(equipped_items, '[]'),
+            COALESCE(current_points_per_min, 100), spaces_discovered, COALESCE(total_agi_earned, 0), created_at,
+            COALESCE(home_x, 0), COALESCE(home_y, 0), COALESCE(home_z, 0), target_x, target_y, target_z, current_space_id,
+            solve_start_time, COALESCE(distance_traveled, 0), deployed_at, COALESCE(wander_dir_x, 0), COALESCE(wander_dir_y, 0),
+            COALESCE(wander_dir_z, 0), COALESCE(wander_phase, 0), COALESCE(creation_cost, 100), COALESCE(needs_repair, 0), COALESCE(trance_active, 0),
+            trance_end_time, COALESCE(trance_level, 0), COALESCE(autopilot_target_types, '[]'), COALESCE(autopilot_max_points_cap, 0),
+            COALESCE(autopilot_avoid_crowded, 0)
+          FROM agents
+        `)
+        db.exec('DROP TABLE agents')
+        db.exec('ALTER TABLE agents_new RENAME TO agents')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_agents_owner ON agents(owner_id)')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_agents_state ON agents(state)')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_agents_target ON agents(target_space_id)')
+        console.log('  - Recreated agents table')
+      }
+
+      // Recreate users table if needed
+      if (hasDeprecatedUserColumns) {
+        db.exec(`
+        CREATE TABLE IF NOT EXISTS users_new (
+          id TEXT PRIMARY KEY,
+          wallet TEXT UNIQUE NOT NULL,
+          tier TEXT NOT NULL DEFAULT 'free',
+          staked_amount REAL NOT NULL DEFAULT 0,
+          points REAL NOT NULL DEFAULT 1000,
+          total_loot_earned INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          user_level INTEGER NOT NULL DEFAULT 1,
+          usdc_spent REAL NOT NULL DEFAULT 0,
+          agentic_balance INTEGER NOT NULL DEFAULT 0,
+          total_agi_earned INTEGER NOT NULL DEFAULT 0,
+          total_teneo_earned INTEGER NOT NULL DEFAULT 0,
+          lottery_tickets INTEGER NOT NULL DEFAULT 0,
+          nft_count INTEGER NOT NULL DEFAULT 0,
+          max_ships INTEGER NOT NULL DEFAULT 1,
+          auth_nonce TEXT,
+          auth_nonce_issued_at INTEGER,
+          is_admin INTEGER NOT NULL DEFAULT 0,
+          banned_at INTEGER,
+          ban_reason TEXT
+        )
+      `)
+
+      db.exec(`
+        INSERT INTO users_new (
+          id, wallet, tier, staked_amount, points, total_loot_earned, created_at,
+          user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned,
+          lottery_tickets, nft_count, max_ships, auth_nonce, auth_nonce_issued_at,
+          is_admin, banned_at, ban_reason
+        )
+        SELECT
+          id, wallet, tier, staked_amount, points, total_loot_earned, created_at,
+          COALESCE(user_level, 1), COALESCE(usdc_spent, 0), COALESCE(agentic_balance, 0),
+          COALESCE(total_agi_earned, 0), COALESCE(total_teneo_earned, 0),
+          COALESCE(lottery_tickets, 0), COALESCE(nft_count, 0), COALESCE(max_ships, 1),
+          auth_nonce, auth_nonce_issued_at, COALESCE(is_admin, 0), banned_at, ban_reason
+        FROM users
+      `)
+
+        db.exec('DROP TABLE users')
+        db.exec('ALTER TABLE users_new RENAME TO users')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_users_wallet ON users(wallet)')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_users_level ON users(user_level)')
+        console.log('  - Recreated users table')
+      }
+
+      // Recreate space_clusters table if it has deprecated columns
+      const clusterColumns = db.prepare("PRAGMA table_info(space_clusters)").all() as { name: string }[]
+      const clusterColumnNames = clusterColumns.map(c => c.name)
+      const hasDeprecatedClusterColumns = clusterColumnNames.includes('avg_loot_pool')
+
+      if (hasDeprecatedClusterColumns) {
+        db.exec(`
+          CREATE TABLE space_clusters_new (
+            id TEXT PRIMARY KEY, lod_level INTEGER NOT NULL,
+            position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL,
+            space_count INTEGER NOT NULL, discovered_count INTEGER NOT NULL DEFAULT 0,
+            being_solved_count INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL
+          )
+        `)
+        db.exec(`
+          INSERT INTO space_clusters_new (id, lod_level, position_x, position_y, position_z,
+            space_count, discovered_count, being_solved_count, updated_at)
+          SELECT id, lod_level, position_x, position_y, position_z,
+            space_count, discovered_count, being_solved_count, updated_at
+          FROM space_clusters
+        `)
+        db.exec('DROP TABLE space_clusters')
+        db.exec('ALTER TABLE space_clusters_new RENAME TO space_clusters')
+        db.exec('CREATE INDEX IF NOT EXISTS idx_space_clusters_lod ON space_clusters(lod_level)')
+        console.log('  - Recreated space_clusters table')
+      }
+
+      console.log('[Migration 17] Deprecated fields removed successfully')
+      console.log('')
+      console.log('  REMOVED FIELDS:')
+      console.log('  - spaces: base_probability, solve_progress, loot_pool, brain_xp_reward')
+      console.log('  - agents: points_balance, points_burn_rate, total_points_burned, total_loot, total_brain_xp_earned')
+      console.log('  - users: brain_level, brain_xp, total_brain_xp')
+      console.log('  - space_clusters: avg_loot_pool')
+      console.log('  - space_solvers table (dropped)')
+    },
+  },
 ]
 
 // Create migrations tracking table
@@ -570,6 +877,9 @@ export function runMigrations(db: DatabaseType) {
 
   console.log(`Running ${pendingMigrations.length} migration(s)...`)
 
+  // Disable foreign keys for migrations (must be outside transaction)
+  db.pragma('foreign_keys = OFF')
+
   for (const migration of pendingMigrations) {
     console.log(`  Applying migration ${migration.version}: ${migration.name}`)
 
@@ -588,27 +898,14 @@ export function runMigrations(db: DatabaseType) {
       console.log(`  Migration ${migration.version} applied successfully`)
     } catch (error) {
       console.error(`  Migration ${migration.version} failed:`, error)
+      // Re-enable foreign keys before throwing
+      db.pragma('foreign_keys = ON')
       throw error
     }
   }
 
+  // Re-enable foreign keys after all migrations
+  db.pragma('foreign_keys = ON')
+
   console.log(`Database migrated to version ${migrations[migrations.length - 1].version}`)
-}
-
-// Check migration status without running
-export function getMigrationStatus(db: DatabaseType) {
-  ensureMigrationsTable(db)
-
-  const currentVersion = getCurrentVersion(db)
-  const pendingCount = migrations.filter(m => m.version > currentVersion).length
-
-  return {
-    currentVersion,
-    latestVersion: migrations.length > 0 ? migrations[migrations.length - 1].version : 0,
-    pendingCount,
-    migrations: migrations.map(m => ({
-      ...m,
-      applied: m.version <= currentVersion,
-    })),
-  }
 }

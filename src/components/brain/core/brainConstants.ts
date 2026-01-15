@@ -89,9 +89,16 @@ export const SHIP_ZOOM_CONFIG = {
   closeZoomDistance: 0.5,        // Camera offset when zooming to ship
   modelVisibleThreshold: 1.0,    // Show 3D model when camera < this distance
   transitionZone: 0.3,           // Opacity blend range
-  zoomOffset: [0.15, 0.1, 0.5] as const,  // Camera offset from ship position [x, y, z]
+  zoomOffset: [0.7, 0.25, 0.5] as const,  // Camera offset from ship position [x, y, z] - zoomed out more
   animationDuration: 800,        // Zoom animation ms
   minDistanceOverride: 0.3,      // Temporary minDistance during ship zoom
+} as const
+
+// Ship follow configuration - for smooth camera tracking during ship movement
+export const SHIP_FOLLOW_CONFIG = {
+  followLerpSpeed: 2.5,          // How fast camera follows ship (lower = smoother, more cinematic)
+  followOffset: [0.7, 0.25, 0.5] as const,  // Camera offset while following [x, y, z]
+  initialZoomDuration: 800,      // Initial zoom animation duration ms
 } as const
 
 // LOD thresholds (camera distance)

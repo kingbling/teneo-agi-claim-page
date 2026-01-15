@@ -140,16 +140,6 @@ export const RING_FRAGMENT_SHADER = `
   }
 `
 
-// Helper: Create shader material uniforms object
-export function createTimeUniform(initialTime = 0) {
-  return { uTime: { value: initialTime } }
-}
-
-// Helper: Create color uniform
-export function createColorUniform(r: number, g: number, b: number) {
-  return { uColor: { value: [r, g, b] } }
-}
-
 // Region-aware brain particle vertex shader - tiny crisp dots with distance scaling
 // Supports depth-based visibility when zoomed on ship
 export const BRAIN_REGION_VERTEX_SHADER = `
