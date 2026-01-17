@@ -7,8 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview",
-    "db:init": "cd server && npm run db:init"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@kobalte/core": "^0.13.9",
@@ -16,7 +15,6 @@
     "@tanstack/solid-query": "^5.80.7",
     "@wagmi/connectors": "^7.1.2",
     "@wagmi/core": "^3.2.2",
-    "better-sqlite3": "^12.5.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "framer-motion": "^11.18.0",
@@ -29,13 +27,11 @@
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@tailwindcss/vite": "^4.1.18",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.10.1",
     "@types/three": "^0.182.0",
     "eslint": "^9.39.1",
     "globals": "^16.5.0",
     "tailwindcss": "^4.1.18",
-    "tsx": "^4.21.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",

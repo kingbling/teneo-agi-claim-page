@@ -1,4 +1,5 @@
 import { onMount, onCleanup, createEffect } from 'solid-js'
+import { authStore } from '@/stores/authStore'
 import { shipStore } from '@/stores/shipStore'
 import { userStore } from '@/stores/userStore'
 
@@ -25,13 +26,18 @@ export function useWebSocketConnection() {
 
     if (userId && ws && ws.readyState === WebSocket.OPEN) {
       // User just logged in - send auth token
-      const token = localStorage.getItem('teneo_auth_token')
+      const token = authStore.token
       if (token) {
         ws.send(JSON.stringify({
           type: 'auth:identify',
           data: { token },
         }))
       }
+      // Also fetch ships via REST as fallback (WebSocket ships:sync may not arrive immediately)
+      shipStore.fetchUserShips()
+    } else if (userId && (!ws || ws.readyState !== WebSocket.OPEN)) {
+      // User logged in but WebSocket not ready - fetch ships via REST
+      shipStore.fetchUserShips()
     } else if (!userId && ws && ws.readyState === WebSocket.OPEN) {
       // User logged out - clear auth
       ws.send(JSON.stringify({

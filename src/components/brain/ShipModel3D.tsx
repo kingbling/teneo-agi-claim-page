@@ -1,15 +1,17 @@
 /**
- * ShipModel3D - Sci-Fi Interceptor Fighter
+ * ShipModel3D - Multi-type Ship Renderer
  *
- * A sleek, aggressive fighter design inspired by modern stealth aircraft.
- * Features: needle nose, diamond fuselage, swept wings, twin engines, canted stabilizers.
+ * Supports three distinct ship types:
+ * - Neuron: Agile interceptor with diamond fuselage, swept delta wings, twin engines
+ * - Synapse: Heavy explorer with wide rectangular hull, stubby wings, quad engines
+ * - Dendrite: Sleek scout with long needle fuselage, minimal fins, single large engine
  */
 
 import { onMount, onCleanup, createEffect, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
-import { BRAIN_SCALE } from './core/brainConstants'
-import type { Ship, ShipStatus } from '@/stores/shipStore'
+import { BRAIN_SCALE, constrainToBrainShape } from './core/brainConstants'
+import type { Ship, ShipStatus, ShipType } from '@/stores/shipStore'
 
 interface ShipModel3DProps {
   ship: Ship
@@ -298,9 +300,9 @@ function createCockpitGeometry(S: number): THREE.BufferGeometry {
 }
 
 /**
- * Creates complete ship geometry group
+ * Creates Neuron ship geometry (agile interceptor) - the original design
  */
-function createShipGeometry(): THREE.Group {
+function createNeuronGeometry(): THREE.Group {
   const shipGroup = new THREE.Group()
   const S = SHIP_SCALE
 
@@ -412,6 +414,276 @@ function createShipGeometry(): THREE.Group {
   shipGroup.add(shipLight)
 
   return shipGroup
+}
+
+/**
+ * Creates Synapse ship geometry (heavy explorer)
+ * Wide rectangular hull, stubby wings with sensor pods, quad engines
+ */
+function createSynapseGeometry(): THREE.Group {
+  const shipGroup = new THREE.Group()
+  const S = SHIP_SCALE
+
+  // === WIDE RECTANGULAR HULL ===
+  // Synapse is 1.2x length, 2x width of Neuron
+  const hullWidth = S * 0.18
+  const hullHeight = S * 0.06
+  const hullLength = S * 1.0
+
+  const hullGeom = new THREE.BoxGeometry(hullWidth, hullHeight, hullLength)
+  // Bevel the edges slightly by applying a matrix
+  const hull = new THREE.Mesh(hullGeom)
+  hull.name = 'hull'
+  hull.position.z = S * 0.1
+  shipGroup.add(hull)
+
+  // === STUBBY WINGS WITH SENSOR PODS ===
+  const wingGeom = new THREE.BoxGeometry(S * 0.3, S * 0.015, S * 0.2)
+
+  const leftWing = new THREE.Mesh(wingGeom)
+  leftWing.position.set(S * 0.22, 0, S * 0.15)
+  leftWing.name = 'wing'
+  shipGroup.add(leftWing)
+
+  const rightWing = new THREE.Mesh(wingGeom.clone())
+  rightWing.position.set(-S * 0.22, 0, S * 0.15)
+  rightWing.name = 'wing'
+  shipGroup.add(rightWing)
+
+  // Sensor pods at wing tips
+  const podGeom = new THREE.SphereGeometry(S * 0.025, 8, 8)
+
+  const leftPod = new THREE.Mesh(podGeom)
+  leftPod.position.set(S * 0.4, 0, S * 0.15)
+  leftPod.name = 'accent'
+  shipGroup.add(leftPod)
+
+  const rightPod = new THREE.Mesh(podGeom.clone())
+  rightPod.position.set(-S * 0.4, 0, S * 0.15)
+  rightPod.name = 'accent'
+  shipGroup.add(rightPod)
+
+  // === QUAD ENGINES (2x2 grid) ===
+  const engineRadius = S * 0.022
+  const engineLength = S * 0.15
+  const engineGeom = new THREE.CylinderGeometry(
+    engineRadius * 0.8,
+    engineRadius,
+    engineLength,
+    6
+  )
+
+  const enginePositions = [
+    [S * 0.05, -S * 0.015, S * 0.55],
+    [-S * 0.05, -S * 0.015, S * 0.55],
+    [S * 0.05, S * 0.015, S * 0.55],
+    [-S * 0.05, S * 0.015, S * 0.55],
+  ]
+
+  enginePositions.forEach(([x, y, z]) => {
+    const engine = new THREE.Mesh(engineGeom.clone())
+    engine.rotation.x = Math.PI / 2
+    engine.position.set(x, y, z)
+    engine.name = 'engine'
+    shipGroup.add(engine)
+  })
+
+  // === ENGINE GLOWS ===
+  const glowGeom = new THREE.CircleGeometry(engineRadius * 1.1, 12)
+
+  enginePositions.forEach(([x, y, z]) => {
+    const glow = new THREE.Mesh(glowGeom.clone())
+    glow.rotation.x = Math.PI / 2
+    glow.position.set(x, y, z + S * 0.08)
+    glow.name = 'engineGlow'
+    shipGroup.add(glow)
+
+    const coreGeom = new THREE.CircleGeometry(engineRadius * 0.4, 8)
+    const core = new THREE.Mesh(coreGeom)
+    core.rotation.x = Math.PI / 2
+    core.position.set(x, y, z + S * 0.081)
+    core.name = 'engineCore'
+    shipGroup.add(core)
+  })
+
+  // === WIDE INDUSTRIAL CANOPY ===
+  const canopyWidth = S * 0.12
+  const canopyHeight = S * 0.035
+  const canopyLength = S * 0.15
+
+  const canopyGeom = new THREE.BoxGeometry(canopyWidth, canopyHeight, canopyLength)
+  const cockpit = new THREE.Mesh(canopyGeom)
+  cockpit.position.set(0, hullHeight / 2 + canopyHeight / 2, -S * 0.25)
+  cockpit.name = 'cockpit'
+  shipGroup.add(cockpit)
+
+  // === DORSAL SENSOR DISHES ===
+  const dishGeom = new THREE.CylinderGeometry(S * 0.02, S * 0.015, S * 0.008, 8)
+
+  const dishPositions = [
+    [0, hullHeight / 2 + S * 0.01, S * 0.0],
+    [0, hullHeight / 2 + S * 0.01, S * 0.15],
+    [0, hullHeight / 2 + S * 0.01, S * 0.3],
+  ]
+
+  dishPositions.forEach(([x, y, z]) => {
+    const dish = new THREE.Mesh(dishGeom.clone())
+    dish.position.set(x, y, z)
+    dish.name = 'accent'
+    shipGroup.add(dish)
+  })
+
+  // === POINT LIGHT ===
+  const shipLight = new THREE.PointLight(0xffffff, 0.5, S * 2)
+  shipLight.position.set(0, S * 0.1, -S * 0.1)
+  shipGroup.add(shipLight)
+
+  return shipGroup
+}
+
+/**
+ * Creates Dendrite ship geometry (sleek scout)
+ * Long needle fuselage, minimal fins, single large engine, whisker spines
+ */
+function createDendriteGeometry(): THREE.Group {
+  const shipGroup = new THREE.Group()
+  const S = SHIP_SCALE
+
+  // === LONG NEEDLE HULL ===
+  // Dendrite is 1.5x length, 0.5x width of Neuron
+  const hullLength = S * 1.3
+  const hullRadius = S * 0.03
+
+  // Tapered cylinder for needle shape
+  const hullGeom = new THREE.CylinderGeometry(
+    hullRadius * 0.3,  // Nose (thin)
+    hullRadius,        // Rear (wider)
+    hullLength,
+    12
+  )
+  const hull = new THREE.Mesh(hullGeom)
+  hull.rotation.x = Math.PI / 2
+  hull.position.z = S * 0.15
+  hull.name = 'hull'
+  shipGroup.add(hull)
+
+  // === X-PATTERN DELTA FINS (4 small fins) ===
+  const finGeom = new THREE.BufferGeometry()
+  const finVerts = new Float32Array([
+    // Triangle fin
+    0, 0, S * 0.35,           // Root front
+    0, 0, S * 0.55,           // Root rear
+    S * 0.08, S * 0.08, S * 0.5,  // Tip
+  ])
+  finGeom.setAttribute('position', new THREE.BufferAttribute(finVerts, 3))
+  finGeom.computeVertexNormals()
+
+  // 4 fins in X-pattern (rotated 45 degrees)
+  const finAngles = [Math.PI / 4, 3 * Math.PI / 4, 5 * Math.PI / 4, 7 * Math.PI / 4]
+  finAngles.forEach(angle => {
+    const fin = new THREE.Mesh(finGeom.clone())
+    fin.rotation.z = angle
+    fin.name = 'wing'
+    shipGroup.add(fin)
+  })
+
+  // === SINGLE LARGE ENGINE ===
+  const engineRadius = S * 0.04
+  const engineLength = S * 0.2
+
+  const engineGeom = new THREE.CylinderGeometry(
+    engineRadius * 0.6,
+    engineRadius,
+    engineLength,
+    12
+  )
+  const engine = new THREE.Mesh(engineGeom)
+  engine.rotation.x = Math.PI / 2
+  engine.position.set(0, 0, S * 0.65)
+  engine.name = 'engine'
+  shipGroup.add(engine)
+
+  // Extended nozzle with glow rings
+  const nozzleGeom = new THREE.TorusGeometry(engineRadius * 0.8, S * 0.005, 8, 16)
+  const ringPositions = [S * 0.72, S * 0.76, S * 0.80]
+  ringPositions.forEach(z => {
+    const ring = new THREE.Mesh(nozzleGeom.clone())
+    ring.rotation.x = Math.PI / 2
+    ring.position.set(0, 0, z)
+    ring.name = 'engineGlow'
+    shipGroup.add(ring)
+  })
+
+  // Main engine glow
+  const glowGeom = new THREE.CircleGeometry(engineRadius * 1.3, 16)
+  const glow = new THREE.Mesh(glowGeom)
+  glow.rotation.x = Math.PI / 2
+  glow.position.set(0, 0, S * 0.76)
+  glow.name = 'engineGlow'
+  shipGroup.add(glow)
+
+  const coreGeom = new THREE.CircleGeometry(engineRadius * 0.6, 12)
+  const core = new THREE.Mesh(coreGeom)
+  core.rotation.x = Math.PI / 2
+  core.position.set(0, 0, S * 0.761)
+  core.name = 'engineCore'
+  shipGroup.add(core)
+
+  // === BUBBLE COCKPIT ===
+  const cockpitGeom = new THREE.SphereGeometry(S * 0.04, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2)
+  const cockpit = new THREE.Mesh(cockpitGeom)
+  cockpit.rotation.x = -Math.PI / 2
+  cockpit.position.set(0, hullRadius * 0.8, -S * 0.35)
+  cockpit.name = 'cockpit'
+  shipGroup.add(cockpit)
+
+  // === WHISKER SPINES (dendrite branches) ===
+  const spineGeom = new THREE.CylinderGeometry(S * 0.002, S * 0.001, S * 0.15, 4)
+
+  // 6 whiskers at various angles from the nose
+  const spineData = [
+    { angle: 0, tilt: 0.3, z: -S * 0.4 },
+    { angle: Math.PI / 3, tilt: 0.25, z: -S * 0.35 },
+    { angle: 2 * Math.PI / 3, tilt: 0.25, z: -S * 0.35 },
+    { angle: Math.PI, tilt: 0.3, z: -S * 0.4 },
+    { angle: 4 * Math.PI / 3, tilt: 0.25, z: -S * 0.35 },
+    { angle: 5 * Math.PI / 3, tilt: 0.25, z: -S * 0.35 },
+  ]
+
+  spineData.forEach(({ angle, tilt, z }) => {
+    const spine = new THREE.Mesh(spineGeom.clone())
+    spine.rotation.x = tilt
+    spine.rotation.z = angle
+    spine.position.set(
+      Math.cos(angle) * S * 0.02,
+      Math.sin(angle) * S * 0.02,
+      z
+    )
+    spine.name = 'accent'
+    shipGroup.add(spine)
+  })
+
+  // === POINT LIGHT ===
+  const shipLight = new THREE.PointLight(0xffffff, 0.5, S * 2)
+  shipLight.position.set(0, S * 0.1, -S * 0.2)
+  shipGroup.add(shipLight)
+
+  return shipGroup
+}
+
+/**
+ * Creates ship geometry based on ship type
+ */
+function createShipGeometry(shipType: ShipType): THREE.Group {
+  switch (shipType) {
+    case 'synapse':
+      return createSynapseGeometry()
+    case 'dendrite':
+      return createDendriteGeometry()
+    case 'neuron':
+    default:
+      return createNeuronGeometry()
+  }
 }
 
 /**
@@ -585,7 +857,9 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
     const sceneObj = scene()
     if (!sceneObj) return
 
-    shipGroup = createShipGeometry()
+    // Use ship type with fallback to 'neuron' for backwards compatibility
+    const shipType = props.ship.shipType || 'neuron'
+    shipGroup = createShipGeometry(shipType)
     materials = createShipMaterials(props.ship.state)
 
     engineTrail = createEngineTrail(getEngineColor(props.ship.state))
@@ -636,6 +910,11 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
   let targetPosition = new THREE.Vector3()
   let positionInitialized = false
 
+  // Track target rotation for smooth interpolation
+  let targetRotationY = 0
+  let currentRotationY = 0
+  let rotationInitialized = false
+
   createEffect(() => {
     if (!shipGroup) return
     const pos = getShipWorldPosition(props.ship)
@@ -647,6 +926,18 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
       positionInitialized = true
     }
     // Otherwise, position will be lerped in useFrame
+  })
+
+  // Update target rotation when ship rotationY changes
+  createEffect(() => {
+    if (props.ship.rotationY !== undefined) {
+      targetRotationY = props.ship.rotationY
+      // Initialize rotation immediately on first set
+      if (!rotationInitialized && shipGroup) {
+        currentRotationY = targetRotationY
+        rotationInitialized = true
+      }
+    }
   })
 
   createEffect(() => {
@@ -691,7 +982,24 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
     const lerpFactor = 1.0 - Math.exp(-4.0 * deltaTime)  // Same speed as AgentMarkers
     shipGroup.position.lerp(targetPosition, lerpFactor)
 
+    // Smooth rotation interpolation toward target
+    if (props.ship.state === 'deploying') {
+      // Calculate shortest rotation path (handle angle wrapping)
+      let rotDelta = targetRotationY - currentRotationY
+      // Normalize to [-PI, PI] range
+      while (rotDelta > Math.PI) rotDelta -= Math.PI * 2
+      while (rotDelta < -Math.PI) rotDelta += Math.PI * 2
+      // Slerp toward target
+      currentRotationY += rotDelta * lerpFactor * 2  // Slightly faster rotation
+      shipGroup.rotation.y = currentRotationY
+    } else {
+      // Gradually return to neutral rotation when not traveling
+      currentRotationY *= (1.0 - lerpFactor * 0.5)
+      shipGroup.rotation.y = currentRotationY
+    }
+
     // Very subtle hover motion - reduced 75% to minimize camera jitter during follow
+    // Applied as secondary rotation on top of travel direction
     shipGroup.rotation.x = Math.sin(time * 0.8) * 0.015
     shipGroup.rotation.z = Math.sin(time * 0.6) * 0.01
     shipGroup.position.y += Math.sin(time * 1.2) * 0.0005
@@ -749,11 +1057,13 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
 }
 
 function getShipWorldPosition(ship: Ship): THREE.Vector3 {
-  return new THREE.Vector3(
-    ship.positionX * BRAIN_SCALE.x,
-    ship.positionY * BRAIN_SCALE.y,
-    ship.positionZ * BRAIN_SCALE.z
+  // Use same coordinate transformation as synapses for visual consistency
+  const [x, y, z] = constrainToBrainShape(
+    ship.positionX,
+    ship.positionY,
+    ship.positionZ
   )
+  return new THREE.Vector3(x, y, z)
 }
 
 export default ShipModel3D

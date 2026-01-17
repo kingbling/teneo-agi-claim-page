@@ -108,11 +108,65 @@ export const LOD_THRESHOLDS = {
   lod2: Infinity, // Far view
 } as const
 
-// Particle counts per LOD level - reduced for cleaner visuals
+// Particle counts per LOD level - reduced for cleaner visuals and better performance
 export const LOD_PARTICLE_COUNTS = {
-  lod0: 1500,    // Close view - very sparse for ship focus
-  lod1: 3000,    // Medium view
-  lod2: 5000,    // Far view
+  lod0: 1000,    // Close view - very sparse for ship focus (reduced from 1500 for performance)
+  lod1: 2500,    // Medium view (reduced from 3000)
+  lod2: 4000,    // Far view (reduced from 5000)
+} as const
+
+// ============================================================================
+// SHIP MARKER SHADER CONSTANTS
+// Extracted from AgentMarkers.tsx for maintainability
+// ============================================================================
+
+// Ship marker rendering
+export const SHIP_MARKER_CONFIG = {
+  pointSize: 6.0,              // Base point size
+  distanceScale: 80.0,         // Distance-based scaling divisor
+  minPointSize: 2.0,           // Minimum clamped point size
+  maxPointSize: 12.0,          // Maximum clamped point size
+} as const
+
+// Ship state pulse animations (frequency in Hz, amplitude as multiplier)
+export const SHIP_STATE_PULSE = {
+  idle: { frequency: 1.0, amplitude: 0.1 },       // Subtle breathing
+  searching: { frequency: 2.5, amplitude: 0.18 }, // Wandering pulse
+  exploring: { frequency: 3.0, amplitude: 0.2 },  // Active pulsing
+  deploying: { frequency: 5.0, amplitude: 0.25 }, // Rapid pulse
+  returning: { frequency: 2.0, amplitude: 0.15 }, // Gentle pulse
+} as const
+
+// Ship marker shape (diamond)
+export const SHIP_SHAPE_CONFIG = {
+  coreInner: 0.2,              // Core smoothstep start
+  coreOuter: 0.28,             // Core smoothstep end
+  glowInner: 0.25,             // Glow smoothstep start
+  glowOuter: 0.5,              // Glow smoothstep end
+  coreBrightness: 1.3,         // Core color multiplier
+  glowBrightness: 0.7,         // Glow color multiplier
+} as const
+
+// Ship engine glow
+export const SHIP_ENGINE_CONFIG = {
+  radius: 0.12,                // Engine glow radius
+  idleIntensity: 0.25,         // Idle engine brightness
+  activeIntensity: 0.6,        // Active engine brightness
+  idleFlickerFreq: 1.5,        // Idle flicker frequency
+  activeFlickerFreq: 10.0,     // Active flicker frequency
+  idleFlickerAmp: 0.2,         // Idle flicker amplitude
+  activeFlickerAmp: 0.3,       // Active flicker amplitude
+  idleColor: [0.4, 0.7, 1.0],  // Soft cyan for idle
+  activeColor: [1.0, 0.5, 0.1], // Orange for active
+} as const
+
+// Ship state colors (RGB values for shader)
+export const SHIP_STATE_COLORS = {
+  idle: [0.6, 0.7, 0.85],       // Blue-gray for visibility
+  searching: [0.87, 0.53, 0.87], // Magenta/purple - actively searching
+  exploring: [0.0, 0.87, 0.87],  // Bright cyan
+  deploying: [0.87, 0.67, 0.0],  // Bright orange
+  returning: [0.53, 0.87, 0.53], // Bright green
 } as const
 
 /**

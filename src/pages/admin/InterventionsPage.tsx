@@ -5,6 +5,7 @@
 import { createSignal, Show, For, onMount } from 'solid-js'
 import { RefreshCw, Ship, Zap, AlertTriangle } from 'lucide-solid'
 import { adminStore } from '@/stores/adminStore'
+import { authStore } from '@/stores/authStore'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -34,7 +35,7 @@ export default function InterventionsPage() {
 
   const fetchStuckShips = async () => {
     const response = await fetch(`${API_URL}/api/admin/agents/status/stuck?hours=12`, {
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('teneo_auth_token')}` },
+      headers: authStore.getAuthHeader(),
     })
     if (response.ok) {
       const data = await response.json()

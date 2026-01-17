@@ -9,37 +9,10 @@ import {
   getUnlockedSynapseTypes,
 } from '@/types/game'
 import { authStore } from './authStore'
+import { shipStore } from './shipStore'
 
 // API Configuration - empty string means same-origin (App Platform deployment)
 const API_URL = import.meta.env.VITE_API_URL ?? ''
-
-// localStorage keys
-const STORAGE_KEY_WALLET = 'teneo_wallet'
-
-// Persistence helpers
-function saveWalletToStorage(wallet: string) {
-  try {
-    localStorage.setItem(STORAGE_KEY_WALLET, wallet)
-  } catch {
-    // localStorage might be disabled
-  }
-}
-
-function loadWalletFromStorage(): string | null {
-  try {
-    return localStorage.getItem(STORAGE_KEY_WALLET)
-  } catch {
-    return null
-  }
-}
-
-function clearWalletFromStorage() {
-  try {
-    localStorage.removeItem(STORAGE_KEY_WALLET)
-  } catch {
-    // localStorage might be disabled
-  }
-}
 
 // ============================================================================
 // MASTERPLAN 2026: USER STORE
@@ -145,9 +118,6 @@ function createUserStore() {
       const userLevel = calculateUserLevel(user.usdc_spent || 0)
       const levelConfig = getUserLevelConfig(userLevel)
 
-      // Save wallet to localStorage for persistence
-      saveWalletToStorage(wallet)
-
       setState({
         userId: user.id,
         userWallet: user.wallet,
@@ -187,18 +157,13 @@ function createUserStore() {
   }
 
   const logout = () => {
-    clearWalletFromStorage()
+    // CRITICAL: Clear ship selection and user ships before resetting user state
+    // This prevents data leakage between users (e.g., User A's ship details visible to User B)
+    shipStore.selectShip(null)
+    shipStore.clearUserShips()
+
     authStore.clearAuth()
     setState({ ...initialState })
-  }
-
-  // Auto-login from stored wallet
-  const initFromStorage = async (): Promise<boolean> => {
-    const storedWallet = loadWalletFromStorage()
-    if (storedWallet) {
-      return loginUser(storedWallet)
-    }
-    return false
   }
 
   // ============ USDC SPENDING ============
@@ -341,7 +306,6 @@ function createUserStore() {
     // Authentication
     loginUser,
     logout,
-    initFromStorage,
 
     // USDC Spending
     recordUSDCSpent,

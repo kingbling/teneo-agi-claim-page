@@ -8,6 +8,7 @@ import { type Component, Show, createMemo } from 'solid-js'
 import { LogOut, Loader2 } from 'lucide-solid'
 import { authStore } from '@/stores/authStore'
 import { userStore } from '@/stores/userStore'
+import { shipStore } from '@/stores/shipStore'
 
 // MetaMask Fox Logo SVG
 const MetaMaskLogo: Component<{ class?: string }> = (props) => (
@@ -63,6 +64,8 @@ export const ConnectWallet: Component<ConnectWalletProps> = (props) => {
   }
 
   const handleDisconnect = () => {
+    // Clear ship state first to prevent any lingering data
+    shipStore.clearUserShips()
     authStore.logout()
     userStore.logout()
   }

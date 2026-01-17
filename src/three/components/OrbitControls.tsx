@@ -23,6 +23,8 @@ interface OrbitControlsProps {
   target?: [number, number, number]
   makeDefault?: boolean
   ref?: (controls: ThreeOrbitControls) => void
+  onStart?: () => void
+  onEnd?: () => void
 }
 
 export function OrbitControls(props: OrbitControlsProps) {
@@ -61,7 +63,15 @@ export function OrbitControls(props: OrbitControlsProps) {
       props.ref(controls)
     }
 
+    // Add interaction event listeners
+    const handleStart = () => props.onStart?.()
+    const handleEnd = () => props.onEnd?.()
+    controls.addEventListener('start', handleStart)
+    controls.addEventListener('end', handleEnd)
+
     onCleanup(() => {
+      controls?.removeEventListener('start', handleStart)
+      controls?.removeEventListener('end', handleEnd)
       controls?.dispose()
     })
   })

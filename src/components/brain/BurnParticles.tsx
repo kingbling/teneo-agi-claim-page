@@ -2,7 +2,7 @@ import { onMount, onCleanup, createEffect, createMemo } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { Ship } from '@/stores/shipStore'
-import { BRAIN_SCALE, TRANCE_CONFIG } from './core/brainConstants'
+import { BRAIN_SCALE, TRANCE_CONFIG, constrainToBrainShape } from './core/brainConstants'
 
 interface BurnParticlesProps {
   userAgents: Ship[]
@@ -26,9 +26,10 @@ const BURN_VERTEX_SHADER = `
 
     vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
 
-    // Size based on life (fade out as it rises)
+    // Size based on life (fade out as it rises, with protective clamping for close camera)
     float lifeFactor = 1.0 - mod(uTime * 0.5 + aLife, 1.0);
-    gl_PointSize = aSize * lifeFactor * (300.0 / -mvPosition.z);
+    float distScale = 300.0 / max(-mvPosition.z, 1.0);
+    gl_PointSize = clamp(aSize * lifeFactor * distScale, 2.0, 48.0);
 
     gl_Position = projectionMatrix * mvPosition;
   }
@@ -98,9 +99,12 @@ export function BurnParticles(props: BurnParticlesProps) {
     const velocities = new Float32Array(count * 3)
 
     agents.forEach((agent, agentIndex) => {
-      const baseX = agent.positionX * BRAIN_SCALE.x
-      const baseY = agent.positionY * BRAIN_SCALE.y
-      const baseZ = agent.positionZ * BRAIN_SCALE.z
+      // Use same coordinate transformation as synapses for visual consistency
+      const [baseX, baseY, baseZ] = constrainToBrainShape(
+        agent.positionX,
+        agent.positionY,
+        agent.positionZ
+      )
 
       for (let p = 0; p < PARTICLES_PER_AGENT; p++) {
         const i = agentIndex * PARTICLES_PER_AGENT + p

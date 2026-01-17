@@ -1,19 +1,50 @@
 import { createRoot } from 'solid-js'
 import { createStore, produce } from 'solid-js/store'
 import type { SynapseType } from '@/types/game'
+import { authStore } from './authStore'
 import { userStore } from './userStore'
+import { toast } from '@/components/ui/Toast'
 
 // API Configuration - empty string means same-origin (App Platform deployment)
 const API_URL = import.meta.env.VITE_API_URL ?? ''
-const WS_URL = import.meta.env.VITE_WS_URL ?? ''
+// WebSocket URL - ensure /ws path is appended
+const WS_BASE = import.meta.env.VITE_WS_URL ?? ''
+const WS_URL = WS_BASE ? `${WS_BASE.replace(/\/$/, '')}/ws` : '/ws'
 
 // ============================================================================
 // MASTERPLAN 2026: SHIP STORE
 // Replaces agentStore - no fuel/traits, adds autopilot + items
 // ============================================================================
 
-// Ship Status (simplified from Agent)
-export type ShipStatus = 'idle' | 'searching' | 'exploring' | 'deploying' | 'returning'
+// State mapping: server uses 'being_solved'/'discovered', client uses 'being_explored'/'completed'
+function mapServerSynapseState(serverState: string): 'undiscovered' | 'being_explored' | 'completed' {
+  switch (serverState) {
+    case 'being_solved': return 'being_explored'
+    case 'discovered': return 'completed'
+    default: return serverState as 'undiscovered'
+  }
+}
+
+// Map server ship states to client ship states
+// Server sends: idle, traveling, solving, returning
+// Client expects: idle, deploying, exploring, returning
+function mapServerShipState(serverState: string): ShipStatus {
+  switch (serverState) {
+    case 'traveling': return 'deploying'
+    case 'solving': return 'exploring'
+    case 'returning': return 'returning'
+    case 'searching': return 'idle'  // Deprecated - treat as idle
+    case 'idle':
+    default:
+      return 'idle'
+  }
+}
+
+// Ship Status (simplified from Agent) - 'searching' removed as obsolete
+export type ShipStatus = 'idle' | 'exploring' | 'deploying' | 'returning'
+
+// Ship Type (visual style)
+export type ShipType = 'neuron' | 'synapse' | 'dendrite'
 
 // Equipped Item on a Ship
 export interface EquippedItem {
@@ -30,6 +61,7 @@ export interface Ship {
   ownerId: string
   name: string
   state: ShipStatus
+  shipType: ShipType
 
   // Position (for visualization)
   positionX: number
@@ -40,6 +72,11 @@ export interface Ship {
   startPositionX?: number
   startPositionY?: number
   startPositionZ?: number
+
+  // Target position (for travel path visualization) - destination when deploying
+  targetPositionX?: number
+  targetPositionY?: number
+  targetPositionZ?: number
 
   // Current synapse being explored
   currentSynapseId: string | null
@@ -58,10 +95,16 @@ export interface Ship {
   // Current points per minute spending rate
   currentPointsPerMin: number
 
+  // Rotation (for travel animation)
+  rotationY?: number  // Yaw rotation in radians - direction ship is facing
+
   // Stats
   spacesDiscovered: number
   totalAgiEarned: number
   createdAt: number
+
+  // Timestamp reconciliation - for optimistic updates
+  _lastLocalUpdate?: number  // Client-side timestamp when ship was last modified locally
 }
 
 // Autopilot Preferences
@@ -202,7 +245,7 @@ function mapServerClusterToClient(cluster: any): SynapseCluster {
 // World State
 export interface WorldState {
   synapseClusters: SynapseCluster[]
-  shipClusters: ShipCluster[]
+  agentClusters: ShipCluster[]  // Renamed from shipClusters to match server
   discoveryProgress: {
     total: number
     discovered: number
@@ -230,6 +273,10 @@ export interface SynapseDiscoveryEvent {
   isLottery: boolean
   winnerId?: string
   winnerShipId?: string
+  // Position for visual effects (discovery burst)
+  positionX: number
+  positionY: number
+  positionZ: number
 }
 
 // Loot Event
@@ -244,25 +291,78 @@ export interface LootEvent {
   timestamp: number
 }
 
+// Synapse Delta (compact state change notification)
+export interface SynapseDelta {
+  i: number  // Array index
+  s: number  // New state (0/1/2)
+}
+
+// Travel Started Event (sent when ship begins traveling)
+export interface TravelStartedEvent {
+  shipId: string
+  startPositionX: number
+  startPositionY: number
+  startPositionZ: number
+  targetPositionX: number
+  targetPositionY: number
+  targetPositionZ: number
+  travelStartTime: number
+  travelDuration: number
+  travelCost: number
+  targetSynapseId: string
+}
+
+// Travel Position Update (streamed during travel)
+export interface TravelPositionUpdate {
+  shipId: string
+  positionX: number
+  positionY: number
+  positionZ: number
+  rotationY: number  // Yaw - direction ship is facing
+  progress: number   // 0.0 to 1.0
+}
+
+// Travel Position Batch (batched updates for efficiency)
+export interface TravelPositionBatch {
+  ships: TravelPositionUpdate[]
+  timestamp: number
+}
+
 // Server Messages
 export type ServerMessage =
-  | { type: 'state:sync'; data: WorldState }
+  | { type: 'state:sync'; data: WorldState & { timestamp?: number } }
   | { type: 'synapse:completed'; data: SynapseDiscoveryEvent }
   | { type: 'loot:distributed'; data: LootEvent }
-  | { type: 'ships:update'; data: Ship[] }
+  | { type: 'ships:update'; data: { ships: Ship[]; timestamp?: number } }
   | { type: 'ships:sync'; data: { ships: Ship[]; timestamp: number } }  // Full ship state from server
+  | { type: 'travel:started'; data: TravelStartedEvent }  // Ship started traveling
+  | { type: 'travel:position'; data: TravelPositionBatch }  // Position updates during travel
   | { type: 'auth:success'; data: { userId: string } }
   | { type: 'auth:error'; data: { message: string } }
   | { type: 'agents:update'; data: any[] }  // Legacy - server agent updates
-  | { type: 'exploration:progress'; data: { synapseId: string; pointsAccumulated: number; eta: number } }
+  | { type: 'exploration:progress'; data: { synapseId: string; pointsAccumulated: number; eta?: number; currentETAMinutes?: number } }  // eta for legacy, currentETAMinutes for server naming
   | { type: 'lottery:winner'; data: { synapseId: string; winnerId: string; winnerShipId: string; reward: number } }
+  | { type: 'synapses:delta'; data: { c: SynapseDelta[]; t: number } }  // Compact delta updates
   | { type: 'error'; data: { message: string } }
+
+// Raw Synapse Data (500k individual points from binary endpoint)
+export interface RawSynapseData {
+  count: number
+  positions: Float32Array  // count * 3 (x, y, z interleaved)
+  states: Uint8Array       // count (0=undiscovered, 1=being_solved, 2=discovered)
+  types: Uint8Array        // count (0-6 mapping to synapse types)
+  version: number          // For invalidation/updates
+}
 
 // Store State
 export interface ShipStoreState {
   // Connection State
   isConnected: boolean
   ws: WebSocket | null
+
+  // Individual Synapse Data (500k points)
+  rawSynapseData: RawSynapseData | null
+  rawSynapseDataVersion: number  // Incremented on updates for reactivity
 
   // Synapse State (LOD clusters)
   synapseClusters: SynapseCluster[]
@@ -313,7 +413,11 @@ const initialState: ShipStoreState = {
   isConnected: false,
   ws: null,
 
-  // Synapses
+  // Individual Synapses (500k points)
+  rawSynapseData: null,
+  rawSynapseDataVersion: 0,
+
+  // Synapses (LOD clusters)
   synapseClusters: [],
   synapseClustersLod0: [],
   synapseClustersLod1: [],
@@ -371,6 +475,8 @@ function createShipStore() {
     switch (message.type) {
       case 'state:sync': {
         const world = message.data
+        console.log('[WebSocket state:sync] Received world:', world)
+        console.log('[WebSocket state:sync] Cluster count:', world.synapseClusters?.length)
 
         // Map server clusters to client format and separate by LOD level
         const rawClusters = world.synapseClusters || []
@@ -380,16 +486,18 @@ function createShipStore() {
         const synapseClustersLod1 = mappedClusters.filter(c => c.lodLevel === 1)
         const synapseClustersLod2 = mappedClusters.filter(c => c.lodLevel === 2)
 
-        const shipClustersLod0 = (world.shipClusters || []).filter(c => c.lodLevel === 0)
-        const shipClustersLod1 = (world.shipClusters || []).filter(c => c.lodLevel === 1)
-        const shipClustersLod2 = (world.shipClusters || []).filter(c => c.lodLevel === 2)
+        // Server sends agentClusters (was shipClusters)
+        const agentClusters = world.agentClusters || []
+        const shipClustersLod0 = agentClusters.filter(c => c.lodLevel === 0)
+        const shipClustersLod1 = agentClusters.filter(c => c.lodLevel === 1)
+        const shipClustersLod2 = agentClusters.filter(c => c.lodLevel === 2)
 
         setState({
           synapseClusters: mappedClusters,
           synapseClustersLod0,
           synapseClustersLod1,
           synapseClustersLod2,
-          shipClusters: world.shipClusters || [],
+          shipClusters: agentClusters,
           shipClustersLod0,
           shipClustersLod1,
           shipClustersLod2,
@@ -399,17 +507,83 @@ function createShipStore() {
       }
 
       case 'ships:sync': {
-        // Full ship state from server - replaces local state
-        const { ships } = message.data
+        // Full ship state from server - replaces local state with timestamp reconciliation
+        const { ships, timestamp } = message.data
+        console.log('[WebSocket ships:sync] Received ships:', ships?.length, ships)
         if (!Array.isArray(ships)) break
 
-        setState({
-          userShips: ships,
-          isLoadingShips: false,
-        })
+        setState(produce((s) => {
+          s.userShips = ships.map(serverShip => {
+            const localShip = s.userShips.find(ls => ls.id === serverShip.id)
+            // Keep local state if it was modified more recently than the server's timestamp
+            // This prevents flickering when user action is followed by stale WebSocket sync
+            if (localShip?._lastLocalUpdate && localShip._lastLocalUpdate > timestamp) {
+              return localShip
+            }
+            // Map server state to client state (server: traveling/solving → client: deploying/exploring)
+            return {
+              ...serverShip,
+              state: mapServerShipState(serverShip.state),
+            }
+          })
+          s.isLoadingShips = false
+        }))
 
         // Update ship count in userStore
         userStore.setCurrentShipCount(ships.length)
+        break
+      }
+
+      case 'travel:started': {
+        // Handle travel:started event - update ship with travel interpolation data
+        const event = message.data
+        console.log('[WebSocket travel:started] Ship traveling:', event.shipId)
+        const now = Date.now()
+        setState(produce((s) => {
+          // Use map pattern to ensure proper reactivity (like agents:update handler)
+          s.userShips = safeUserShips(s).map(ship => {
+            if (ship.id !== event.shipId) return ship
+            console.log('[WebSocket travel:started] Updating ship state to deploying:', ship.id)
+            return {
+              ...ship,
+              state: 'deploying' as const,
+              startPositionX: event.startPositionX,
+              startPositionY: event.startPositionY,
+              startPositionZ: event.startPositionZ,
+              targetPositionX: event.targetPositionX,
+              targetPositionY: event.targetPositionY,
+              targetPositionZ: event.targetPositionZ,
+              travelStartTime: event.travelStartTime,
+              travelDuration: event.travelDuration,
+              currentSynapseId: event.targetSynapseId,
+              // Set local timestamp to prevent ships:sync from overwriting
+              _lastLocalUpdate: now,
+            }
+          })
+        }))
+        break
+      }
+
+      case 'travel:position': {
+        // Handle travel:position event - streamed position/rotation updates during travel
+        const batch = message.data as TravelPositionBatch
+        if (!batch.ships?.length) break
+
+        setState(produce((s) => {
+          for (const update of batch.ships) {
+            const index = safeUserShips(s).findIndex(ship => ship.id === update.shipId)
+            if (index >= 0) {
+              // Update position and rotation from server stream
+              s.userShips[index] = {
+                ...s.userShips[index],
+                positionX: update.positionX,
+                positionY: update.positionY,
+                positionZ: update.positionZ,
+                rotationY: update.rotationY,
+              }
+            }
+          }
+        }))
         break
       }
 
@@ -420,6 +594,13 @@ function createShipStore() {
 
       case 'auth:error': {
         console.error('WebSocket auth failed:', message.data.message)
+        toast.error('Session expired. Please reconnect your wallet.')
+        // Clear ship state on auth failure to prevent stale data
+        setState({
+          userShips: [],
+          selectedShipId: null,
+          isLoadingShips: false,
+        })
         break
       }
 
@@ -449,44 +630,69 @@ function createShipStore() {
       }
 
       case 'ships:update': {
-        const updatedShips = message.data
+        // Partial ship updates with timestamp reconciliation
+        const { ships: updatedShips, timestamp } = message.data
         if (!Array.isArray(updatedShips)) break
+
         setState(produce((s) => {
-          // Update user's ships if any of them are in the update
           s.userShips = safeUserShips(s).map((ship) => {
             const updated = updatedShips.find(u => u.id === ship.id)
-            return updated || ship
+            if (!updated) return ship
+
+            // If we have a local update more recent than this server update, keep local state
+            if (ship._lastLocalUpdate && timestamp && ship._lastLocalUpdate > timestamp) {
+              return ship
+            }
+
+            // Merge the update, map server state to client state, preserve local timestamp
+            return {
+              ...updated,
+              state: mapServerShipState(updated.state),
+              _lastLocalUpdate: ship._lastLocalUpdate,
+            }
           })
         }))
         break
       }
 
       case 'agents:update': {
-        // Legacy handler - ships:sync is now preferred
-        // This can be used as fallback for position-only updates
+        // Agent updates from simulation engine - includes state changes on arrival
         const agents = message.data
+        console.log('[WebSocket agents:update] Received:', agents)
         if (!Array.isArray(agents)) break
 
-        // Only use this if we have ships but no ships:sync message came
-        // (backwards compatibility during transition)
-        if (safeUserShips(state).length === 0) break
+        // Only process if we have ships
+        if (safeUserShips(state).length === 0) {
+          console.log('[WebSocket agents:update] No user ships, skipping')
+          break
+        }
 
         setState(produce((s) => {
           s.userShips = safeUserShips(s).map((ship) => {
             const agent = agents.find(a => a.id === ship.id)
             if (!agent) return ship
 
-            // Only update position/travel data, not state (ships:sync handles state)
+            const newState = agent.state ? mapServerShipState(agent.state) : ship.state
+            console.log(`[WebSocket agents:update] Ship ${ship.id.slice(0,8)} state: ${ship.state} → ${newState} (server: ${agent.state})`)
+
+            // Update position and state (state is sent when ship arrives at destination)
             return {
               ...ship,
               positionX: agent.positionX ?? ship.positionX,
               positionY: agent.positionY ?? ship.positionY,
               positionZ: agent.positionZ ?? ship.positionZ,
-              startPositionX: agent.startPositionX ?? ship.startPositionX,
-              startPositionY: agent.startPositionY ?? ship.startPositionY,
-              startPositionZ: agent.startPositionZ ?? ship.startPositionZ,
-              travelStartTime: agent.travelStartTime ?? ship.travelStartTime,
-              travelDuration: agent.travelDuration ?? ship.travelDuration,
+              // Update state if provided (arrival transitions: traveling->solving, etc.)
+              state: newState,
+              // Update synapse ID if provided
+              currentSynapseId: agent.targetSpaceId !== undefined ? agent.targetSpaceId : ship.currentSynapseId,
+              // Clear travel data on arrival (when state changes from traveling)
+              ...(agent.state === 'solving' ? {
+                travelStartTime: null,
+                travelDuration: null,
+                startPositionX: undefined,
+                startPositionY: undefined,
+                startPositionZ: undefined,
+              } : {}),
             }
           })
         }))
@@ -494,12 +700,14 @@ function createShipStore() {
       }
 
       case 'exploration:progress': {
-        const { synapseId, pointsAccumulated, eta } = message.data
-        if (state.currentExplorationSynapse?.id === synapseId) {
+        const { synapseId, pointsAccumulated, eta, currentETAMinutes } = message.data
+        // Support both eta (legacy/client) and currentETAMinutes (server naming)
+        const etaMinutes = eta ?? currentETAMinutes
+        if (state.currentExplorationSynapse?.id === synapseId && etaMinutes !== undefined) {
           setState('currentExplorationSynapse', {
             ...state.currentExplorationSynapse,
             pointsAccumulated,
-            currentEtaMinutes: eta,
+            currentEtaMinutes: etaMinutes,
           })
         }
         break
@@ -507,6 +715,23 @@ function createShipStore() {
 
       case 'lottery:winner': {
         // Could trigger a notification UI here
+        break
+      }
+
+      case 'synapses:delta': {
+        // Compact delta updates for individual synapse state changes
+        const { c: changes } = message.data
+        if (!state.rawSynapseData || !changes?.length) break
+
+        // Update states in place
+        for (const { i, s } of changes) {
+          if (i < state.rawSynapseData.states.length) {
+            state.rawSynapseData.states[i] = s
+          }
+        }
+
+        // Increment version to trigger reactivity
+        setState('rawSynapseDataVersion', v => v + 1)
         break
       }
 
@@ -527,16 +752,19 @@ function createShipStore() {
   const connect = () => {
     if (state.ws) return
 
+    console.log('[WebSocket] Connecting to:', WS_URL)
     const socket = new WebSocket(WS_URL)
 
     socket.onopen = () => {
+      console.log('[WebSocket] Connected successfully')
       setState({ isConnected: true, ws: socket })
       // Reset backoff on successful connection
       reconnectDelay = INITIAL_RECONNECT_DELAY
 
       // Send auth token if available
-      const token = localStorage.getItem('teneo_auth_token')
+      const token = authStore.token
       if (token) {
+        console.log('[WebSocket] Sending auth:identify')
         socket.send(JSON.stringify({
           type: 'auth:identify',
           data: { token },
@@ -553,10 +781,12 @@ function createShipStore() {
       }
     }
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
+      console.log('[WebSocket] Disconnected, code:', event.code, 'reason:', event.reason)
       setState({ isConnected: false, ws: null })
 
       // Auto-reconnect with exponential backoff
+      console.log(`[WebSocket] Reconnecting in ${reconnectDelay}ms...`)
       setTimeout(() => {
         if (!state.ws) {
           connect()
@@ -568,7 +798,7 @@ function createShipStore() {
     }
 
     socket.onerror = (error) => {
-      console.error('WebSocket error:', error)
+      console.error('[WebSocket] Connection error:', error)
     }
 
     setState({ ws: socket })
@@ -660,14 +890,20 @@ function createShipStore() {
       console.error('Ship not found:', shipId)
       return false
     }
-    // Allow starting exploration from idle or searching state
-    if (ship.state !== 'idle' && ship.state !== 'searching') {
-      console.error('Ship must be idle or searching to start exploration:', ship.state)
+    if (ship.state !== 'idle') {
+      console.error('Ship must be idle to start exploration:', ship.state)
       return false
     }
 
     const userId = userStore.userId
     if (!userId) return false
+
+    // Optimistic update with timestamp for reconciliation
+    const now = Date.now()
+    const optimisticShip = { ...ship, state: 'exploring' as const, currentSynapseId: synapseId, _lastLocalUpdate: now }
+    setState(produce((s) => {
+      updateShipInList(s, optimisticShip)
+    }))
 
     try {
       const response = await fetch(`${API_URL}/api/synapses/${synapseId}/explore`, {
@@ -679,18 +915,33 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip, synapse } = await response.json()
         setState(produce((s) => {
-          updateShipInList(s, updatedShip)
+          // Map server state to client state
+          updateShipInList(s, {
+            ...updatedShip,
+            state: mapServerShipState(updatedShip.state),
+            _lastLocalUpdate: now,
+          })
           s.currentExplorationSynapse = synapse
           s.explorationTarget = null  // Clear target after starting exploration
         }))
         return true
       }
 
+      // Rollback on error
       const error = await response.json()
       console.error('Start exploration failed:', error.error || error)
+      toast.error(error.error || 'Failed to start exploration')
+      setState(produce((s) => {
+        updateShipInList(s, ship)  // Revert to original state
+      }))
       return false
     } catch (error) {
       console.error('Failed to start exploration:', error)
+      toast.error('Failed to start exploration')
+      // Rollback on error
+      setState(produce((s) => {
+        updateShipInList(s, ship)  // Revert to original state
+      }))
       return false
     }
   }
@@ -713,7 +964,10 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          updateShipInList(s, updatedShip)
+          updateShipInList(s, {
+            ...updatedShip,
+            state: mapServerShipState(updatedShip.state),
+          })
           s.currentExplorationSynapse = null
           s.currentExplorers = []
         }))
@@ -746,7 +1000,10 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          updateShipInList(s, updatedShip)
+          updateShipInList(s, {
+            ...updatedShip,
+            state: mapServerShipState(updatedShip.state),
+          })
         }))
         return true
       }
@@ -771,7 +1028,10 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          updateShipInList(s, updatedShip)
+          updateShipInList(s, {
+            ...updatedShip,
+            state: mapServerShipState(updatedShip.state),
+          })
         }))
         return true
       }
@@ -794,7 +1054,10 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          updateShipInList(s, updatedShip)
+          updateShipInList(s, {
+            ...updatedShip,
+            state: mapServerShipState(updatedShip.state),
+          })
         }))
         return true
       }
@@ -819,7 +1082,10 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          updateShipInList(s, updatedShip)
+          updateShipInList(s, {
+            ...updatedShip,
+            state: mapServerShipState(updatedShip.state),
+          })
         }))
         return true
       }
@@ -842,7 +1108,10 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          updateShipInList(s, updatedShip)
+          updateShipInList(s, {
+            ...updatedShip,
+            state: mapServerShipState(updatedShip.state),
+          })
         }))
         return true
       }
@@ -877,7 +1146,10 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          updateShipInList(s, updatedShip)
+          updateShipInList(s, {
+            ...updatedShip,
+            state: mapServerShipState(updatedShip.state),
+          })
         }))
         return true
       }
@@ -908,10 +1180,18 @@ function createShipStore() {
       console.error('Ship not found:', shipId)
       return false
     }
-    if (ship.state !== 'idle' && ship.state !== 'searching') {
-      console.error('Ship must be idle or searching to travel:', ship.state)
+    if (ship.state !== 'idle') {
+      console.error('Ship must be idle to travel:', ship.state)
       return false
     }
+
+    // Optimistic update with timestamp - set to deploying state
+    const now = Date.now()
+    const optimisticShip = { ...ship, state: 'deploying' as const, _lastLocalUpdate: now }
+    setState(produce((s) => {
+      updateShipInList(s, optimisticShip)
+      s.explorationTarget = null  // Clear target after travel starts
+    }))
 
     try {
       const response = await fetch(`${API_URL}/api/ships/${shipId}/travel-to-synapse`, {
@@ -923,17 +1203,31 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          updateShipInList(s, updatedShip)
-          s.explorationTarget = null  // Clear target after travel starts
+          // Map server state to client state and preserve travel animation data
+          updateShipInList(s, {
+            ...updatedShip,
+            state: mapServerShipState(updatedShip.state),
+            _lastLocalUpdate: now,
+          })
         }))
         return true
       }
 
+      // Rollback on error
       const error = await response.json()
       console.error('Travel to synapse failed:', error.error || error)
+      toast.error(error.error || 'Failed to travel to synapse')
+      setState(produce((s) => {
+        updateShipInList(s, ship)  // Revert to original state
+      }))
       return false
     } catch (error) {
       console.error('Failed to travel to synapse:', error)
+      toast.error('Failed to travel to synapse')
+      // Rollback on error
+      setState(produce((s) => {
+        updateShipInList(s, ship)  // Revert to original state
+      }))
       return false
     }
   }
@@ -948,7 +1242,10 @@ function createShipStore() {
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
         setState(produce((s) => {
-          updateShipInList(s, updatedShip)
+          updateShipInList(s, {
+            ...updatedShip,
+            state: mapServerShipState(updatedShip.state),
+          })
           s.currentExplorationSynapse = null
           s.currentExplorers = []
         }))
@@ -976,7 +1273,12 @@ function createShipStore() {
 
       const data = await response.json()
       // Ensure ships is always an array (API might return { ships: [...] } or [...])
-      const ships = Array.isArray(data) ? data : (Array.isArray(data?.ships) ? data.ships : [])
+      const rawShips = Array.isArray(data) ? data : (Array.isArray(data?.ships) ? data.ships : [])
+      // Map server states to client states
+      const ships = rawShips.map((ship: any) => ({
+        ...ship,
+        state: mapServerShipState(ship.state),
+      }))
       setState({ userShips: ships, isLoadingShips: false })
 
       // Update ship count in userStore
@@ -994,6 +1296,8 @@ function createShipStore() {
       if (!response.ok) throw new Error('Failed to fetch world state')
 
       const world = await response.json()
+      console.log('[fetchWorldState] Received world data:', world)
+      console.log('[fetchWorldState] Cluster count:', world.synapseClusters?.length)
 
       // Map server clusters to client format and separate by LOD level
       // Server sends 'synapseClusters' with SpaceCluster properties (spaceCount, beingSolvedCount)
@@ -1005,16 +1309,20 @@ function createShipStore() {
       const synapseClustersLod1 = mappedClusters.filter((c: SynapseCluster) => c.lodLevel === 1)
       const synapseClustersLod2 = mappedClusters.filter((c: SynapseCluster) => c.lodLevel === 2)
 
-      const shipClustersLod0 = (world.shipClusters || []).filter((c: ShipCluster) => c.lodLevel === 0)
-      const shipClustersLod1 = (world.shipClusters || []).filter((c: ShipCluster) => c.lodLevel === 1)
-      const shipClustersLod2 = (world.shipClusters || []).filter((c: ShipCluster) => c.lodLevel === 2)
+      console.log('[fetchWorldState] LOD0 clusters:', synapseClustersLod0.length)
+
+      // Server sends agentClusters (was shipClusters)
+      const agentClusters = world.agentClusters || []
+      const shipClustersLod0 = agentClusters.filter((c: ShipCluster) => c.lodLevel === 0)
+      const shipClustersLod1 = agentClusters.filter((c: ShipCluster) => c.lodLevel === 1)
+      const shipClustersLod2 = agentClusters.filter((c: ShipCluster) => c.lodLevel === 2)
 
       setState({
         synapseClusters: mappedClusters,
         synapseClustersLod0,
         synapseClustersLod1,
         synapseClustersLod2,
-        shipClusters: world.agentClusters || [],
+        shipClusters: agentClusters,
         shipClustersLod0,
         shipClustersLod1,
         shipClustersLod2,
@@ -1027,12 +1335,71 @@ function createShipStore() {
     }
   }
 
+  /**
+   * Fetch all 500k synapses in compact binary format
+   * Binary format (16 bytes per synapse):
+   * - float32 positionX (4 bytes)
+   * - float32 positionY (4 bytes)
+   * - float32 positionZ (4 bytes)
+   * - uint8   state (1 byte)
+   * - uint8   synapseType (1 byte)
+   * - uint16  reserved (2 bytes)
+   */
+  const fetchBulkSynapses = async (): Promise<boolean> => {
+    try {
+      console.log('[ShipStore] Fetching bulk synapses...')
+      const response = await fetch(`${API_URL}/api/synapses/bulk`)
+      if (!response.ok) throw new Error('Failed to fetch bulk synapses')
+
+      const buffer = await response.arrayBuffer()
+      const view = new DataView(buffer)
+
+      // Read header: version (1 byte) + count (4 bytes)
+      const version = view.getUint8(0)
+      const count = view.getUint32(1, true) // little-endian
+
+      console.log(`[ShipStore] Loaded ${count} raw synapses (v${version})`)
+
+      // Allocate typed arrays
+      const positions = new Float32Array(count * 3)
+      const states = new Uint8Array(count)
+      const types = new Uint8Array(count)
+
+      const HEADER = 5
+      const RECORD = 16
+
+      // Parse binary data
+      for (let i = 0; i < count; i++) {
+        const off = HEADER + i * RECORD
+        positions[i * 3] = view.getFloat32(off, true)
+        positions[i * 3 + 1] = view.getFloat32(off + 4, true)
+        positions[i * 3 + 2] = view.getFloat32(off + 8, true)
+        states[i] = view.getUint8(off + 12)
+        types[i] = view.getUint8(off + 13)
+      }
+
+      setState({
+        rawSynapseData: { count, positions, states, types, version },
+        rawSynapseDataVersion: v => v + 1,
+      })
+
+      return true
+    } catch (error) {
+      console.error('Failed to fetch bulk synapses:', error)
+      return false
+    }
+  }
+
   const fetchSynapseDetails = async (synapseId: string): Promise<Synapse | null> => {
     try {
       const response = await fetch(`${API_URL}/api/synapses/${synapseId}`)
       if (!response.ok) return null
 
       const synapse = await response.json()
+      // Map server state to client state
+      if (synapse.state) {
+        synapse.state = mapServerSynapseState(synapse.state)
+      }
       setState({ currentExplorationSynapse: synapse })
       return synapse
     } catch (error) {
@@ -1048,6 +1415,10 @@ function createShipStore() {
 
       const data = await response.json()
       const synapse = data.synapse
+      // Map server state to client state
+      if (synapse?.state) {
+        synapse.state = mapServerSynapseState(synapse.state)
+      }
       setState({ currentExplorationSynapse: synapse })
       return synapse
     } catch (error) {
@@ -1077,6 +1448,24 @@ function createShipStore() {
   const setShowShipPaths = (show: boolean) => setState({ showShipPaths: show })
   const setShowDiscoveredOnly = (show: boolean) => setState({ showDiscoveredOnly: show })
   const setLodLevel = (level: number) => setState({ currentLodLevel: Math.max(0, Math.min(2, level)) })
+
+  // ============ STATE RESET ============
+
+  /**
+   * Clear all user-specific ship state (call on logout)
+   * Prevents data leakage between users and cleans up stale state
+   */
+  const clearUserShips = () => {
+    setState({
+      userShips: [],
+      selectedShipId: null,
+      currentExplorationSynapse: null,
+      currentExplorers: [],
+      explorationTarget: null,
+      isLoadingShips: false,
+      deployingShipIds: new Set(),
+    })
+  }
 
   // ============ UTILITY ============
 
@@ -1109,6 +1498,10 @@ function createShipStore() {
     // Connection State
     get isConnected() { return state.isConnected },
     get ws() { return state.ws },
+
+    // Individual Synapse Data (500k points)
+    get rawSynapseData() { return state.rawSynapseData },
+    get rawSynapseDataVersion() { return state.rawSynapseDataVersion },
 
     // Synapse State (LOD clusters)
     get synapseClusters() { return state.synapseClusters },
@@ -1205,7 +1598,9 @@ function createShipStore() {
     // API Actions
     fetchUserShips,
     fetchWorldState,
+    fetchBulkSynapses,
     fetchSynapseDetails,
+    fetchSynapseByPosition,
     fetchSynapseExplorers,
 
     // UI Actions
@@ -1218,6 +1613,9 @@ function createShipStore() {
     getSynapseClustersForLod,
     getShipClustersForLod,
     canCreateShip,
+
+    // State Reset
+    clearUserShips,
   }
 }
 

@@ -1,7 +1,15 @@
 import { onMount, onCleanup, createEffect, createMemo, createSignal, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
-import { BRAIN_SCALE } from './core/brainConstants'
+import {
+  BRAIN_SCALE,
+  SHIP_MARKER_CONFIG,
+  SHIP_STATE_PULSE,
+  SHIP_SHAPE_CONFIG,
+  SHIP_ENGINE_CONFIG,
+  SHIP_STATE_COLORS,
+  constrainToBrainShape,
+} from './core/brainConstants'
 import type { Ship, ShipCluster, ShipStatus } from '@/stores/shipStore'
 
 interface ShipMarkersProps {
@@ -13,23 +21,15 @@ interface ShipMarkersProps {
   hideSelectedShipParticle?: boolean  // Hide the selected ship's particle when 3D model is visible
 }
 
-// Ship marker size - small and crisp
-const SHIP_POINT_SIZE = 6.0  // Reduced from 40 for clean look
+// State-based colors (imported from brainConstants for consistency)
+const STATE_COLORS: Record<ShipStatus, [number, number, number]> = SHIP_STATE_COLORS as unknown as Record<ShipStatus, [number, number, number]>
 
-// State-based colors as vec3 for shader
-const STATE_COLORS: Record<ShipStatus, [number, number, number]> = {
-  idle: [0.6, 0.7, 0.85],       // BRIGHTENED blue-gray for visibility (was 0.4, 0.5, 0.65)
-  searching: [0.87, 0.53, 0.87], // Magenta/purple - actively searching
-  exploring: [0.0, 0.87, 0.87],  // Bright cyan
-  deploying: [0.87, 0.67, 0.0],  // Bright orange
-  returning: [0.53, 0.87, 0.53]  // Bright green
-}
-
-// Vertex shader for ship markers
+// Vertex shader for ship markers - uses constants from brainConstants.ts
+// State indices: 0=idle, 1=searching, 2=exploring, 3=deploying, 4=returning
 const SHIP_VERTEX_SHADER = `
   attribute vec3 aColor;
   attribute float aSize;
-  attribute float aState;  // 0=idle, 1=searching, 2=exploring, 3=deploying, 4=returning
+  attribute float aState;
 
   uniform float uTime;
 
@@ -44,32 +44,32 @@ const SHIP_VERTEX_SHADER = `
 
     float pulse = 1.0;
 
-    // State-based animation
+    // State-based animation (values from SHIP_STATE_PULSE in brainConstants.ts)
     if (aState < 0.5) {
       // Idle: subtle breathing
-      pulse = 1.0 + sin(uTime * 1.0) * 0.1;
+      pulse = 1.0 + sin(uTime * ${SHIP_STATE_PULSE.idle.frequency.toFixed(1)}) * ${SHIP_STATE_PULSE.idle.amplitude.toFixed(2)};
     } else if (aState < 1.5) {
       // Searching: wandering pulse
-      pulse = 1.0 + sin(uTime * 2.5) * 0.18;
+      pulse = 1.0 + sin(uTime * ${SHIP_STATE_PULSE.searching.frequency.toFixed(1)}) * ${SHIP_STATE_PULSE.searching.amplitude.toFixed(2)};
     } else if (aState < 2.5) {
       // Exploring: active pulsing
-      pulse = 1.0 + sin(uTime * 3.0) * 0.2;
+      pulse = 1.0 + sin(uTime * ${SHIP_STATE_PULSE.exploring.frequency.toFixed(1)}) * ${SHIP_STATE_PULSE.exploring.amplitude.toFixed(2)};
     } else if (aState < 3.5) {
       // Deploying: rapid pulse
-      pulse = 1.0 + sin(uTime * 5.0) * 0.25;
+      pulse = 1.0 + sin(uTime * ${SHIP_STATE_PULSE.deploying.frequency.toFixed(1)}) * ${SHIP_STATE_PULSE.deploying.amplitude.toFixed(2)};
     } else {
       // Returning: gentle pulse
-      pulse = 1.0 + sin(uTime * 2.0) * 0.15;
+      pulse = 1.0 + sin(uTime * ${SHIP_STATE_PULSE.returning.frequency.toFixed(1)}) * ${SHIP_STATE_PULSE.returning.amplitude.toFixed(2)};
     }
 
-    // Distance-based scaling for consistent appearance
-    float distScale = 80.0 / max(-mvPosition.z, 1.0);
-    gl_PointSize = clamp(aSize * pulse * distScale, 2.0, 12.0);
+    // Distance-based scaling for consistent appearance (values from SHIP_MARKER_CONFIG)
+    float distScale = ${SHIP_MARKER_CONFIG.distanceScale.toFixed(1)} / max(-mvPosition.z, 1.0);
+    gl_PointSize = clamp(aSize * pulse * distScale, ${SHIP_MARKER_CONFIG.minPointSize.toFixed(1)}, ${SHIP_MARKER_CONFIG.maxPointSize.toFixed(1)});
     gl_Position = projectionMatrix * mvPosition;
   }
 `
 
-// Fragment shader for ship markers - creates a triangular ship shape with solid core
+// Fragment shader for ship markers - uses constants from brainConstants.ts
 const SHIP_FRAGMENT_SHADER = `
   uniform float uTime;
 
@@ -85,36 +85,36 @@ const SHIP_FRAGMENT_SHADER = `
     vec2 absCoord = abs(coord);
     float diamond = absCoord.x + absCoord.y;
 
-    // SOLID opaque core - LARGER for better visibility (was 0.15, 0.2)
-    float core = 1.0 - smoothstep(0.2, 0.28, diamond);
+    // SOLID opaque core (values from SHIP_SHAPE_CONFIG)
+    float core = 1.0 - smoothstep(${SHIP_SHAPE_CONFIG.coreInner.toFixed(2)}, ${SHIP_SHAPE_CONFIG.coreOuter.toFixed(2)}, diamond);
 
     // Softer outer glow
-    float glow = 1.0 - smoothstep(0.25, 0.5, diamond);
+    float glow = 1.0 - smoothstep(${SHIP_SHAPE_CONFIG.glowInner.toFixed(2)}, ${SHIP_SHAPE_CONFIG.glowOuter.toFixed(2)}, diamond);
 
-    // Engine glow - ALL ships get it, idle is subtle
+    // Engine glow - ALL ships get it, idle is subtle (values from SHIP_ENGINE_CONFIG)
     float engineGlow = 0.0;
     float engineDist = length(coord - vec2(0.0, 0.2));
-    float baseEngine = (1.0 - smoothstep(0.0, 0.12, engineDist));
+    float baseEngine = (1.0 - smoothstep(0.0, ${SHIP_ENGINE_CONFIG.radius.toFixed(2)}, engineDist));
 
     if (vState < 0.5) {
       // Idle: subtle breathing glow
-      engineGlow = baseEngine * 0.25 * (0.8 + sin(uTime * 1.5) * 0.2);
+      engineGlow = baseEngine * ${SHIP_ENGINE_CONFIG.idleIntensity.toFixed(2)} * (0.8 + sin(uTime * ${SHIP_ENGINE_CONFIG.idleFlickerFreq.toFixed(1)}) * ${SHIP_ENGINE_CONFIG.idleFlickerAmp.toFixed(1)});
     } else {
       // Active: strong flickering engine
-      engineGlow = baseEngine * 0.6 * (0.7 + sin(uTime * 10.0) * 0.3);
+      engineGlow = baseEngine * ${SHIP_ENGINE_CONFIG.activeIntensity.toFixed(2)} * (0.7 + sin(uTime * ${SHIP_ENGINE_CONFIG.activeFlickerFreq.toFixed(1)}) * ${SHIP_ENGINE_CONFIG.activeFlickerAmp.toFixed(1)});
     }
 
-    // Combine effects - brighter core
-    vec3 coreColor = vColor * 1.3;  // Brighter core (was 1.2)
-    vec3 glowColor = vColor * 0.7;  // Softer glow (was 0.6)
+    // Combine effects - brighter core (values from SHIP_SHAPE_CONFIG)
+    vec3 coreColor = vColor * ${SHIP_SHAPE_CONFIG.coreBrightness.toFixed(1)};
+    vec3 glowColor = vColor * ${SHIP_SHAPE_CONFIG.glowBrightness.toFixed(1)};
     vec3 finalColor = mix(glowColor, coreColor, core);
 
-    // Add engine glow for ALL ships (cyan for idle, orange for active)
+    // Add engine glow for ALL ships (colors from SHIP_ENGINE_CONFIG)
     if (vState < 0.5) {
-      vec3 engineColor = vec3(0.4, 0.7, 1.0);  // Soft cyan for idle
+      vec3 engineColor = vec3(${SHIP_ENGINE_CONFIG.idleColor[0].toFixed(1)}, ${SHIP_ENGINE_CONFIG.idleColor[1].toFixed(1)}, ${SHIP_ENGINE_CONFIG.idleColor[2].toFixed(1)});
       finalColor += engineColor * engineGlow;
     } else {
-      vec3 engineColor = vec3(1.0, 0.5, 0.1);  // Orange for active
+      vec3 engineColor = vec3(${SHIP_ENGINE_CONFIG.activeColor[0].toFixed(1)}, ${SHIP_ENGINE_CONFIG.activeColor[1].toFixed(1)}, ${SHIP_ENGINE_CONFIG.activeColor[2].toFixed(1)});
       finalColor += engineColor * engineGlow;
     }
 
@@ -218,6 +218,11 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
 
   // Filter ships based on showIdleShips setting and hideSelectedShipParticle
   const visibleShips = createMemo(() => {
+    // Safety check for undefined/null userShips
+    if (!props.userShips || !Array.isArray(props.userShips)) {
+      return []
+    }
+
     let ships = props.userShips
 
     // Filter idle ships if not shown
@@ -245,9 +250,12 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     const positionsArray: THREE.Vector3[] = []
 
     ships.forEach((ship, i) => {
-      const x = ship.positionX * BRAIN_SCALE.x
-      const y = ship.positionY * BRAIN_SCALE.y
-      const z = ship.positionZ * BRAIN_SCALE.z
+      // Use same coordinate transformation as synapses for visual consistency
+      const [x, y, z] = constrainToBrainShape(
+        ship.positionX,
+        ship.positionY,
+        ship.positionZ
+      )
 
       positions[i * 3] = x
       positions[i * 3 + 1] = y
@@ -261,7 +269,7 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       colors[i * 3 + 2] = color[2]
 
       // Size - all ships same size for now
-      sizes[i] = SHIP_POINT_SIZE
+      sizes[i] = SHIP_MARKER_CONFIG.pointSize
 
       // State as float for shader
       const stateMap: Record<ShipStatus, number> = {
@@ -421,9 +429,9 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     })
   })
 
-  // Update geometry structure when ship COUNT changes (add/remove ships)
+  // Update geometry structure when ships change (add/remove/reorder)
   // Does NOT update positions - that's handled by useFrame with interpolation
-  let lastShipCount = 0
+  let lastShipIds: string[] = []
   createEffect(() => {
     const data = computeBufferData()
     const ships = visibleShips()
@@ -437,13 +445,16 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
         geometry.setAttribute('aState', new THREE.BufferAttribute(new Float32Array(0), 1))
       }
       shipPositions = []
-      lastShipCount = 0
+      lastShipIds = []
       return
     }
 
-    // Only rebuild buffers when ship count changes (structural change)
-    // Position updates are handled smoothly in useFrame
-    if (ships.length !== lastShipCount) {
+    // Check if ships have changed (count or IDs/order)
+    const currentIds = ships.map(s => s.id)
+    const shipsChanged = currentIds.length !== lastShipIds.length ||
+      currentIds.some((id, i) => id !== lastShipIds[i])
+
+    if (shipsChanged) {
       geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
       geometry.setAttribute('aColor', new THREE.BufferAttribute(data.colors, 3))
       geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
@@ -462,14 +473,14 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       })
 
       // Clean up old ship positions
-      const currentIds = new Set(ships.map(s => s.id))
+      const currentIdSet = new Set(currentIds)
       for (const id of renderedPositions.keys()) {
-        if (!currentIds.has(id)) {
+        if (!currentIdSet.has(id)) {
           renderedPositions.delete(id)
         }
       }
 
-      lastShipCount = ships.length
+      lastShipIds = currentIds
     }
   })
 
@@ -496,12 +507,18 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       const stateAttr = geometry.getAttribute('aState') as THREE.BufferAttribute
       const colorAttr = geometry.getAttribute('aColor') as THREE.BufferAttribute
 
-      if (posAttr && posAttr.count === ships.length) {
+      // Handle count mismatch gracefully - update as many ships as buffer allows
+      // This prevents ships from disappearing during the frame between visibleShips change and buffer rebuild
+      const updateCount = Math.min(posAttr?.count ?? 0, ships.length)
+      if (posAttr && updateCount > 0) {
         let positionChanged = false
         let stateChanged = false
         const CONVERGE_THRESHOLD = 0.0001 // Skip updates when position delta is tiny
 
-        ships.forEach((ship, i) => {
+        // Only iterate over ships that have buffer slots
+        for (let i = 0; i < updateCount; i++) {
+          const ship = ships[i]
+          if (!ship) continue
           // Calculate target position from ship data
           let targetX = ship.positionX
           let targetY = ship.positionY
@@ -518,10 +535,15 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
             // Ease-out cubic for smooth deceleration
             const eased = 1 - Math.pow(1 - progress, 3)
 
-            // Interpolate from start to target (positionX/Y/Z is the target)
-            targetX = ship.startPositionX! + (ship.positionX - ship.startPositionX!) * eased
-            targetY = ship.startPositionY! + (ship.positionY - ship.startPositionY!) * eased
-            targetZ = ship.startPositionZ! + (ship.positionZ - ship.startPositionZ!) * eased
+            // Use targetPosition for destination (positionX stays at start until arrival)
+            const destX = ship.targetPositionX ?? ship.positionX
+            const destY = ship.targetPositionY ?? ship.positionY
+            const destZ = ship.targetPositionZ ?? ship.positionZ
+
+            // Interpolate from start to destination
+            targetX = ship.startPositionX! + (destX - ship.startPositionX!) * eased
+            targetY = ship.startPositionY! + (destY - ship.startPositionY!) * eased
+            targetZ = ship.startPositionZ! + (destZ - ship.startPositionZ!) * eased
           }
 
           // Get or create rendered position for this ship
@@ -551,21 +573,18 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
             rendered.y += deltaY * lerpFactor
             rendered.z += deltaZ * lerpFactor
 
-            // Update position using the smoothed rendered position
-            posAttr.setXYZ(
-              i,
-              rendered.x * BRAIN_SCALE.x,
-              rendered.y * BRAIN_SCALE.y,
-              rendered.z * BRAIN_SCALE.z
+            // Update position using the smoothed rendered position with same transform as synapses
+            const [finalX, finalY, finalZ] = constrainToBrainShape(
+              rendered.x,
+              rendered.y,
+              rendered.z
             )
+
+            posAttr.setXYZ(i, finalX, finalY, finalZ)
 
             // Update ship positions for raycasting
             if (shipPositions[i]) {
-              shipPositions[i].set(
-                rendered.x * BRAIN_SCALE.x,
-                rendered.y * BRAIN_SCALE.y,
-                rendered.z * BRAIN_SCALE.z
-              )
+              shipPositions[i].set(finalX, finalY, finalZ)
             }
 
             positionChanged = true
@@ -588,7 +607,7 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
             const color = STATE_COLORS[ship.state]
             colorAttr.setXYZ(i, color[0], color[1], color[2])
           }
-        })
+        }
 
         // Only trigger GPU upload if something actually changed
         if (positionChanged) {

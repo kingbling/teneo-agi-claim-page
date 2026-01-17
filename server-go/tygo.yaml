@@ -1,0 +1,7 @@
+packages:
+  - path: "internal/dto"
+    output_path: "../src/types/generated.ts"
+    type_mappings:
+      time.Time: "number"
+      int64: "number"
+      float64: "number"

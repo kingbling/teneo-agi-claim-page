@@ -69,7 +69,9 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
   // Get clusters from store (use LOD0 for most detail)
   const clusters = createMemo(() => {
     const lod0 = shipStore.synapseClustersLod0
-    return Array.isArray(lod0) ? lod0 : []
+    const result = Array.isArray(lod0) ? lod0 : []
+    console.log('[SynapseListPanel] LOD0 clusters:', result.length)
+    return result
   })
 
   // Filter clusters

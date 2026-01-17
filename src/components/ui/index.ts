@@ -13,6 +13,7 @@ export * from './ConfirmDialog'
 // Feedback & Tooltips
 export * from './Tooltip'
 export * from './EmptyState'
+export * from './Toast'
 
 // Game-Specific Components
 export * from './SynapseInfo'

@@ -2,7 +2,7 @@ import { onMount, onCleanup, createEffect, createMemo, createSignal, For } from 
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { SynapseDiscoveryEvent } from '@/stores/shipStore'
-import { BRAIN_SCALE, LOOT_THRESHOLDS } from '@/constants'
+import { BRAIN_SCALE, LOOT_THRESHOLDS, constrainToBrainShape } from '@/constants'
 import { TRANCE_CONFIG } from './core/brainConstants'
 
 interface DiscoveryBurstProps {
@@ -50,8 +50,9 @@ const BURST_VERTEX_SHADER = `
       aLife
     );
 
-    // Size shrinks as it fades
-    gl_PointSize = aSize * vAlpha * (250.0 / -mvPosition.z);
+    // Size shrinks as it fades (with protective clamping for close camera)
+    float distScale = 250.0 / max(-mvPosition.z, 1.0);
+    gl_PointSize = clamp(aSize * vAlpha * distScale, 2.0, 64.0);
 
     gl_Position = projectionMatrix * mvPosition;
   }
@@ -98,9 +99,9 @@ export function DiscoveryBurst(props: DiscoveryBurstProps) {
     if (recentDiscoveries.length === 0) return
 
     const latestDiscovery = recentDiscoveries[0]
-    if (processedIds.has(latestDiscovery.spaceId)) return
+    if (processedIds.has(latestDiscovery.synapseId)) return
 
-    processedIds.add(latestDiscovery.spaceId)
+    processedIds.add(latestDiscovery.synapseId)
 
     // Only keep last 50 processed IDs
     if (processedIds.size > 50) {
@@ -108,27 +109,28 @@ export function DiscoveryBurst(props: DiscoveryBurstProps) {
       processedIds = new Set(ids.slice(-25))
     }
 
-    // Calculate loot amount for intensity (guard against undefined)
-    const lootDistribution = Array.isArray(latestDiscovery.lootDistribution) ? latestDiscovery.lootDistribution : []
-    const lootAmount = lootDistribution.reduce((s, d) => s + d.amount, 0)
+    // Use AGI reward for intensity calculation
+    const agiReward = latestDiscovery.agiReward ?? 0
 
     // Only burst for significant discoveries
-    if (lootAmount < LOOT_THRESHOLDS.MIN_NOTIFY) return
+    if (agiReward < LOOT_THRESHOLDS.MIN_NOTIFY) return
 
     if (latestDiscovery.positionX !== undefined) {
-      const position = new THREE.Vector3(
-        latestDiscovery.positionX * BRAIN_SCALE.x,
-        latestDiscovery.positionY * BRAIN_SCALE.y,
-        latestDiscovery.positionZ * BRAIN_SCALE.z
+      // Use same coordinate transformation as synapses for visual consistency
+      const [x, y, z] = constrainToBrainShape(
+        latestDiscovery.positionX,
+        latestDiscovery.positionY,
+        latestDiscovery.positionZ
       )
+      const position = new THREE.Vector3(x, y, z)
 
       // Intensity based on synapse reward tier
-      const intensity = lootAmount >= LOOT_THRESHOLDS.UNIQUE ? 3.0 :
-                       lootAmount >= LOOT_THRESHOLDS.LEGENDARY ? 2.0 :
-                       lootAmount >= LOOT_THRESHOLDS.DEEP ? 1.5 : 1.0
+      const intensity = agiReward >= LOOT_THRESHOLDS.UNIQUE ? 3.0 :
+                       agiReward >= LOOT_THRESHOLDS.LEGENDARY ? 2.0 :
+                       agiReward >= LOOT_THRESHOLDS.DEEP ? 1.5 : 1.0
 
       const newBurst: Burst = {
-        id: latestDiscovery.spaceId,
+        id: latestDiscovery.synapseId,
         position,
         startTime: Date.now() / 1000,
         duration: 1.5 + intensity * 0.5,

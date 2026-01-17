@@ -4,6 +4,7 @@
 
 import { onMount, createSignal, Show, For } from 'solid-js'
 import { adminStore } from '@/stores/adminStore'
+import { authStore } from '@/stores/authStore'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 
 const API_URL = import.meta.env.VITE_API_URL ?? ''
@@ -41,7 +42,7 @@ export default function AnalyticsPage() {
   const [isLoading, setIsLoading] = createSignal(true)
 
   onMount(async () => {
-    const headers = { 'Authorization': `Bearer ${localStorage.getItem('teneo_auth_token')}` }
+    const headers = authStore.getAuthHeader()
 
     const [economyRes, synapseRes] = await Promise.all([
       fetch(`${API_URL}/api/admin/analytics/economy`, { headers }),

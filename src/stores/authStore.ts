@@ -21,9 +21,6 @@ import { wagmiConfig } from '@/lib/wagmi'
 // API Configuration - empty string means same-origin (App Platform deployment)
 const API_URL = import.meta.env.VITE_API_URL ?? ''
 
-// Storage keys
-const STORAGE_KEY_TOKEN = 'teneo_auth_token'
-
 export interface AuthState {
   // Wallet connection
   isConnected: boolean
@@ -63,17 +60,10 @@ function createAuthStore() {
 
   /**
    * Initialize the auth store
-   * - Restores token from localStorage
    * - Watches for wallet connection changes
    * - Attempts to reconnect previously connected wallet
    */
   async function init(): Promise<{ token: string | null; walletAddress: string | null }> {
-    // Restore token from storage
-    const storedToken = localStorage.getItem(STORAGE_KEY_TOKEN)
-    if (storedToken) {
-      setState({ token: storedToken, isAuthenticated: true })
-    }
-
     // Watch for account changes (disconnect, switch account)
     watchAccount(wagmiConfig, {
       onChange: (account: GetAccountReturnType) => {
@@ -95,7 +85,6 @@ function createAuthStore() {
           }
         } else if (state.isConnected) {
           // Only clear auth if we were previously connected (actual disconnect)
-          // Don't clear on initial "not connected" state which would wipe stored token
           clearAuth()
         }
       },
@@ -111,7 +100,7 @@ function createAuthStore() {
           walletAddress: address,
           isInitialized: true,
         })
-        return { token: storedToken, walletAddress: address }
+        return { token: state.token, walletAddress: address }
       }
     } catch {
       // No previous connection or reconnect failed - that's fine
@@ -125,11 +114,11 @@ function createAuthStore() {
         walletAddress: account.address,
         isInitialized: true,
       })
-      return { token: storedToken, walletAddress: account.address }
+      return { token: state.token, walletAddress: account.address }
     }
 
     setState({ isInitialized: true })
-    return { token: storedToken, walletAddress: null }
+    return { token: state.token, walletAddress: null }
   }
 
   /**
@@ -183,7 +172,6 @@ function createAuthStore() {
    * Clear all authentication state
    */
   function clearAuth() {
-    localStorage.removeItem(STORAGE_KEY_TOKEN)
     setState({
       isConnected: false,
       walletAddress: null,
@@ -241,9 +229,6 @@ function createAuthStore() {
       }
 
       const { token, user } = await verifyResponse.json()
-
-      // Store token
-      localStorage.setItem(STORAGE_KEY_TOKEN, token)
 
       setState({
         isAuthenticated: true,

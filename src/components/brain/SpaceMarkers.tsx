@@ -4,7 +4,8 @@ import { useThree, useFrame } from '@/three/hooks'
 import type { SynapseType, UserLevel } from '@/types/game'
 import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG } from '@/types/game'
 import { BRAIN_SCALE, TRANCE_CONFIG, constrainToBrainShape } from './core/brainConstants'
-import type { SynapseCluster } from '@/stores/shipStore'
+import type { SynapseCluster, RawSynapseData } from '@/stores/shipStore'
+import { SpatialOctree } from '@/utils/SpatialOctree'
 
 // Synapse type priority for determining dominant type (rarity order)
 const SYNAPSE_TYPE_PRIORITY: Record<SynapseType, number> = {
@@ -328,11 +329,19 @@ export const SYNAPSE_FRAGMENT_SHADER = `
   }
 `
 
+// Synapse type index to type name mapping
+const SYNAPSE_TYPE_BY_INDEX: SynapseType[] = ['minor', 'complex', 'deep', 'core', 'rare', 'legendary', 'unique']
+
 interface SynapseMarkersProps {
   clusters: SynapseCluster[]
   userLevel?: UserLevel  // For showing locked synapse types (Masterplan 2026: USDC-based level)
   onSynapseClick?: (cluster: SynapseCluster, position: THREE.Vector3) => void
   filterType?: string | null  // Filter by synapse type - dims and disables non-matching
+  // Individual synapse mode (500k points)
+  rawSynapseData?: RawSynapseData | null
+  rawSynapseDataVersion?: number  // For reactivity on delta updates
+  useIndividualMode?: boolean  // If true, render individual points instead of clusters
+  onIndividualSynapseClick?: (index: number, position: THREE.Vector3) => void
 }
 
 export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
@@ -354,6 +363,9 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
 
   // Track cluster positions for raycasting
   let clusterPositions: THREE.Vector3[] = []
+
+  // Octree for individual synapse mode (500k points)
+  let octree: SpatialOctree | null = null
 
   // Hover attribute buffer (updated each frame)
   let hoveredAttrBuffer: Float32Array | null = null
@@ -380,6 +392,8 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
   const geometryData = createMemo(() => {
     const clusters = props.clusters
     const userLevel = props.userLevel ?? 1 as UserLevel
+
+    console.log('[SpaceMarkers] Received clusters:', clusters.length, 'userLevel:', userLevel)
 
     if (clusters.length === 0) {
       return null
@@ -459,15 +473,118 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     return { positions, colors, sizes, states, synapseTypes, progress, clusterPositions: clusterPositionsArray }
   })
 
-  // Find closest cluster to pointer for hover/click
-  // Skips filtered-out clusters so they can't be selected
-  const findClosestCluster = (): number | null => {
-    const sceneObj = scene()
+  // Build geometry data from raw individual synapses (500k points)
+  const individualGeometryData = createMemo(() => {
+    const data = props.rawSynapseData
+    const userLevel = props.userLevel ?? 1 as UserLevel
+    // Track version for reactivity on delta updates
+    const _version = props.rawSynapseDataVersion
+
+    if (!data || !props.useIndividualMode) {
+      return null
+    }
+
+    console.log('[SpaceMarkers] Building individual geometry for', data.count, 'synapses')
+
+    const count = data.count
+    const colors = new Float32Array(count * 3)
+    const sizes = new Float32Array(count)
+    const statesFloat = new Float32Array(count)
+    const synapseTypes = new Float32Array(count)
+    const progress = new Float32Array(count)
+
+    // Apply brain constraint to positions
+    const constrainedPositions = new Float32Array(count * 3)
+    for (let i = 0; i < count; i++) {
+      const [x, y, z] = constrainToBrainShape(
+        data.positions[i * 3],
+        data.positions[i * 3 + 1],
+        data.positions[i * 3 + 2]
+      )
+      constrainedPositions[i * 3] = x
+      constrainedPositions[i * 3 + 1] = y
+      constrainedPositions[i * 3 + 2] = z
+    }
+
+    for (let i = 0; i < count; i++) {
+      const state = data.states[i]
+      const typeIdx = data.types[i]
+      const synapseType = SYNAPSE_TYPE_BY_INDEX[typeIdx] || 'minor'
+
+      // Check lock status
+      const unlockLevel = SYNAPSE_CONFIG[synapseType].unlockUserLevel
+      const isLocked = userLevel < unlockLevel
+
+      // Size based on type
+      const baseSize = 2.0  // Smaller for individual points
+      sizes[i] = baseSize * SYNAPSE_SIZE_MULTIPLIERS[synapseType]
+
+      // State: 0=undiscovered, 1=being_solved, 2=discovered
+      statesFloat[i] = state
+      synapseTypes[i] = typeIdx
+      progress[i] = state === 2 ? 1.0 : state === 1 ? 0.5 : 0.0
+
+      // Colors
+      const typeColor = SYNAPSE_COLOR_MAP[synapseType]
+      const rarityBrightness = SYNAPSE_BRIGHTNESS_MULTIPLIERS[synapseType]
+      const stateModifier = state === 2 ? 1.2 : state === 1 ? 1.0 : 0.75
+      let brightness = rarityBrightness * stateModifier
+
+      if (isLocked) {
+        brightness *= 0.5
+      }
+
+      colors[i * 3] = Math.min(1.0, typeColor[0] * brightness)
+      colors[i * 3 + 1] = Math.min(1.0, typeColor[1] * brightness)
+      colors[i * 3 + 2] = Math.min(1.0, typeColor[2] * brightness)
+    }
+
+    return {
+      positions: constrainedPositions,
+      colors,
+      sizes,
+      states: statesFloat,
+      synapseTypes,
+      progress,
+      count,
+    }
+  })
+
+  // Build octree when individual geometry is ready
+  createEffect(() => {
+    const data = individualGeometryData()
+    if (data && props.useIndividualMode) {
+      console.log('[SpaceMarkers] Building octree for', data.count, 'points')
+      const start = performance.now()
+      octree = new SpatialOctree(data.positions, 8, 64)
+      console.log('[SpaceMarkers] Octree built in', (performance.now() - start).toFixed(1), 'ms')
+      console.log('[SpaceMarkers] Octree stats:', octree.getStats())
+    } else {
+      octree = null
+    }
+  })
+
+  // Find closest synapse/cluster to pointer for hover/click
+  // Uses octree when in individual mode for O(log n) performance
+  const findClosestPoint = (): number | null => {
     const cam = camera()
-    if (!raycaster || !cam || props.clusters.length === 0) return null
+    if (!raycaster || !cam) return null
 
     const threshold = 0.35
     raycaster.setFromCamera(pointer, cam)
+
+    // Individual mode: use octree
+    if (props.useIndividualMode && octree) {
+      const closest = octree.findClosest(raycaster.ray, threshold)
+      // Skip if filtered out
+      if (closest !== null && filteredAttrBuffer && filteredAttrBuffer[closest] > 0.5) {
+        return null
+      }
+      return closest
+    }
+
+    // Cluster mode: iterate clusters
+    if (props.clusters.length === 0) return null
 
     let closestIndex: number | null = null
     let closestDist = threshold
@@ -488,17 +605,33 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     return closestIndex
   }
 
-  // Handle click on synapse cluster - only trigger if actually hovering one
+  // Handle click on synapse - handles both individual and cluster modes
   const handleClick = () => {
     if (isDragging) return
 
     // Use the tracked hover state instead of finding closest at click time
     // This prevents accidental clicks when looking around
     const currentHovered = hoveredIndex()
-    if (currentHovered !== null && props.onSynapseClick) {
+    if (currentHovered === null) return
+
+    if (props.useIndividualMode && props.onIndividualSynapseClick) {
+      // Individual mode: use octree position
+      const data = individualGeometryData()
+      if (data) {
+        const pos = new THREE.Vector3(
+          data.positions[currentHovered * 3],
+          data.positions[currentHovered * 3 + 1],
+          data.positions[currentHovered * 3 + 2]
+        )
+        props.onIndividualSynapseClick(currentHovered, pos)
+      }
+    } else if (props.onSynapseClick) {
+      // Cluster mode
       const cluster = props.clusters[currentHovered]
       const pos = clusterPositions[currentHovered]
-      props.onSynapseClick(cluster, pos)
+      if (cluster && pos) {
+        props.onSynapseClick(cluster, pos)
+      }
     }
   }
 
@@ -591,13 +724,48 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     })
   })
 
-  // Update geometry when clusters change
+  // Update geometry when data changes (handles both cluster and individual modes)
   createEffect(() => {
-    const data = geometryData()
-    if (!data || !geometry) return
+    if (!geometry) return
+
+    // Determine which data source to use
+    const individualData = individualGeometryData()
+    const clusterData = geometryData()
+
+    // Individual mode takes priority if enabled and data available
+    if (props.useIndividualMode && individualData) {
+      console.log('[SpaceMarkers] Updating geometry for individual mode:', individualData.count, 'points')
+
+      // Clear cluster positions (not used in individual mode)
+      clusterPositions = []
+
+      // Initialize attribute buffers
+      hoveredAttrBuffer = new Float32Array(individualData.count)
+      hoveredAttr = new THREE.BufferAttribute(hoveredAttrBuffer, 1)
+      hoveredAttr.setUsage(THREE.DynamicDrawUsage)
+
+      filteredAttrBuffer = new Float32Array(individualData.count)
+      filteredAttr = new THREE.BufferAttribute(filteredAttrBuffer, 1)
+      filteredAttr.setUsage(THREE.DynamicDrawUsage)
+
+      // Update geometry attributes
+      geometry.setAttribute('position', new THREE.BufferAttribute(individualData.positions, 3))
+      geometry.setAttribute('aColor', new THREE.BufferAttribute(individualData.colors, 3))
+      geometry.setAttribute('aSize', new THREE.BufferAttribute(individualData.sizes, 1))
+      geometry.setAttribute('aState', new THREE.BufferAttribute(individualData.states, 1))
+      geometry.setAttribute('aSynapseType', new THREE.BufferAttribute(individualData.synapseTypes, 1))
+      geometry.setAttribute('aProgress', new THREE.BufferAttribute(individualData.progress, 1))
+      geometry.setAttribute('aHovered', hoveredAttr)
+      geometry.setAttribute('aFiltered', filteredAttr)
+      geometry.computeBoundingSphere()
+      return
+    }
+
+    // Cluster mode fallback
+    if (!clusterData) return
 
     // Update cluster positions for raycasting
-    clusterPositions = data.clusterPositions
+    clusterPositions = clusterData.clusterPositions
 
     // Initialize hovered attribute buffer (all zeros = not hovered)
     hoveredAttrBuffer = new Float32Array(props.clusters.length)
@@ -610,25 +778,39 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     filteredAttr.setUsage(THREE.DynamicDrawUsage)  // Will be updated when filter changes
 
     // Update geometry attributes
-    geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
-    geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3))
-    geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
-    geometry.setAttribute('aState', new THREE.BufferAttribute(data.states, 1))
-    geometry.setAttribute('aSynapseType', new THREE.BufferAttribute(data.synapseTypes, 1))
-    geometry.setAttribute('aProgress', new THREE.BufferAttribute(data.progress, 1))
+    geometry.setAttribute('position', new THREE.BufferAttribute(clusterData.positions, 3))
+    geometry.setAttribute('aColor', new THREE.BufferAttribute(clusterData.colors, 3))
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(clusterData.sizes, 1))
+    geometry.setAttribute('aState', new THREE.BufferAttribute(clusterData.states, 1))
+    geometry.setAttribute('aSynapseType', new THREE.BufferAttribute(clusterData.synapseTypes, 1))
+    geometry.setAttribute('aProgress', new THREE.BufferAttribute(clusterData.progress, 1))
     geometry.setAttribute('aHovered', hoveredAttr)
     geometry.setAttribute('aFiltered', filteredAttr)
     geometry.computeBoundingSphere()
   })
 
-  // Update filtered attribute when filterType OR clusters change
-  // Must track props.clusters to re-apply filter when buffers are recreated
+  // Update filtered attribute when filterType changes (handles both modes)
   createEffect(() => {
     const filterType = props.filterType
     const clusters = props.clusters  // Track clusters to re-run when they change
+    const individualData = props.rawSynapseData
     if (!filteredAttrBuffer || !filteredAttr) return
 
-    // Update filtered state for each cluster
+    // Individual mode
+    if (props.useIndividualMode && individualData) {
+      for (let i = 0; i < individualData.count && i < filteredAttrBuffer.length; i++) {
+        if (!filterType || filterType === 'all') {
+          filteredAttrBuffer[i] = 0.0
+        } else {
+          const synapseType = SYNAPSE_TYPE_BY_INDEX[individualData.types[i]] || 'minor'
+          filteredAttrBuffer[i] = (synapseType === filterType) ? 0.0 : 1.0
+        }
+      }
+      filteredAttr.needsUpdate = true
+      return
+    }
+
+    // Cluster mode
     clusters.forEach((cluster, i) => {
       if (i >= filteredAttrBuffer!.length) return
 
@@ -667,7 +849,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
 
     if (shouldCheckHover) {
       lastPointer.copy(pointer)
-      const closestIndex = findClosestCluster()
+      const closestIndex = findClosestPoint()
       const currentHovered = hoveredIndex()
 
       if (closestIndex !== currentHovered) {
@@ -688,8 +870,61 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
         }
 
         // Update tooltip position if hovering
-        if (closestIndex !== null && clusterPositions[closestIndex]) {
-          const pos = clusterPositions[closestIndex].clone()
+        if (closestIndex !== null) {
+          const individualData = individualGeometryData()
+          let pos: THREE.Vector3 | null = null
+
+          // Get position based on mode
+          if (props.useIndividualMode && individualData) {
+            pos = new THREE.Vector3(
+              individualData.positions[closestIndex * 3],
+              individualData.positions[closestIndex * 3 + 1],
+              individualData.positions[closestIndex * 3 + 2]
+            )
+          } else if (clusterPositions[closestIndex]) {
+            pos = clusterPositions[closestIndex].clone()
+          }
+
+          if (pos) {
+            pos.project(cam)
+            lastCamPosForTooltip.copy(cam.position)
+
+            const renderer = gl()
+            if (renderer) {
+              const rect = renderer.domElement.getBoundingClientRect()
+              const x = (pos.x * 0.5 + 0.5) * rect.width + rect.left
+              const y = (-pos.y * 0.5 + 0.5) * rect.height + rect.top
+              setTooltipPosition({ x, y })
+            }
+          }
+        } else {
+          setTooltipPosition(null)
+        }
+      }
+    }
+
+    // Update tooltip position only if camera moved significantly while hovering
+    const currentHovered = hoveredIndex()
+    if (currentHovered !== null) {
+      const individualData = individualGeometryData()
+      let hasPosition = false
+      let pos: THREE.Vector3 | null = null
+
+      if (props.useIndividualMode && individualData) {
+        pos = new THREE.Vector3(
+          individualData.positions[currentHovered * 3],
+          individualData.positions[currentHovered * 3 + 1],
+          individualData.positions[currentHovered * 3 + 2]
+        )
+        hasPosition = true
+      } else if (clusterPositions[currentHovered]) {
+        pos = clusterPositions[currentHovered].clone()
+        hasPosition = true
+      }
+
+      if (hasPosition && pos) {
+        const camDelta = cam.position.distanceTo(lastCamPosForTooltip)
+        if (camDelta > TOOLTIP_CAM_THRESHOLD) {
           pos.project(cam)
           lastCamPosForTooltip.copy(cam.position)
 
@@ -700,39 +935,37 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
             const y = (-pos.y * 0.5 + 0.5) * rect.height + rect.top
             setTooltipPosition({ x, y })
           }
-        } else {
-          setTooltipPosition(null)
-        }
-      }
-    }
-
-    // Update tooltip position only if camera moved significantly while hovering
-    const currentHovered = hoveredIndex()
-    if (currentHovered !== null && clusterPositions[currentHovered]) {
-      const camDelta = cam.position.distanceTo(lastCamPosForTooltip)
-      if (camDelta > TOOLTIP_CAM_THRESHOLD) {
-        const pos = clusterPositions[currentHovered].clone()
-        pos.project(cam)
-        lastCamPosForTooltip.copy(cam.position)
-
-        const renderer = gl()
-        if (renderer) {
-          const rect = renderer.domElement.getBoundingClientRect()
-          const x = (pos.x * 0.5 + 0.5) * rect.width + rect.left
-          const y = (-pos.y * 0.5 + 0.5) * rect.height + rect.top
-          setTooltipPosition({ x, y })
         }
       }
     }
   })
 
-  // Get hovered cluster for tooltip
+  // Get hovered cluster for tooltip (cluster mode)
   const hoveredCluster = createMemo(() => {
+    if (props.useIndividualMode) return null
     const idx = hoveredIndex()
     return idx !== null ? props.clusters[idx] : null
   })
 
+  // Get hovered individual synapse info (individual mode)
+  const hoveredIndividualSynapse = createMemo(() => {
+    if (!props.useIndividualMode || !props.rawSynapseData) return null
+    const idx = hoveredIndex()
+    if (idx === null) return null
+    const data = props.rawSynapseData
+    return {
+      index: idx,
+      state: data.states[idx],
+      type: SYNAPSE_TYPE_BY_INDEX[data.types[idx]] || 'minor',
+      stateName: ['Undiscovered', 'Being Explored', 'Discovered'][data.states[idx]] || 'Unknown',
+    }
+  })
+
   const hoveredDominantType = createMemo(() => {
+    if (props.useIndividualMode) {
+      const synapse = hoveredIndividualSynapse()
+      return synapse?.type || null
+    }
     const cluster = hoveredCluster()
     return cluster ? getDominantSynapseType(cluster.typeCounts) : null
   })
@@ -743,43 +976,68 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     return dominantType ? userLevel < SYNAPSE_CONFIG[dominantType].unlockUserLevel : false
   })
 
+  // Determine if we should show tooltip
+  const showTooltip = createMemo(() => {
+    if (!tooltipPosition()) return false
+    if (props.useIndividualMode) return hoveredIndividualSynapse() !== null
+    return hoveredCluster() !== null
+  })
+
   // Return tooltip JSX (rendered as SolidJS component)
   // Note: This tooltip is a DOM overlay, not part of the Three.js scene
   return (
     <>
-      {hoveredCluster() && tooltipPosition() && (
+      {showTooltip() && (
         <div
-          class="fixed pointer-events-none z-50"
+          class="fixed pointer-events-none"
           style={{
             left: `${tooltipPosition()!.x}px`,
             top: `${tooltipPosition()!.y}px`,
             transform: 'translate(-50%, -100%) translateY(-8px)',
+            'z-index': 'var(--z-tooltip, 70)',
           }}
         >
-          <div class="bg-[var(--card-bg)]/95 backdrop-blur-sm border border-[var(--card-border)] rounded-lg px-3 py-2 text-xs whitespace-nowrap">
-            <div class="font-medium text-[var(--text-primary)]">
-              {hoveredCluster()!.synapseCount} synapses
-            </div>
-            {hoveredDominantType() && (
-              <div class="text-[var(--text-secondary)] capitalize">
-                {hoveredDominantType()} type
+          <div class="bg-[var(--card-background)]/95 backdrop-blur-sm border border-[var(--card-border)] rounded-lg px-3 py-2 text-xs whitespace-nowrap">
+            {/* Individual synapse mode */}
+            {props.useIndividualMode && hoveredIndividualSynapse() && (
+              <>
+                <div class="font-medium text-[var(--text-primary)] capitalize">
+                  {hoveredIndividualSynapse()!.type} Synapse
+                </div>
+                <div class="text-[var(--text-secondary)]">
+                  {hoveredIndividualSynapse()!.stateName}
+                </div>
                 {hoveredIsLocked() && (
-                  <span class="text-red-400 ml-1">(Locked - Lvl {SYNAPSE_CONFIG[hoveredDominantType()!].unlockUserLevel})</span>
+                  <div class="text-red-400">
+                    (Locked - Lvl {SYNAPSE_CONFIG[hoveredIndividualSynapse()!.type].unlockUserLevel})
+                  </div>
                 )}
-              </div>
+              </>
             )}
-            <div class="text-[var(--text-secondary)]">
-              {hoveredCluster()!.discoveredCount} discovered
-            </div>
-            {hoveredCluster()!.beingExploredCount > 0 && (
-              <div class="text-yellow-400">
-                {hoveredCluster()!.beingExploredCount} exploring
-              </div>
-            )}
-            {hoveredCluster()!.explorerCount !== undefined && hoveredCluster()!.explorerCount! > 0 && (
-              <div class="text-cyan-400">
-                {hoveredCluster()!.explorerCount} explorers
-              </div>
+
+            {/* Cluster mode */}
+            {!props.useIndividualMode && hoveredCluster() && (
+              <>
+                <div class="font-medium text-[var(--text-primary)]">
+                  {hoveredCluster()!.synapseCount} synapses
+                </div>
+                {hoveredDominantType() && (
+                  <div class="text-[var(--text-secondary)] capitalize">
+                    {hoveredDominantType()} type
+                    {hoveredIsLocked() && (
+                      <span class="text-red-400 ml-1">(Locked - Lvl {SYNAPSE_CONFIG[hoveredDominantType()!].unlockUserLevel})</span>
+                    )}
+                  </div>
+                )}
+                <div class="text-[var(--text-secondary)]">
+                  {hoveredCluster()!.discoveredCount} discovered
+                </div>
+                {hoveredCluster()!.beingExploredCount > 0 && (
+                  <div class="text-yellow-400">
+                    {hoveredCluster()!.beingExploredCount} exploring
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

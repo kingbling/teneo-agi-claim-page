@@ -67,12 +67,13 @@ export const ExplorePrompt: Component<ExplorePromptProps> = (props) => {
   return (
     <Show when={screenPos()}>
       <div
-        class="fixed z-50 pointer-events-auto transition-all duration-200"
+        class="fixed pointer-events-auto transition-all duration-200"
         style={{
           left: `${screenPos()!.x}px`,
           top: `${screenPos()!.y}px`,
           transform: 'translate(-50%, -120%)',
           opacity: isVisible() ? 1 : 0,
+          'z-index': 'var(--z-toast, 80)',
         }}
       >
         <div class="bg-gray-900/95 backdrop-blur-sm border border-teal-500/60 rounded-xl p-4 min-w-[240px] shadow-lg shadow-teal-500/20">

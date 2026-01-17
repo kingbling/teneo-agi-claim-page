@@ -1,4 +1,4 @@
-import { Show, onMount, lazy, Suspense } from 'solid-js'
+import { Show, onMount, createEffect, lazy, Suspense } from 'solid-js'
 import { Router, Route } from '@solidjs/router'
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query'
 import { Landing } from './pages/Landing'
@@ -6,6 +6,7 @@ import { DiscoveryDashboard } from './pages/DiscoveryDashboard'
 import { configStore } from './stores/configStore'
 import { authStore } from './stores/authStore'
 import { userStore } from './stores/userStore'
+import { shipStore } from './stores/shipStore'
 
 // Admin pages (lazy loaded)
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'))
@@ -44,6 +45,27 @@ async function tryAutoLogin(walletAddress: string) {
 }
 
 function App() {
+  // Track previous wallet address to detect changes
+  let previousWalletAddress: string | null = null
+
+  // Clear ship state when wallet disconnects or changes
+  createEffect(() => {
+    const currentAddress = authStore.walletAddress
+    const isAuthenticated = authStore.isAuthenticated
+
+    // If wallet disconnected or changed, clear ship state
+    if (previousWalletAddress && (!currentAddress || currentAddress !== previousWalletAddress)) {
+      shipStore.clearUserShips()
+    }
+
+    // Also clear if auth is lost
+    if (!isAuthenticated && previousWalletAddress) {
+      shipStore.clearUserShips()
+    }
+
+    previousWalletAddress = currentAddress
+  })
+
   // Initialize auth and game configuration on startup
   onMount(async () => {
     // Fetch game configuration

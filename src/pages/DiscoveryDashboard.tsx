@@ -10,6 +10,7 @@ import * as THREE from 'three'
 import { ThreeCanvas } from '@/three'
 import { DashboardHeader, BrainSceneMinimal, BrainMinimap, QualitySettings, LoginOverlay, SynapseListPanel, type QualityPreset } from '@/components/dashboard'
 import { ItemShop } from '@/components/shop/ItemShop'
+import { ToastContainer } from '@/components/ui/Toast'
 import { ShipNavigator } from '@/components/ships/ShipNavigator'
 import { CreateShipDialog } from '@/components/ships/CreateShipDialog'
 import { ShipDetailPanel } from '@/components/ships/ShipDetailPanel'
@@ -29,7 +30,7 @@ import {
   getSynapseTypeLabel,
   type SynapseType,
 } from '@/types/game'
-import { BRAIN_SCALE } from '@/components/brain/core/brainConstants'
+import { BRAIN_SCALE, constrainToBrainShape } from '@/components/brain/core/brainConstants'
 
 // Helper to get dominant synapse type from cluster
 function getDominantSynapseType(typeCounts?: Record<SynapseType, number>): SynapseType {
@@ -225,9 +226,9 @@ export const DiscoveryDashboard: Component = () => {
       setDeployTarget(null)
     }
 
-    // Check if we have a selected ship in 'searching' state - if so, show explore prompt
+    // Check if we have a selected idle ship - if so, show explore prompt for travel
     const selectedShip = shipStore.selectedShip
-    if (selectedShip && selectedShip.state === 'searching') {
+    if (selectedShip && selectedShip.state === 'idle') {
       // Use cluster position to find nearest synapse
       const clusterData = cluster as SynapseCluster
       shipStore.setExplorationTargetByPosition(
@@ -287,12 +288,9 @@ export const DiscoveryDashboard: Component = () => {
     // Select the ship (enables selection ring, fetches synapse details)
     shipStore.selectShip(ship.id)
 
-    // Apply BRAIN_SCALE to match rendered ship positions
-    const pos = new THREE.Vector3(
-      ship.positionX * BRAIN_SCALE.x,
-      ship.positionY * BRAIN_SCALE.y,
-      ship.positionZ * BRAIN_SCALE.z
-    )
+    // Use constrainToBrainShape to match the exact rendered ship position
+    const [x, y, z] = constrainToBrainShape(ship.positionX, ship.positionY, ship.positionZ)
+    const pos = new THREE.Vector3(x, y, z)
     setZoomTarget(pos)
     setIsShipZoom(true)  // Enable close zoom for ship inspection
   }
@@ -314,12 +312,9 @@ export const DiscoveryDashboard: Component = () => {
     const isExploring = ship.state === 'exploring'
 
     if (isIntentionalTravel || isExploring) {
-      // Update camera target to follow ship
-      const pos = new THREE.Vector3(
-        ship.positionX * BRAIN_SCALE.x,
-        ship.positionY * BRAIN_SCALE.y,
-        ship.positionZ * BRAIN_SCALE.z
-      )
+      // Update camera target to follow ship using constrainToBrainShape for accuracy
+      const [x, y, z] = constrainToBrainShape(ship.positionX, ship.positionY, ship.positionZ)
+      const pos = new THREE.Vector3(x, y, z)
       setZoomTarget(pos)
     }
   })
@@ -331,6 +326,9 @@ export const DiscoveryDashboard: Component = () => {
 
   return (
     <div class="w-screen h-screen bg-black overflow-hidden">
+      {/* Toast notifications */}
+      <ToastContainer />
+
       {/* Login Overlay - shown when user is not logged in */}
       <LoginOverlay
         isOpen={!userStore.isLoggedIn}
@@ -372,7 +370,9 @@ export const DiscoveryDashboard: Component = () => {
           showIdleShips={uiStore.showIdleShips}
           selectedShipId={shipStore.selectedShipId}
           isShipZoom={isShipZoom()}
+          onExitShipZoom={() => setIsShipZoom(false)}
           synapseTypeFilter={synapseTypeFilter() === 'all' ? null : synapseTypeFilter()}
+          explorationTarget={shipStore.explorationTarget}
         />
         {/* Explore Prompt - shown when searching ship clicks a synapse */}
         <Show when={explorePromptData() && shipStore.selectedShip}>
@@ -393,12 +393,9 @@ export const DiscoveryDashboard: Component = () => {
                   setExplorePromptData(null)
                   // Re-enable ship zoom mode to follow ship during deployment
                   setIsShipZoom(true)
-                  // Set camera to follow ship's current position
-                  const pos = new THREE.Vector3(
-                    ship.positionX * BRAIN_SCALE.x,
-                    ship.positionY * BRAIN_SCALE.y,
-                    ship.positionZ * BRAIN_SCALE.z
-                  )
+                  // Set camera to follow ship's current position using constrainToBrainShape
+                  const [x, y, z] = constrainToBrainShape(ship.positionX, ship.positionY, ship.positionZ)
+                  const pos = new THREE.Vector3(x, y, z)
                   setZoomTarget(pos)
                 }
               }
@@ -635,9 +632,22 @@ export const DiscoveryDashboard: Component = () => {
                       const ship = idleShips[0]
                       const target = deployTarget()
                       if (ship && target) {
-                        const success = await shipStore.deployShip(ship.id, target.position.x, target.position.y, target.position.z)
-                        if (success) {
-                          setDeployTarget(null)
+                        // Find nearest synapse and travel directly to it
+                        const synapse = await shipStore.fetchSynapseByPosition(
+                          target.cluster.positionX,
+                          target.cluster.positionY,
+                          target.cluster.positionZ
+                        )
+                        if (synapse) {
+                          const synapseConfig = SYNAPSE_CONFIG[synapse.synapseType]
+                          const pointsPerMin = Math.floor(synapseConfig.maxPerMin / 2) || 50
+                          const success = await shipStore.travelToSynapse(ship.id, synapse.id, pointsPerMin)
+                          if (success) {
+                            setDeployTarget(null)
+                            // Select the ship and enable ship zoom to follow travel
+                            shipStore.selectShip(ship.id)
+                            setIsShipZoom(true)
+                          }
                         }
                       }
                     }}

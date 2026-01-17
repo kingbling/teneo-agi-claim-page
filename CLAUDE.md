@@ -18,22 +18,21 @@ npm run build        # Build production bundle
 npm run lint         # Run ESLint
 npm run preview      # Preview production build
 
-# Backend (from server/)
-cd server && npm install    # Install server dependencies
-cd server && npm run dev    # Start server with hot reload (port 4000)
-cd server && npm run build  # Build TypeScript to dist/
-cd server && npm start      # Run built server
+# Backend (Go - from server-go/)
+cd server-go && go build -o bin/server ./cmd/server    # Build server
+cd server-go && ./bin/server                            # Run server (port 4000)
 
-# Database
-npm run db:init      # Initialize/seed database (from repo root)
+# Using start script
+./start.sh dev         # Start both frontend and Go server in tmux
+./start.sh watch       # Auto-redeploy on code changes
+./start.sh stop        # Stop all services
 ```
 
 ### Verification
 
 ```bash
 # Type check
-npx tsc --noEmit                    # Frontend
-cd server && npx tsc --noEmit       # Backend
+npx tsc --noEmit       # Frontend
 
 # Health check
 curl http://localhost:4000/health
@@ -51,7 +50,7 @@ This is a full-stack 3D exploration game with a brain-themed visualization. User
 | Frontend | SolidJS, Vite, Tailwind CSS 4, Three.js |
 | State | SolidJS stores, @tanstack/solid-query |
 | Auth | wagmi/viem (wallet), JWT tokens |
-| Backend | Express, WebSocket (ws), SQLite (better-sqlite3) |
+| Backend | Go (net/http, gorilla/websocket), SQLite (modernc.org/sqlite) |
 | UI Components | @kobalte/core, lucide-solid icons |
 
 ### Project Structure
@@ -72,20 +71,23 @@ src/
 ├── pages/           # DiscoveryDashboard, Landing
 └── types/game.ts    # Shared type definitions
 
-server/src/
-├── index.ts              # Express + WebSocket server entry
-├── config/gameConfig.ts  # Centralized game constants
-├── db/
-│   ├── index.ts          # Database operations (150+ functions)
-│   ├── schema.sql        # SQLite schema
-│   └── migrations.ts     # Database migrations
-├── routes/               # REST API endpoints
-└── simulation/engine.ts  # Game tick simulation
+server-go/
+├── cmd/server/main.go    # Server entry point
+├── internal/
+│   ├── config/           # Game configuration
+│   ├── db/               # Database operations
+│   ├── dto/              # Data transfer objects
+│   ├── handlers/         # HTTP handlers
+│   ├── middleware/       # Auth middleware
+│   ├── models/           # Database models
+│   ├── simulation/       # Game tick simulation
+│   └── websocket/        # WebSocket hub
+└── data/                 # SQLite database (teneo.db)
 ```
 
 ### Key Architectural Patterns
 
-**Server-Authoritative**: All business logic lives on the server. Client fetches config from `/api/config` and acts as a presentation layer. Game constants (costs, rates, traits) are defined in `server/src/config/gameConfig.ts`.
+**Server-Authoritative**: All business logic lives on the server. Client fetches config from `/api/config` and acts as a presentation layer. Game constants (costs, rates, traits) are defined in `server-go/internal/config/`.
 
 **Real-time Updates**: WebSocket broadcasts `state:sync`, `space:discovered`, `agents:update` events. Client subscribes via `useWebSocketConnection` hook.
 
@@ -95,7 +97,7 @@ server/src/
 
 ### Database
 
-SQLite with WAL mode at `server/data/teneo.db`. Core tables:
+SQLite with WAL mode at `server-go/data/teneo.db`. Core tables:
 - `spaces` - Discoverable synapses with position, state, loot
 - `agents` - User ships with traits, fuel, position
 - `users` - Player accounts with wallet, points, tier
@@ -107,17 +109,17 @@ SQLite with WAL mode at `server/data/teneo.db`. Core tables:
 # .env
 VITE_API_URL=http://localhost:4000
 VITE_WS_URL=ws://localhost:4000
-DATABASE_PATH=./server/data/teneo.db
+DATABASE_PATH=./server-go/data/teneo.db
 PORT=4000
 ```
 
 ## Cross-Cutting Changes
 
 When modifying game mechanics, update:
-1. `server/src/config/gameConfig.ts` - Server constants
-2. `server/src/types/index.ts` - Backend types
+1. `server-go/internal/config/` - Server constants
+2. `server-go/internal/dto/` - Backend types
 3. `src/types/game.ts` - Frontend types
-4. `server/src/simulation/engine.ts` - Simulation logic
+4. `server-go/internal/simulation/` - Simulation logic
 5. `src/stores/` - Affected stores (shipStore, configStore)
 
-For new database fields, add migration in `server/src/db/migrations.ts`.
+For new database fields, update models in `server-go/internal/models/`.

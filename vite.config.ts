@@ -9,6 +9,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@shared/types': path.resolve(__dirname, './shared/types'),
     },
   },
   server: {
@@ -20,7 +21,7 @@ export default defineConfig({
         manualChunks: {
           'vendor-solid': ['solid-js', '@solidjs/router'],
           'vendor-three': ['three'],
-          'vendor-ui': ['@kobalte/core', 'motion'],
+          'vendor-ui': ['@kobalte/core'],
         },
       },
     },

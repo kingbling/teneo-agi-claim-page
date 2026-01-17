@@ -34,7 +34,6 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
 
   const statusConfig: Record<Ship['state'], { iconClass: string; badgeClass: string; barClass: string; label: string }> = {
     idle: { iconClass: 'text-gray-400', badgeClass: 'bg-gray-500/20 text-gray-400', barClass: 'bg-gray-500', label: 'Idle' },
-    searching: { iconClass: 'text-orange-400', badgeClass: 'bg-orange-500/20 text-orange-400', barClass: 'bg-orange-500', label: 'Searching' },
     exploring: { iconClass: 'text-teal-400', badgeClass: 'bg-teal-500/20 text-teal-400', barClass: 'bg-teal-500', label: 'Exploring' },
     deploying: { iconClass: 'text-yellow-400', badgeClass: 'bg-yellow-500/20 text-yellow-400', barClass: 'bg-yellow-500', label: 'Deploying' },
     returning: { iconClass: 'text-purple-400', badgeClass: 'bg-purple-500/20 text-purple-400', barClass: 'bg-purple-500', label: 'Returning' },
@@ -140,22 +139,17 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
                 }}
               </Show>
 
-              {/* Idle */}
+              {/* Idle - show target if selected, otherwise prompt to select a synapse */}
               <Show when={currentShip().state === 'idle'}>
-                <p class="text-xs text-gray-500 text-center py-2">Ready to deploy</p>
-              </Show>
-
-              {/* Searching */}
-              <Show when={currentShip().state === 'searching'}>
                 <Show when={explorationTarget()} fallback={
-                  <p class="text-xs text-gray-500 text-center py-2">Select a synapse</p>
+                  <p class="text-xs text-gray-500 text-center py-2">Click a synapse to explore</p>
                 }>
                   {(target) => {
                     const config = SYNAPSE_CONFIG[target().synapseType as SynapseType] || SYNAPSE_CONFIG.minor
                     return (
-                      <div class="p-2 rounded bg-orange-500/10 border border-orange-500/20 space-y-1">
+                      <div class="p-2 rounded bg-teal-500/10 border border-teal-500/20 space-y-1">
                         <div class="flex items-center gap-1.5 text-xs">
-                          <Target class="w-3 h-3 text-orange-400" />
+                          <Target class="w-3 h-3 text-teal-400" />
                           <span class="text-white">{getSynapseTypeLabel(target().synapseType as SynapseType)}</span>
                         </div>
                         <div class="flex justify-between text-[10px]">
@@ -182,18 +176,19 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
 
               {/* Actions */}
               <div class="flex gap-2">
-                <Show when={currentShip().state === 'searching' && explorationTarget()}>
+                <Show when={currentShip().state === 'idle' && explorationTarget()}>
                   <button
                     onClick={() => {
                       const target = explorationTarget()
                       if (target) {
-                        shipStore.startExploration(currentShip().id, target.id, currentShip().currentPointsPerMin || 100)
+                        // Use travelToSynapse for the full flow: travel then auto-explore
+                        shipStore.travelToSynapse(currentShip().id, target.id, currentShip().currentPointsPerMin || 100)
                       }
                     }}
                     class="flex-1 py-1.5 rounded bg-teal-500/20 border border-teal-500/30 text-teal-400 text-xs font-medium hover:bg-teal-500/30 flex items-center justify-center gap-1"
                   >
                     <Play class="w-3 h-3" />
-                    Explore
+                    Travel & Explore
                   </button>
                 </Show>
 
