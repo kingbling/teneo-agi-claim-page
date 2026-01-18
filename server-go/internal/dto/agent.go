@@ -1,5 +1,7 @@
 package dto
 
+import "math"
+
 // Agent represents a ship in the internal server model
 type Agent struct {
 	ID             string     `json:"id"`
@@ -56,6 +58,7 @@ type ShipDTO struct {
 	CurrentSynapseID   *string      `json:"currentSynapseId,omitempty"`
 	TravelStartTime    *int64       `json:"travelStartTime,omitempty"`
 	TravelDuration     *int64       `json:"travelDuration,omitempty"`
+	RotationY          float64      `json:"rotationY,omitempty"` // Yaw rotation in radians - direction ship is facing
 	AutopilotEnabled   bool         `json:"autopilotEnabled"`
 	AutopilotPreferences *AutopilotPreferences `json:"autopilotPreferences,omitempty"`
 	EquippedItems      []EquippedItem `json:"equippedItems"`
@@ -80,6 +83,15 @@ func AgentToShipDTO(agent Agent) ShipDTO {
 		shipType = "neuron"
 	}
 
+	// Calculate rotationY (yaw) toward target if available
+	// Ship model faces -Z direction, so we use atan2(dx, -dz)
+	var rotationY float64 = 0
+	if agent.TargetX != nil && agent.TargetZ != nil {
+		dx := *agent.TargetX - agent.PositionX
+		dz := *agent.TargetZ - agent.PositionZ
+		rotationY = calculateAtan2(dx, -dz)
+	}
+
 	return ShipDTO{
 		ID:               agent.ID,
 		OwnerID:          agent.OwnerID,
@@ -98,6 +110,7 @@ func AgentToShipDTO(agent Agent) ShipDTO {
 		CurrentSynapseID: agent.CurrentSpaceID,
 		TravelStartTime:  agent.TravelStartTime,
 		TravelDuration:   agent.TravelDuration,
+		RotationY:        rotationY, // Include calculated rotation
 		AutopilotEnabled: agent.AutopilotEnabled,
 		EquippedItems:    []EquippedItem{}, // Loaded from DB separately
 		CurrentPointsPerMin: agent.CurrentPointsPerMin,
@@ -105,6 +118,11 @@ func AgentToShipDTO(agent Agent) ShipDTO {
 		TotalAgiEarned:   agent.TotalAgiEarned,
 		CreatedAt:        agent.CreatedAt,
 	}
+}
+
+// calculateAtan2 computes atan2(x, y) - compatibility function for Go versions
+func calculateAtan2(x, y float64) float64 {
+	return math.Atan2(x, y)
 }
 
 // AgentCluster represents a cluster of agents for LOD visualization

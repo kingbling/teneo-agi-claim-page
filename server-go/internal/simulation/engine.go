@@ -348,6 +348,12 @@ func (e *Engine) processTravelingAgents() {
 
 	// Broadcast position updates every 2 ticks (~100ms at 50ms tick interval)
 	if len(positionUpdates) > 0 && e.tickCount%2 == 0 && e.OnTravelPositions != nil {
+		log.Printf("[Travel] Streaming %d ship positions (rotation included)", len(positionUpdates))
+		for _, u := range positionUpdates {
+			log.Printf("[Travel] Ship %s: pos=(%.3f,%.3f,%.3f) rot=%.3frad (%.1f°) progress=%.2f",
+				u.ShipID[:8], u.PositionX, u.PositionY, u.PositionZ,
+				u.RotationY, u.RotationY*180/math.Pi, u.Progress)
+		}
 		e.OnTravelPositions(dto.TravelPositionBatch{
 			Ships:     positionUpdates,
 			Timestamp: now,

@@ -8,7 +8,6 @@ import { adminStore } from '@/stores/adminStore'
 import { authStore } from '@/stores/authStore'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 
 const API_URL = import.meta.env.VITE_API_URL ?? ''
 

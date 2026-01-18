@@ -1,5 +1,5 @@
-import { Show, For, createMemo } from 'solid-js'
-import { X, Navigation, Clock, Users, Zap, Target, ArrowLeft, Pause, Play } from 'lucide-solid'
+import { Show, createMemo } from 'solid-js'
+import { X, Navigation, Clock, Users, Target, ArrowLeft, Pause, Play } from 'lucide-solid'
 import { shipStore, type Ship } from '@/stores/shipStore'
 import {
   SYNAPSE_CONFIG,

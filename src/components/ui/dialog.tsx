@@ -11,7 +11,7 @@ const DialogPortal = DialogPrimitive.Portal
 
 const DialogClose = DialogPrimitive.CloseButton
 
-interface DialogOverlayProps extends JSX.HTMLAttributes<HTMLDivElement> {}
+type DialogOverlayProps = JSX.HTMLAttributes<HTMLDivElement>
 
 function DialogOverlay(props: DialogOverlayProps) {
   const [local, others] = splitProps(props, ['class'])
@@ -51,7 +51,7 @@ const dialogContentStyles = [
   'data-[expanded]:slide-in-from-left-1/2 data-[expanded]:slide-in-from-top-[48%]',
 ].join(' ')
 
-interface DialogContentProps extends ParentProps<JSX.HTMLAttributes<HTMLDivElement>> {}
+type DialogContentProps = ParentProps<JSX.HTMLAttributes<HTMLDivElement>>
 
 function DialogContent(props: DialogContentProps) {
   const [local, others] = splitProps(props, ['class', 'children'])
@@ -82,7 +82,7 @@ function DialogContent(props: DialogContentProps) {
   )
 }
 
-interface DialogHeaderProps extends JSX.HTMLAttributes<HTMLDivElement> {}
+type DialogHeaderProps = JSX.HTMLAttributes<HTMLDivElement>
 
 function DialogHeader(props: DialogHeaderProps) {
   const [local, others] = splitProps(props, ['class'])
@@ -98,7 +98,7 @@ function DialogHeader(props: DialogHeaderProps) {
   )
 }
 
-interface DialogFooterProps extends JSX.HTMLAttributes<HTMLDivElement> {}
+type DialogFooterProps = JSX.HTMLAttributes<HTMLDivElement>
 
 function DialogFooter(props: DialogFooterProps) {
   const [local, others] = splitProps(props, ['class'])
@@ -114,7 +114,7 @@ function DialogFooter(props: DialogFooterProps) {
   )
 }
 
-interface DialogTitleProps extends JSX.HTMLAttributes<HTMLHeadingElement> {}
+type DialogTitleProps = JSX.HTMLAttributes<HTMLHeadingElement>
 
 function DialogTitle(props: DialogTitleProps) {
   const [local, others] = splitProps(props, ['class'])
@@ -130,7 +130,7 @@ function DialogTitle(props: DialogTitleProps) {
   )
 }
 
-interface DialogDescriptionProps extends JSX.HTMLAttributes<HTMLParagraphElement> {}
+type DialogDescriptionProps = JSX.HTMLAttributes<HTMLParagraphElement>
 
 function DialogDescription(props: DialogDescriptionProps) {
   const [local, others] = splitProps(props, ['class'])

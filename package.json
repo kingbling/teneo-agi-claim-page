@@ -19,6 +19,7 @@
     "clsx": "^2.1.1",
     "framer-motion": "^11.18.0",
     "lucide-solid": "^0.511.0",
+    "playwright": "^1.57.0",
     "solid-js": "^1.9.5",
     "tailwind-merge": "^3.4.0",
     "three": "^0.182.0",

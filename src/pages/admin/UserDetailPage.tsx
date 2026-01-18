@@ -239,7 +239,7 @@ export default function UserDetailPage() {
                   <label class="text-xs text-[var(--text-tertiary)] mb-1 block">Token Type</label>
                   <select
                     value={grantType()}
-                    onChange={(e) => setGrantType(e.currentTarget.value as any)}
+                    onChange={(e) => setGrantType(e.currentTarget.value as 'points' | 'agi' | 'agentic' | 'teneo')}
                     class="w-full px-3 py-2 rounded border border-[var(--card-border)] bg-[var(--background-primary)] text-[var(--text-primary)]"
                   >
                     <option value="points">Points</option>

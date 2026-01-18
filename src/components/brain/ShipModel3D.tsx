@@ -10,7 +10,7 @@
 import { onMount, onCleanup, createEffect, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
-import { BRAIN_SCALE, constrainToBrainShape } from './core/brainConstants'
+import { constrainToBrainShape } from './core/brainConstants'
 import type { Ship, ShipStatus, ShipType } from '@/stores/shipStore'
 
 interface ShipModel3DProps {
@@ -907,7 +907,7 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
   })
 
   // Track target position for smooth interpolation
-  let targetPosition = new THREE.Vector3()
+  const targetPosition = new THREE.Vector3()
   let positionInitialized = false
 
   // Track target rotation for smooth interpolation
@@ -917,12 +917,25 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
 
   createEffect(() => {
     if (!shipGroup) return
-    const pos = getShipWorldPosition(props.ship)
-    targetPosition.copy(pos)
+
+    // CRITICAL FIX: For exploring ships, always use targetPosition as the source of truth
+    // This prevents ships from disappearing when they arrive at synapses
+    let pos = props.ship
+    if (props.ship.state === 'exploring' && props.ship.targetPositionX !== undefined) {
+      pos = {
+        ...props.ship,
+        positionX: props.ship.targetPositionX,
+        positionY: props.ship.targetPositionY,
+        positionZ: props.ship.targetPositionZ,
+      }
+    }
+
+    const worldPos = getShipWorldPosition(pos)
+    targetPosition.copy(worldPos)
 
     // Initialize position immediately on first set
     if (!positionInitialized) {
-      shipGroup.position.copy(pos)
+      shipGroup.position.copy(worldPos)
       positionInitialized = true
     }
     // Otherwise, position will be lerped in useFrame
@@ -936,7 +949,36 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
       if (!rotationInitialized && shipGroup) {
         currentRotationY = targetRotationY
         rotationInitialized = true
+        console.log('[ShipModel3D] Initial rotation set for ship', props.ship.id.slice(0, 8),
+          'rotationY:', (targetRotationY * 180 / Math.PI).toFixed(1) + '°')
       }
+    }
+  })
+
+  // For deploying ships, use client-side interpolation to ensure smooth movement
+  // This handles the case where server travel:position updates are delayed
+  createEffect(() => {
+    if (props.ship.state === 'deploying' && props.ship.targetPositionX !== undefined &&
+        props.ship.startPositionX !== undefined && props.ship.travelStartTime && props.ship.travelDuration) {
+      // Calculate current progress based on elapsed time (client-side)
+      const elapsed = Date.now() - props.ship.travelStartTime
+      const progress = Math.min(Math.max(elapsed / props.ship.travelDuration, 0), 1)
+
+      // Client-side interpolation: x = start + (target - start) * progress
+      // This ensures smooth animation even with delayed WebSocket updates
+      const interpX = props.ship.startPositionX + (props.ship.targetPositionX - props.ship.startPositionX) * progress
+      const interpY = props.ship.startPositionY + (props.ship.targetPositionY - props.ship.startPositionY) * progress
+      const interpZ = props.ship.startPositionZ + (props.ship.targetPositionZ - props.ship.startPositionZ) * progress
+
+      // Always use client-side interpolation for deploying ships
+      // This ensures the "x += formula" smooth animation during travel
+      const pos = getShipWorldPosition({
+        ...props.ship,
+        positionX: interpX,
+        positionY: interpY,
+        positionZ: interpZ
+      })
+      targetPosition.copy(pos)
     }
   })
 

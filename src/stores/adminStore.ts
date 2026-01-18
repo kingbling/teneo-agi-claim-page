@@ -167,8 +167,8 @@ function createAdminStore() {
 
       const data = await response.json()
       return { data }
-    } catch (err: any) {
-      return { error: err.message || 'Network error' }
+    } catch (err) {
+      return { error: (err as Error).message || 'Network error' }
     }
   }
 

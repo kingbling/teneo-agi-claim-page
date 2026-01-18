@@ -4,14 +4,18 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"teneo/server-go/internal/db"
 	"teneo/server-go/internal/models"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -100,12 +104,47 @@ func GetNonce(c *fiber.Ctx) error {
 	})
 }
 
+// verifyEthSignature verifies an Ethereum signed message and returns the recovered address
+func verifyEthSignature(message string, signatureHex string) (common.Address, error) {
+	// Remove 0x prefix if present
+	sig := strings.TrimPrefix(signatureHex, "0x")
+
+	// Decode hex signature
+	sigBytes, err := hex.DecodeString(sig)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("invalid signature hex: %w", err)
+	}
+
+	if len(sigBytes) != 65 {
+		return common.Address{}, fmt.Errorf("invalid signature length: expected 65 bytes, got %d", len(sigBytes))
+	}
+
+	// Ethereum signatures have v = 27 or 28, but go-ethereum expects 0 or 1
+	if sigBytes[64] >= 27 {
+		sigBytes[64] -= 27
+	}
+
+	// Hash the message with Ethereum prefix
+	prefixedMessage := fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(message), message)
+	hash := crypto.Keccak256Hash([]byte(prefixedMessage))
+
+	// Recover the public key
+	pubKey, err := crypto.SigToPub(hash.Bytes(), sigBytes)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("failed to recover public key: %w", err)
+	}
+
+	// Derive address from public key
+	recoveredAddr := crypto.PubkeyToAddress(*pubKey)
+	return recoveredAddr, nil
+}
+
 // VerifySignature verifies a wallet signature and returns a JWT
-// For development: accepts any signature and creates/returns a user
 func VerifySignature(c *fiber.Ctx, database *gorm.DB) error {
 	var req struct {
 		Wallet    string `json:"wallet"`
 		Signature string `json:"signature"`
+		DevBypass bool   `json:"devBypass"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -116,8 +155,49 @@ func VerifySignature(c *fiber.Ctx, database *gorm.DB) error {
 		return c.Status(400).JSON(fiber.Map{"error": "wallet is required"})
 	}
 
-	// TODO: Implement actual signature verification
-	// For development, skip verification and create/get user
+	// DEV BYPASS: Skip signature verification in development
+	// TODO: Change to os.Getenv("DEV_AUTH_BYPASS") == "true" for production
+	devBypassEnabled := true // HARDCODED FOR DEV
+	if devBypassEnabled && req.DevBypass {
+		log.Printf("[AUTH] DEV BYPASS: Skipping signature verification for wallet: %s", req.Wallet)
+	} else {
+		// Production: require proper signature verification
+		if req.Signature == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "signature is required"})
+		}
+
+		// Get the stored nonce for this wallet
+		noncesMutex.RLock()
+		nonce, exists := nonces[req.Wallet]
+		noncesMutex.RUnlock()
+
+		if !exists {
+			return c.Status(400).JSON(fiber.Map{"error": "No nonce found. Please request a new nonce first."})
+		}
+
+		// Reconstruct the message that was signed
+		message := `Sign this message to verify your wallet ownership.\n\nNonce: ` + nonce + `\n\nThis will not trigger a blockchain transaction or cost any fees.`
+
+		// Verify the signature
+		recoveredAddr, err := verifyEthSignature(message, req.Signature)
+		if err != nil {
+			log.Printf("[AUTH] Signature verification failed for wallet %s: %v", req.Wallet, err)
+			return c.Status(401).JSON(fiber.Map{"error": "Invalid signature"})
+		}
+
+		// Compare recovered address with claimed wallet (case-insensitive)
+		if !strings.EqualFold(recoveredAddr.Hex(), req.Wallet) {
+			log.Printf("[AUTH] Address mismatch: recovered %s, claimed %s", recoveredAddr.Hex(), req.Wallet)
+			return c.Status(401).JSON(fiber.Map{"error": "Signature does not match wallet address"})
+		}
+
+		// Clear the used nonce (one-time use)
+		noncesMutex.Lock()
+		delete(nonces, req.Wallet)
+		noncesMutex.Unlock()
+
+		log.Printf("[AUTH] Signature verified for wallet: %s", req.Wallet)
+	}
 
 	// Try to get existing user
 	user, err := db.GetUserByWallet(database, req.Wallet)

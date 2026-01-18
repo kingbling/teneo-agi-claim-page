@@ -1,9 +1,8 @@
-import { Show, For } from 'solid-js'
-import { Zap, Clock, Users, Trophy, CheckCircle, Circle } from 'lucide-solid'
+import { Show } from 'solid-js'
+import { Clock, Trophy, CheckCircle } from 'lucide-solid'
 import { cn } from '@/lib/utils'
 import {
   type SynapseType,
-  SYNAPSE_CONFIG,
   getSynapseTypeLabel,
   formatPoints,
   formatETA,
@@ -74,7 +73,6 @@ export interface SynapseInfoProps {
  * current ETA, explorer count, and reward distribution type.
  */
 export function SynapseInfo(props: SynapseInfoProps) {
-  const typeConfig = () => SYNAPSE_CONFIG[props.synapse.synapseType]
   const colors = () => SYNAPSE_TYPE_COLORS[props.synapse.synapseType]
 
   // Calculate progress

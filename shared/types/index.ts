@@ -168,7 +168,7 @@ export interface User {
 
 export interface ClientMessage {
   type: 'ping' | 'auth:identify' | 'auth:logout'
-  data: any
+  data: unknown
 }
 
 export interface AuthIdentifyData {
@@ -179,16 +179,16 @@ export type ServerMessage =
   | { type: 'state:sync'; data: WorldState }
   | { type: 'ships:sync'; data: ShipSyncData }
   | { type: 'ships:update'; data: ShipUpdateData }
-  | { type: 'agents:update'; data: any[] }  // Legacy
+  | { type: 'agents:update'; data: unknown[] }  // Legacy
   | { type: 'synapse:completed'; data: SynapseCompletionData }
   | { type: 'exploration:progress'; data: ExplorationProgressData }
-  | { type: 'space:discovered'; data: any }
-  | { type: 'loot:distributed'; data: any }
+  | { type: 'space:discovered'; data: Synapse }
+  | { type: 'loot:distributed'; data: LootDistribution }
   | { type: 'user:levelup'; data: UserLevelUpData }
   | { type: 'auth:success'; data: { userId: string } }
   | { type: 'auth:error'; data: { message: string } }
   | { type: 'error'; data: { message: string } }
-  | { type: 'log:entry'; data: any }
+  | { type: 'log:entry'; data: LogEntry }
 
 export interface WorldState {
   synapseClusters: SynapseCluster[]
@@ -238,6 +238,27 @@ export interface UserLevelUpData {
   userId: string
   newLevel: UserLevel
   timestamp: number
+}
+
+export interface LootDistribution {
+  synapseId: string
+  synapseType: SynapseType
+  rewards: LootReward[]
+  timestamp: number
+}
+
+export interface LootReward {
+  userId: string
+  shipId: string
+  agiAmount: number
+  isLotteryWinner: boolean
+}
+
+export interface LogEntry {
+  level: 'info' | 'warn' | 'error' | 'debug'
+  message: string
+  timestamp?: number
+  context?: Record<string, unknown>
 }
 
 // ============================================================================

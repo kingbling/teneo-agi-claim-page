@@ -1,4 +1,4 @@
-import { type JSX, type ParentProps, splitProps, Show, For } from 'solid-js'
+import { type JSX, splitProps, Show, For } from 'solid-js'
 import { Progress as ProgressPrimitive } from '@kobalte/core/progress'
 import { cn } from '@/lib/utils'
 

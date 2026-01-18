@@ -2,7 +2,6 @@ import { onMount, onCleanup, createEffect, createMemo, createSignal, type Compon
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import {
-  BRAIN_SCALE,
   SHIP_MARKER_CONFIG,
   SHIP_STATE_PULSE,
   SHIP_SHAPE_CONFIG,
@@ -20,6 +19,9 @@ interface ShipMarkersProps {
   selectedShipId?: string | null  // ID of selected ship for highlight ring
   hideSelectedShipParticle?: boolean  // Hide the selected ship's particle when 3D model is visible
 }
+
+// Debug: log props when component mounts
+let propsLogCount = 0
 
 // State-based colors (imported from brainConstants for consistency)
 const STATE_COLORS: Record<ShipStatus, [number, number, number]> = SHIP_STATE_COLORS as unknown as Record<ShipStatus, [number, number, number]>
@@ -197,7 +199,7 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
 
   // Raycaster for click detection
   let raycaster: THREE.Raycaster | null = null
-  let pointer = new THREE.Vector2()
+  const pointer = new THREE.Vector2()
 
   // Track drag state
   let pointerDownPos: { x: number; y: number } | null = null
@@ -220,20 +222,29 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
   const visibleShips = createMemo(() => {
     // Safety check for undefined/null userShips
     if (!props.userShips || !Array.isArray(props.userShips)) {
+      console.log('[AgentMarkers visibleShips] No userShips array')
       return []
     }
+
+    console.log('[AgentMarkers visibleShips] Total ships:', props.userShips.length, 'showIdleShips:', props.showIdleShips, 'hideSelectedShipParticle:', props.hideSelectedShipParticle, 'selectedShipId:', props.selectedShipId)
 
     let ships = props.userShips
 
     // Filter idle ships if not shown
     if (!props.showIdleShips) {
+      const before = ships.length
       ships = ships.filter(s => s.state !== 'idle')
+      console.log('[AgentMarkers visibleShips] Filtered out', before - ships.length, 'idle ships')
     }
 
     // Hide selected ship particle when 3D model is visible
     if (props.hideSelectedShipParticle && props.selectedShipId) {
+      const before = ships.length
       ships = ships.filter(s => s.id !== props.selectedShipId)
+      console.log('[AgentMarkers visibleShips] Hid selected ship particle:', props.selectedShipId?.slice(0, 8), 'filtered:', before - ships.length)
     }
+
+    console.log('[AgentMarkers visibleShips] Returning', ships.length, 'ships:', ships.map(s => ({ id: s.id.slice(0, 8), state: s.state })))
 
     return ships
   })
@@ -241,7 +252,12 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
   // Compute buffer data from ships
   const computeBufferData = createMemo(() => {
     const ships = visibleShips()
-    if (ships.length === 0) return null
+    if (ships.length === 0) {
+      console.log('[AgentMarkers] No ships to render')
+      return null
+    }
+
+    console.log('[AgentMarkers] Computing buffer for', ships.length, 'ships:', ships.map(s => ({ id: s.id.slice(0, 8), state: s.state, rawPos: `(${s.positionX.toFixed(2)},${s.positionY.toFixed(2)},${s.positionZ.toFixed(2)})` })))
 
     const positions = new Float32Array(ships.length * 3)
     const colors = new Float32Array(ships.length * 3)
@@ -322,6 +338,16 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
   }
 
   onMount(() => {
+    // Debug: log props when component mounts
+    propsLogCount++
+    console.log(`[AgentMarkers onMount #${propsLogCount}] Props:`, {
+      userShipsCount: props.userShips?.length ?? 0,
+      userShips: props.userShips?.map(s => ({ id: s.id.slice(0, 8), state: s.state, pos: `(${s.positionX.toFixed(2)},${s.positionY.toFixed(2)},${s.positionZ.toFixed(2)})` })) ?? [],
+      showIdleShips: props.showIdleShips,
+      selectedShipId: props.selectedShipId?.slice(0, 8) ?? null,
+      hideSelectedShipParticle: props.hideSelectedShipParticle
+    })
+
     const sceneObj = scene()
     const renderer = gl()
 
@@ -432,9 +458,12 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
   // Update geometry structure when ships change (add/remove/reorder)
   // Does NOT update positions - that's handled by useFrame with interpolation
   let lastShipIds: string[] = []
+  let lastShipStates: ShipStatus[] = []
   createEffect(() => {
     const data = computeBufferData()
     const ships = visibleShips()
+
+    console.log('[AgentMarkers createEffect] Triggered, data:', data ? 'has data' : 'no data', 'ships count:', ships.length)
 
     if (!geometry || !data) {
       // Clear geometry if no ships
@@ -449,10 +478,14 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       return
     }
 
-    // Check if ships have changed (count or IDs/order)
+    // Check if ships have changed (count or IDs/order OR STATE)
     const currentIds = ships.map(s => s.id)
+    const currentStates = ships.map(s => s.state)
     const shipsChanged = currentIds.length !== lastShipIds.length ||
-      currentIds.some((id, i) => id !== lastShipIds[i])
+      currentIds.some((id, i) => id !== lastShipIds[i]) ||
+      currentStates.some((state, i) => state !== lastShipStates[i])
+
+    console.log('[AgentMarkers createEffect] Ships changed:', shipsChanged, 'currentIds:', currentIds.length, 'lastIds:', lastShipIds.length, 'states changed:', currentStates.some((state, i) => state !== lastShipStates[i]))
 
     if (shipsChanged) {
       geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
@@ -461,14 +494,15 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       geometry.setAttribute('aState', new THREE.BufferAttribute(data.states, 1))
       shipPositions = data.positionsArray
 
-      // Initialize rendered positions for new ships
+      // Initialize rendered positions for new ships (use constrained positions)
       ships.forEach(ship => {
         if (!renderedPositions.has(ship.id)) {
-          renderedPositions.set(ship.id, new THREE.Vector3(
+          const [cx, cy, cz] = constrainToBrainShape(
             ship.positionX,
             ship.positionY,
             ship.positionZ
-          ))
+          )
+          renderedPositions.set(ship.id, new THREE.Vector3(cx, cy, cz))
         }
       })
 
@@ -481,12 +515,19 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       }
 
       lastShipIds = currentIds
+      lastShipStates = currentStates
     }
   })
 
   // Animation loop
   useFrame(({ clock, camera: cam }) => {
     const elapsedTime = clock.getElapsedTime()
+
+    // Debug log to verify useFrame is running
+    if (elapsedTime > 1 && Math.random() < 0.005) { // Log once after 1 second, 0.5% chance
+      const ships = visibleShips()
+      console.log('[AgentMarkers useFrame] Running! elapsedTime:', elapsedTime.toFixed(1), 'ships.length:', ships.length, 'geometry:', !!geometry, 'posAttr count:', geometry?.getAttribute('position')?.count)
+    }
 
     // Update shader time uniform
     if (material) {
@@ -501,7 +542,6 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     // Update positions in real-time with smooth interpolation
     // OPTIMIZATION: Only update ships that are actually moving
     const ships = visibleShips()
-    const now = Date.now()
     if (geometry && ships.length > 0) {
       const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
       const stateAttr = geometry.getAttribute('aState') as THREE.BufferAttribute
@@ -519,46 +559,98 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
         for (let i = 0; i < updateCount; i++) {
           const ship = ships[i]
           if (!ship) continue
-          // Calculate target position from ship data
+
+          // IMPORTANT: Use positionX/Y/Z directly from ship data
+          // The backend sends interpolated positions via travel:position WebSocket events
+          // We use smooth lerp interpolation between these updates for fluid motion
           let targetX = ship.positionX
           let targetY = ship.positionY
           let targetZ = ship.positionZ
 
-          // Check if ship is actively traveling
-          const isTraveling = ship.travelStartTime && ship.travelDuration &&
-              ship.startPositionX !== undefined && ship.startPositionX !== null
+          // CRITICAL FIX: For exploring ships, ALWAYS use targetPosition (synapse location)
+          // This prevents ships from disappearing when the state changes from deploying to exploring
+          // The ship should be at the synapse location it's exploring
+          if (ship.state === 'exploring' && ship.targetPositionX !== undefined) {
+            targetX = ship.targetPositionX
+            targetY = ship.targetPositionY
+            targetZ = ship.targetPositionZ
+          }
 
-          // For traveling ships, calculate the interpolated target based on travel progress
-          if (isTraveling) {
-            const elapsed = now - ship.travelStartTime!
-            const progress = Math.min(elapsed / ship.travelDuration!, 1)
-            // Ease-out cubic for smooth deceleration
-            const eased = 1 - Math.pow(1 - progress, 3)
+          // For deploying ships, calculate client-side interpolation if server updates are delayed
+          // This ensures smooth "x += formula" animation even with infrequent WebSocket updates
+          if (ship.state === 'deploying' && ship.targetPositionX !== undefined &&
+              ship.startPositionX !== undefined && ship.travelStartTime && ship.travelDuration) {
+            // Calculate current progress based on elapsed time
+            const elapsed = Date.now() - ship.travelStartTime
+            const progress = Math.min(Math.max(elapsed / ship.travelDuration, 0), 1)
 
-            // Use targetPosition for destination (positionX stays at start until arrival)
-            const destX = ship.targetPositionX ?? ship.positionX
-            const destY = ship.targetPositionY ?? ship.positionY
-            const destZ = ship.targetPositionZ ?? ship.positionZ
+            // Client-side interpolation: x = start + (target - start) * progress
+            // This is the "x += formula" approach that ensures smooth movement
+            const interpX = ship.startPositionX + (ship.targetPositionX - ship.startPositionX) * progress
+            const interpY = ship.startPositionY + (ship.targetPositionY - ship.startPositionY) * progress
+            const interpZ = ship.startPositionZ + (ship.targetPositionZ - ship.startPositionZ) * progress
 
-            // Interpolate from start to destination
-            targetX = ship.startPositionX! + (destX - ship.startPositionX!) * eased
-            targetY = ship.startPositionY! + (destY - ship.startPositionY!) * eased
-            targetZ = ship.startPositionZ! + (destZ - ship.startPositionZ!) * eased
+            // Always use client-side interpolation for deploying ships to ensure smooth animation
+            // Server updates via travel:position will be used for lerping in the next frame
+            targetX = interpX
+            targetY = interpY
+            targetZ = interpZ
+          }
+
+          // Debug log for deploying and exploring ships
+          if (ship.state === 'deploying' && Math.random() < 0.02) { // Only log 2% of frames to avoid spam
+            console.log(`[AgentMarkers useFrame] Ship ${ship.id.slice(0, 8)} state=${ship.state} rawPos=(${targetX.toFixed(2)},${targetY.toFixed(2)},${targetZ.toFixed(2)}) targetPos=(${ship.targetPositionX?.toFixed(2)},${ship.targetPositionY?.toFixed(2)},${ship.targetPositionZ?.toFixed(2)})`)
+          }
+          if (ship.state === 'exploring' && Math.random() < 0.02) { // Only log 2% of frames to avoid spam
+            console.log(`[AgentMarkers useFrame] Ship ${ship.id.slice(0, 8)} state=${ship.state} pos=(${targetX.toFixed(4)},${targetY.toFixed(4)},${targetZ.toFixed(4)})`)
           }
 
           // Get or create rendered position for this ship
           let rendered = renderedPositions.get(ship.id)
           if (!rendered) {
-            // Initialize at target position
-            rendered = new THREE.Vector3(targetX, targetY, targetZ)
+            // Initialize at target position (constrained to brain shape)
+            const [cx, cy, cz] = constrainToBrainShape(targetX, targetY, targetZ)
+            rendered = new THREE.Vector3(cx, cy, cz)
             renderedPositions.set(ship.id, rendered)
+            console.log(`[AgentMarkers] Initialized ship ${ship.id.slice(0, 8)} at constrained (${cx.toFixed(2)},${cy.toFixed(2)},${cz.toFixed(2)})`)
             positionChanged = true
           }
 
+          // Validate target position before constraining (prevent NaN from causing disappearance)
+          const isValidPosition = isFinite(targetX) && isFinite(targetY) && isFinite(targetZ)
+
+          // CRITICAL FIX: Don't skip ships with invalid positions - use fallback instead
+          // This prevents ships from disappearing when position data is stale or invalid
+          if (!isValidPosition) {
+            // Use targetPosition as fallback if available
+            if (ship.targetPositionX !== undefined) {
+              targetX = ship.targetPositionX
+              targetY = ship.targetPositionY
+              targetZ = ship.targetPositionZ
+              console.warn(`[AgentMarkers] Ship ${ship.id.slice(0, 8)} has invalid position, using targetPosition as fallback`)
+            } else {
+              // Last resort: keep previous rendered position
+              const prevRendered = renderedPositions.get(ship.id)
+              if (prevRendered) {
+                targetX = prevRendered.x
+                targetY = prevRendered.y
+                targetZ = prevRendered.z
+                console.warn(`[AgentMarkers] Ship ${ship.id.slice(0, 8)} has invalid position and no target, keeping previous position`)
+              } else {
+                // No valid position at all - skip this ship (rare edge case)
+                console.error(`[AgentMarkers] Ship ${ship.id.slice(0, 8)} has invalid position: (${targetX}, ${targetY}, ${targetZ}) - skipping`)
+                continue
+              }
+            }
+          }
+
+          // Constrain target position to brain shape for display
+          const [constrainedX, constrainedY, constrainedZ] = constrainToBrainShape(targetX, targetY, targetZ)
+
           // Calculate delta to check if we need to update
-          const deltaX = targetX - rendered.x
-          const deltaY = targetY - rendered.y
-          const deltaZ = targetZ - rendered.z
+          const deltaX = constrainedX - rendered.x
+          const deltaY = constrainedY - rendered.y
+          const deltaZ = constrainedZ - rendered.z
           const totalDelta = Math.abs(deltaX) + Math.abs(deltaY) + Math.abs(deltaZ)
 
           // Only lerp and update if the ship hasn't converged
@@ -568,26 +660,25 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
             const deltaTime = lastFrameTime > 0 ? Math.min(currentTime - lastFrameTime, 0.1) : 0.016
             const lerpFactor = 1.0 - Math.exp(-LERP_SPEED * deltaTime)
 
-            // Smoothly lerp rendered position towards target
+            // Smoothly lerp rendered position toward constrained target
             rendered.x += deltaX * lerpFactor
             rendered.y += deltaY * lerpFactor
             rendered.z += deltaZ * lerpFactor
 
-            // Update position using the smoothed rendered position with same transform as synapses
-            const [finalX, finalY, finalZ] = constrainToBrainShape(
-              rendered.x,
-              rendered.y,
-              rendered.z
-            )
-
-            posAttr.setXYZ(i, finalX, finalY, finalZ)
+            // Use the lerped position directly (already constrained)
+            posAttr.setXYZ(i, rendered.x, rendered.y, rendered.z)
 
             // Update ship positions for raycasting
             if (shipPositions[i]) {
-              shipPositions[i].set(finalX, finalY, finalZ)
+              shipPositions[i].set(rendered.x, rendered.y, rendered.z)
             }
 
             positionChanged = true
+
+            // Debug log for deploying ships
+            if (ship.state === 'deploying' && Math.random() < 0.05) {
+              console.log(`[AgentMarkers useFrame] Ship ${ship.id.slice(0, 8)} posAttr=(${rendered.x.toFixed(3)},${rendered.y.toFixed(3)},${rendered.z.toFixed(3)})`)
+            }
           }
 
           // Update state (check if changed)

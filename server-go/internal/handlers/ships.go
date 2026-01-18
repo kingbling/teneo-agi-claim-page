@@ -25,6 +25,15 @@ func convertAgentToDTO(agent models.Agent) dto.ShipDTO {
 		shipType = string(config.ShipTypeNeuron)
 	}
 
+	// Calculate rotationY (yaw) toward target if available
+	// Ship model faces -Z direction, so we use atan2(dx, -dz)
+	var rotationY float64 = 0
+	if agent.TargetX != nil && agent.TargetZ != nil {
+		dx := *agent.TargetX - agent.PositionX
+		dz := *agent.TargetZ - agent.PositionZ
+		rotationY = math.Atan2(dx, -dz)
+	}
+
 	return dto.ShipDTO{
 		ID:                 agent.ID,
 		OwnerID:            agent.OwnerID,
@@ -43,6 +52,7 @@ func convertAgentToDTO(agent models.Agent) dto.ShipDTO {
 		CurrentSynapseID:   agent.CurrentSpaceID,
 		TravelStartTime:    agent.TravelStartTime,
 		TravelDuration:     agent.TravelDuration,
+		RotationY:          rotationY, // Include calculated rotation
 		AutopilotEnabled:   agent.AutopilotEnabled,
 		EquippedItems:      []dto.EquippedItem{},
 		CurrentPointsPerMin: float64(agent.CurrentPointsPerMin),

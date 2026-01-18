@@ -1,40 +1,10 @@
 import { createSignal, Show, For, createMemo } from 'solid-js'
-import { ChevronDown, ChevronUp, Zap, Compass, Filter } from 'lucide-solid'
-import { shipStore, type SynapseCluster } from '@/stores/shipStore'
-import type { SynapseType } from '@/types/game'
+import { ChevronDown, ChevronUp, Zap, Compass, Filter, Lock } from 'lucide-solid'
+import { shipStore, userStore, type SynapseCluster } from '@/stores/shipStore'
+import type { SynapseType, UserLevel } from '@/types/game'
 import * as THREE from 'three'
 import { constrainToBrainShape } from '../brain/core/brainConstants'
-
-// Synapse type priority for determining dominant type
-const SYNAPSE_TYPE_PRIORITY: Record<SynapseType, number> = {
-  minor: 1,
-  complex: 2,
-  deep: 3,
-  core: 4,
-  rare: 5,
-  legendary: 6,
-  unique: 7,
-}
-
-function getDominantSynapseType(typeCounts?: Record<SynapseType, number>): SynapseType {
-  if (!typeCounts) return 'minor'
-
-  let dominantType: SynapseType = 'minor'
-  let highestCount = 0
-
-  for (const [type, count] of Object.entries(typeCounts)) {
-    if (count > highestCount) {
-      dominantType = type as SynapseType
-      highestCount = count
-    } else if (count === highestCount && count > 0) {
-      if (SYNAPSE_TYPE_PRIORITY[type as SynapseType] > SYNAPSE_TYPE_PRIORITY[dominantType]) {
-        dominantType = type as SynapseType
-      }
-    }
-  }
-
-  return dominantType
-}
+import { getDominantSynapseType, isSynapseTypeLocked } from '@/utils/synapseUtils'
 
 // Synapse types in order for filter buttons
 const SYNAPSE_TYPES: SynapseType[] = ['minor', 'complex', 'deep', 'core', 'rare', 'legendary', 'unique']
@@ -65,11 +35,24 @@ interface SynapseListPanelProps {
  */
 export function SynapseListPanel(props: SynapseListPanelProps) {
   const [showFilters, setShowFilters] = createSignal(false)
+  const [showUnlockedOnly, setShowUnlockedOnly] = createSignal(false)
+
+  // Get user level for filtering
+  const userLevel = createMemo(() => userStore.userLevel || 1 as UserLevel)
 
   // Get clusters from store (use LOD0 for most detail)
   const clusters = createMemo(() => {
     const lod0 = shipStore.synapseClustersLod0
-    const result = Array.isArray(lod0) ? lod0 : []
+    let result = Array.isArray(lod0) ? lod0 : []
+
+    // Filter by user level if unlocked only is enabled
+    if (showUnlockedOnly()) {
+      result = result.filter(cluster => {
+        const dominantType = getDominantSynapseType(cluster.typeCounts)
+        return !isSynapseTypeLocked(dominantType, userLevel())
+      })
+    }
+
     console.log('[SynapseListPanel] LOD0 clusters:', result.length)
     return result
   })
@@ -188,6 +171,21 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
                 )}
               </For>
             </div>
+            {/* Unlocked only filter */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowUnlockedOnly(!showUnlockedOnly())
+              }}
+              class={`mx-3 mb-2 px-3 py-1.5 rounded text-xs flex items-center gap-2 transition-colors ${
+                showUnlockedOnly()
+                  ? 'bg-green-500/20 text-green-400 border border-green-500/50'
+                  : 'bg-gray-700/50 text-gray-400 border border-gray-600/50 hover:bg-gray-700'
+              }`}
+            >
+              <Lock class="h-3 w-3" />
+              <span>Show unlocked only (Lvl {userLevel()}+)</span>
+            </button>
           </Show>
 
           {/* Cluster list */}

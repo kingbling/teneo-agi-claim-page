@@ -7,7 +7,7 @@ import { useNavigate } from '@solidjs/router'
 import { Search, Ban, CheckCircle } from 'lucide-solid'
 import { adminStore, AdminUser } from '@/stores/adminStore'
 import { DataTable, Column } from '@/components/admin/DataTable'
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 
 export default function UsersPage() {

@@ -40,7 +40,7 @@ export function ItemShop(props: ItemShopProps) {
   })
 
   const handlePurchase = (itemType: string) => {
-    shopStore.openPurchaseConfirmation(itemType as any)
+    shopStore.openPurchaseConfirmation(itemType as 'speed_boost' | 'luck_charm' | 'xp_amplifier' | 'radar' | 'cloak')
   }
 
   return (

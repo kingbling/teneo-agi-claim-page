@@ -1,4 +1,4 @@
-import { createSignal, Show, For, createMemo } from 'solid-js'
+import { Show, For, createMemo } from 'solid-js'
 import { ChevronDown, ChevronUp, Ship as ShipIcon, Compass, Eye, EyeOff, Plus } from 'lucide-solid'
 import { shipStore, type Ship } from '@/stores/shipStore'
 import { userStore } from '@/stores/userStore'

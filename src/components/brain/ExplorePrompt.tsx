@@ -1,24 +1,10 @@
-import { type Component, createSignal, onMount, onCleanup, Show } from 'solid-js'
+import { type Component, createSignal, onMount, Show } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { Ship, SynapseCluster, Synapse } from '@/stores/shipStore'
-import type { SynapseType } from '@/types/game'
 import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG, getSynapseTypeLabel, formatPoints } from '@/types/game'
 import { userStore } from '@/stores'
-
-// Get dominant synapse type from cluster
-function getDominantSynapseType(typeCounts?: Record<SynapseType, number>): SynapseType {
-  if (!typeCounts) return 'minor'
-  let dominant: SynapseType = 'minor'
-  let maxCount = 0
-  for (const [type, count] of Object.entries(typeCounts)) {
-    if (count > maxCount) {
-      maxCount = count
-      dominant = type as SynapseType
-    }
-  }
-  return dominant
-}
+import { getDominantSynapseType } from '@/utils/synapseUtils'
 
 interface ExplorePromptProps {
   cluster: SynapseCluster
@@ -30,12 +16,13 @@ interface ExplorePromptProps {
 }
 
 export const ExplorePrompt: Component<ExplorePromptProps> = (props) => {
-  const { gl, camera } = useThree()
+  const { gl } = useThree()
   const [screenPos, setScreenPos] = createSignal<{ x: number; y: number } | null>(null)
   const [isVisible, setIsVisible] = createSignal(false)
 
-  // Fade in on mount
+  // Log when prompt is shown
   onMount(() => {
+    console.log('[ExplorePrompt] Showing explore prompt for ship', props.ship.id.slice(0, 8), 'to synapse', props.synapse?.id?.slice(0, 8))
     requestAnimationFrame(() => setIsVisible(true))
   })
 

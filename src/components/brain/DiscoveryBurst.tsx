@@ -2,7 +2,7 @@ import { onMount, onCleanup, createEffect, createMemo, createSignal, For } from 
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { SynapseDiscoveryEvent } from '@/stores/shipStore'
-import { BRAIN_SCALE, LOOT_THRESHOLDS, constrainToBrainShape } from '@/constants'
+import { LOOT_THRESHOLDS, constrainToBrainShape } from '@/constants'
 import { TRANCE_CONFIG } from './core/brainConstants'
 
 interface DiscoveryBurstProps {
@@ -81,17 +81,13 @@ const BURST_FRAGMENT_SHADER = `
 const PARTICLES_PER_BURST = 50
 
 export function DiscoveryBurst(props: DiscoveryBurstProps) {
-  const { scene } = useThree()
+  useThree()
 
   // Active bursts signal
   const [activeBursts, setActiveBursts] = createSignal<Burst[]>([])
 
   // Track processed discoveries to avoid duplicates
   let processedIds = new Set<string>()
-
-  // Time tracking for scaled time (trance mode)
-  let scaledTime = 0
-  let lastRealTime = 0
 
   // Create new bursts for significant discoveries
   createEffect(() => {

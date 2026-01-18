@@ -22,7 +22,7 @@ import { TargetBeam } from '@/components/brain/TargetBeam'
 import { SolvingBeam } from '@/components/brain/SolvingBeam'
 import { ArrivalPulseManager } from '@/components/brain/ArrivalPulseManager'
 import { TravelPathManager } from '@/components/brain/TravelPath'
-import { CAMERA_CONFIG, LOD_THRESHOLDS, SHIP_ZOOM_CONFIG, SHIP_FOLLOW_CONFIG, BRAIN_SCALE, constrainToBrainShape } from '@/components/brain/core/brainConstants'
+import { CAMERA_CONFIG, LOD_THRESHOLDS, SHIP_ZOOM_CONFIG, SHIP_FOLLOW_CONFIG, constrainToBrainShape } from '@/components/brain/core/brainConstants'
 import type { SynapseCluster, ShipCluster, Ship, Synapse, SynapseDiscoveryEvent } from '@/stores/shipStore'
 
 /**
@@ -441,6 +441,8 @@ export interface BrainSceneMinimalProps {
   // Click handlers
   onSpaceClick?: (cluster: SynapseCluster, position: THREE.Vector3) => void
   onAgentClick?: (agent: Ship) => void
+  // Individual synapse click handler (for 500k individual mode)
+  onIndividualSynapseClick?: (index: number, position: THREE.Vector3) => void
   // Region navigation props
   regionCamera?: RegionCamera | null
   selectedRegionIndex?: number
@@ -483,6 +485,7 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
   const setZoomInfo = props.setZoomInfo ?? (() => {})
   const onSpaceClick = props.onSpaceClick
   const onAgentClick = props.onAgentClick
+  const onIndividualSynapseClick = props.onIndividualSynapseClick
   const regionCamera = () => props.regionCamera ?? null
   const selectedRegionIndex = () => props.selectedRegionIndex ?? -1
   const highlightIntensity = () => props.highlightIntensity ?? 0
@@ -595,6 +598,7 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
         <SpaceMarkers
           clusters={spaceClusters()}
           onSynapseClick={onSpaceClick}
+          onIndividualSynapseClick={onIndividualSynapseClick}
           filterType={props.synapseTypeFilter}
         />
       )}

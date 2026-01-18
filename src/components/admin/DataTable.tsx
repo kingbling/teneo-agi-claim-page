@@ -37,11 +37,11 @@ export interface DataTableProps<T> {
 export function DataTable<T>(props: DataTableProps<T>) {
   const [hoveredRow, setHoveredRow] = createSignal<string | null>(null)
 
-  const getValue = (item: T, key: string): any => {
+  const getValue = (item: T, key: string): unknown => {
     const keys = key.split('.')
-    let value: any = item
+    let value: unknown = item
     for (const k of keys) {
-      value = value?.[k]
+      value = (value as Record<string, unknown>)?.[k]
     }
     return value
   }

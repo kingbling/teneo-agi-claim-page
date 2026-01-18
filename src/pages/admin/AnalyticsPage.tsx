@@ -3,7 +3,6 @@
  */
 
 import { onMount, createSignal, Show, For } from 'solid-js'
-import { adminStore } from '@/stores/adminStore'
 import { authStore } from '@/stores/authStore'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 

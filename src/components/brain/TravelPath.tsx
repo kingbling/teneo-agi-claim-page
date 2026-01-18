@@ -8,7 +8,7 @@
 import { onMount, onCleanup, createEffect, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
-import { BRAIN_SCALE, constrainToBrainShape } from './core/brainConstants'
+import { constrainToBrainShape } from './core/brainConstants'
 import type { Ship } from '@/stores/shipStore'
 
 interface TravelPathProps {

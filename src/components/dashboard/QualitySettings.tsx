@@ -2,7 +2,7 @@
  * QualitySettings - Panel for adjusting visual quality settings
  */
 
-import { type Component, createSignal, Show } from 'solid-js'
+import { type Component, Show } from 'solid-js'
 
 export type QualityPreset = 'low' | 'medium' | 'high' | 'auto'
 

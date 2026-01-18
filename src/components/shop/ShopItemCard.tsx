@@ -4,6 +4,8 @@ import type { ShopItem } from '@/stores/shopStore'
 import { formatDuration, getRemainingTime } from '@/stores/shopStore'
 import { cn } from '@/lib/utils'
 
+type CSSProperties = JSX.CSSProperties & { [key: string]: string | number | undefined }
+
 // Clean color system using brand colors
 const ITEM_COLORS: Record<string, { accent: string; bg: string }> = {
   speed_boost: { accent: '#75e6ea', bg: 'rgba(117, 230, 234, 0.1)' },
@@ -47,7 +49,7 @@ export function ShopItemCard(props: ShopItemCardProps) {
       style={{
         '--card-accent': colors().accent,
         'ring-color': isOwned() ? colors().accent + '40' : undefined,
-      } as any}
+      } as CSSProperties}
     >
       {/* Content - Clean vertical stack */}
       <div class="p-4 flex flex-col items-center text-center">
@@ -60,7 +62,7 @@ export function ShopItemCard(props: ShopItemCardProps) {
           <ItemIcon
             itemType={props.item.id}
             class="w-6 h-6"
-            style={{ color: colors().accent } as any}
+            style={{ color: colors().accent } as CSSProperties}
           />
         </div>
 
@@ -83,7 +85,7 @@ export function ShopItemCard(props: ShopItemCardProps) {
             class="w-full py-2 px-3 rounded-lg mb-3 flex items-center justify-center gap-2"
             style={{ background: colors().bg }}
           >
-            <Check class="w-3.5 h-3.5" style={{ color: colors().accent } as any} />
+            <Check class="w-3.5 h-3.5" style={{ color: colors().accent } as CSSProperties} />
             <span class="text-xs" style={{ color: colors().accent }}>
               {getRemainingTime(props.item.ownedItem!.expiresAt)}
             </span>
@@ -109,7 +111,7 @@ export function ShopItemCard(props: ShopItemCardProps) {
             >
               <Show
                 when={canPurchase()}
-                fallback={<span class="text-xs opacity-60">{props.item.purchaseError || `Need ${props.item.cost - (props.item as any).balance || 0} more`}</span>}
+                fallback={<span class="text-xs opacity-60">{props.item.purchaseError || `Need ${props.item.cost - (props.item as ShopItem & { balance?: number }).balance || 0} more`}</span>}
               >
                 <span>{props.item.cost.toLocaleString()}</span>
                 <span class="text-white/50 text-xs">$AGENTIC</span>
@@ -124,7 +126,7 @@ export function ShopItemCard(props: ShopItemCardProps) {
             class="w-full py-2.5 px-4 rounded-lg flex items-center justify-center gap-2"
             style={{ background: colors().bg }}
           >
-            <Check class="w-4 h-4" style={{ color: colors().accent } as any} />
+            <Check class="w-4 h-4" style={{ color: colors().accent } as CSSProperties} />
             <span class="text-sm font-medium" style={{ color: colors().accent }}>Owned</span>
           </div>
         </Show>

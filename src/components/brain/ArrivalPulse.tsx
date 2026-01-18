@@ -5,7 +5,7 @@
  * from 'deploying' to 'exploring' state.
  */
 
-import { onMount, onCleanup, createEffect, createSignal, type Component } from 'solid-js'
+import { onMount, onCleanup, createEffect, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 

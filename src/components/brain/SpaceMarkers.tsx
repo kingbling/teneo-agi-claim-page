@@ -2,10 +2,11 @@ import { onMount, onCleanup, createEffect, createMemo, createSignal, type Compon
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { SynapseType, UserLevel } from '@/types/game'
-import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG } from '@/types/game'
-import { BRAIN_SCALE, TRANCE_CONFIG, constrainToBrainShape } from './core/brainConstants'
+import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG, formatPoints, formatETA } from '@/types/game'
+import { TRANCE_CONFIG, constrainToBrainShape } from './core/brainConstants'
 import type { SynapseCluster, RawSynapseData } from '@/stores/shipStore'
 import { SpatialOctree } from '@/utils/SpatialOctree'
+import { getDominantSynapseType } from '@/utils/synapseUtils'
 
 // Synapse type priority for determining dominant type (rarity order)
 const SYNAPSE_TYPE_PRIORITY: Record<SynapseType, number> = {
@@ -50,28 +51,6 @@ const SYNAPSE_COLOR_MAP: Record<SynapseType, [number, number, number]> = {
   rare:      [SYNAPSE_TYPE_COLORS.rare.r, SYNAPSE_TYPE_COLORS.rare.g, SYNAPSE_TYPE_COLORS.rare.b],           // Red-pink
   legendary: [SYNAPSE_TYPE_COLORS.legendary.r, SYNAPSE_TYPE_COLORS.legendary.g, SYNAPSE_TYPE_COLORS.legendary.b], // Bright magenta
   unique:    [SYNAPSE_TYPE_COLORS.unique.r, SYNAPSE_TYPE_COLORS.unique.g, SYNAPSE_TYPE_COLORS.unique.b],     // Brilliant yellow
-}
-
-function getDominantSynapseType(typeCounts?: Record<SynapseType, number>): SynapseType {
-  if (!typeCounts) return 'minor'
-
-  let dominantType: SynapseType = 'minor'
-  let highestCount = 0
-
-  // Return the type with the highest COUNT (most common in cluster)
-  for (const [type, count] of Object.entries(typeCounts)) {
-    if (count > highestCount) {
-      dominantType = type as SynapseType
-      highestCount = count
-    } else if (count === highestCount && count > 0) {
-      // Tie-breaker: prefer rarer types when counts are equal
-      if (SYNAPSE_TYPE_PRIORITY[type as SynapseType] > SYNAPSE_TYPE_PRIORITY[dominantType]) {
-        dominantType = type as SynapseType
-      }
-    }
-  }
-
-  return dominantType
 }
 
 // Vertex shader for synapse markers with state-based animation
@@ -354,11 +333,11 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
 
   // Raycaster for click/hover detection
   let raycaster: THREE.Raycaster | null = null
-  let pointer = new THREE.Vector2()
-  let lastPointer = new THREE.Vector2()
+  const pointer = new THREE.Vector2()
+  const lastPointer = new THREE.Vector2()
   let frameCounter = 0
   const HOVER_CHECK_INTERVAL = 3 // Only check hover every N frames
-  let lastCamPosForTooltip = new THREE.Vector3()
+  const lastCamPosForTooltip = new THREE.Vector3()
   const TOOLTIP_CAM_THRESHOLD = 0.01
 
   // Track cluster positions for raycasting
@@ -478,7 +457,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     const data = props.rawSynapseData
     const userLevel = props.userLevel ?? 1 as UserLevel
     // Track version for reactivity on delta updates
-    const _version = props.rawSynapseDataVersion
+    void props.rawSynapseDataVersion
 
     if (!data || !props.useIndividualMode) {
       return null
@@ -638,7 +617,6 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
   onMount(() => {
     const sceneObj = scene()
     const renderer = gl()
-    const cam = camera()
 
     if (!sceneObj || !renderer) {
       console.warn('SynapseMarkersNew: Scene or renderer not available')
@@ -692,7 +670,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
       }
     }
 
-    const handlePointerUp = (e: PointerEvent) => {
+    const handlePointerUp = () => {
       if (!isDragging) {
         handleClick()
       }
@@ -828,7 +806,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
   })
 
   // Animation frame for hover detection and time updates
-  useFrame(({ elapsed, clock, camera: cam }) => {
+  useFrame(({ clock, camera: cam }) => {
     // Update scaled time (trance mode deprecated - always normal scale)
     const timeScale = TRANCE_CONFIG.normalScale
 
@@ -989,7 +967,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     <>
       {showTooltip() && (
         <div
-          class="fixed pointer-events-none"
+          class="fixed pointer-events-auto"
           style={{
             left: `${tooltipPosition()!.x}px`,
             top: `${tooltipPosition()!.y}px`,
@@ -997,48 +975,103 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
             'z-index': 'var(--z-tooltip, 70)',
           }}
         >
-          <div class="bg-[var(--card-background)]/95 backdrop-blur-sm border border-[var(--card-border)] rounded-lg px-3 py-2 text-xs whitespace-nowrap">
+          <div class="bg-[var(--card-background)]/95 backdrop-blur-sm border border-[var(--card-border)] rounded-lg px-3 py-2 text-xs min-w-[200px]">
             {/* Individual synapse mode */}
             {props.useIndividualMode && hoveredIndividualSynapse() && (
               <>
-                <div class="font-medium text-[var(--text-primary)] capitalize">
-                  {hoveredIndividualSynapse()!.type} Synapse
+                <div class="font-medium text-[var(--text-primary)] capitalize flex items-center justify-between gap-4">
+                  <span>{hoveredIndividualSynapse()!.type} Synapse</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (props.onIndividualSynapseClick && hoveredIndex() !== null) {
+                        const pos = clusterPositionsArray[hoveredIndex()!]
+                        if (pos) props.onIndividualSynapseClick(hoveredIndex()!, pos)
+                      }
+                    }}
+                    class="px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-xs font-medium pointer-events-auto"
+                    classList={{ 'opacity-50 cursor-not-allowed': hoveredIsLocked() }}
+                    disabled={hoveredIsLocked()}
+                  >
+                    {hoveredIsLocked() ? 'Locked' : 'Deploy'}
+                  </button>
                 </div>
-                <div class="text-[var(--text-secondary)]">
+                <div class="text-[var(--text-secondary)] mt-1">
                   {hoveredIndividualSynapse()!.stateName}
                 </div>
                 {hoveredIsLocked() && (
-                  <div class="text-red-400">
-                    (Locked - Lvl {SYNAPSE_CONFIG[hoveredIndividualSynapse()!.type].unlockUserLevel})
+                  <div class="text-red-400 mt-1">
+                    Requires Level {SYNAPSE_CONFIG[hoveredIndividualSynapse()!.type].unlockUserLevel}
                   </div>
                 )}
               </>
             )}
 
             {/* Cluster mode */}
-            {!props.useIndividualMode && hoveredCluster() && (
-              <>
-                <div class="font-medium text-[var(--text-primary)]">
-                  {hoveredCluster()!.synapseCount} synapses
-                </div>
-                {hoveredDominantType() && (
-                  <div class="text-[var(--text-secondary)] capitalize">
-                    {hoveredDominantType()} type
-                    {hoveredIsLocked() && (
-                      <span class="text-red-400 ml-1">(Locked - Lvl {SYNAPSE_CONFIG[hoveredDominantType()!].unlockUserLevel})</span>
+            {!props.useIndividualMode && hoveredCluster() && (() => {
+              const cluster = hoveredCluster()!
+              const dominantType = hoveredDominantType()
+              const config = dominantType ? SYNAPSE_CONFIG[dominantType] : null
+              const isLocked = hoveredIsLocked()
+
+              return (
+                <>
+                  <div class="font-medium text-[var(--text-primary)] capitalize flex items-center justify-between gap-4">
+                    <span>{cluster.synapseCount} {dominantType || ''} synapses</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (props.onSynapseClick && !isLocked) {
+                          const idx = clusters.indexOf(cluster)
+                          const pos = clusterPositionsArray[idx]
+                          if (pos) props.onSynapseClick(cluster, pos)
+                        }
+                      }}
+                      class="px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-xs font-medium pointer-events-auto"
+                      classList={{ 'opacity-50 cursor-not-allowed': isLocked }}
+                      disabled={isLocked}
+                    >
+                      {isLocked ? 'Locked' : 'Deploy'}
+                    </button>
+                  </div>
+
+                  {dominantType && (
+                    <div class="text-[var(--text-secondary)] capitalize mt-1">
+                      {dominantType} type
+                      {isLocked && (
+                        <span class="text-red-400 ml-1">(Level {config?.unlockUserLevel} required)</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Progress and rewards info */}
+                  {config && (
+                    <div class="mt-2 space-y-1">
+                      <div class="flex justify-between text-[var(--text-secondary)]">
+                        <span>Points:</span>
+                        <span class="text-[var(--text-primary)]">{formatPoints(config.points)}</span>
+                      </div>
+                      <div class="flex justify-between text-[var(--text-secondary)]">
+                        <span>Reward:</span>
+                        <span class="text-yellow-400">{config.agiReward} $AGI</span>
+                      </div>
+                      <div class="flex justify-between text-[var(--text-secondary)]">
+                        <span>ETA:</span>
+                        <span class="text-[var(--text-primary)]">{formatETA(config.etaMinutes)}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Discovery status */}
+                  <div class="flex gap-3 mt-2 text-[var(--text-secondary)]">
+                    <span>{cluster.discoveredCount} discovered</span>
+                    {cluster.beingExploredCount > 0 && (
+                      <span class="text-yellow-400">{cluster.beingExploredCount} exploring</span>
                     )}
                   </div>
-                )}
-                <div class="text-[var(--text-secondary)]">
-                  {hoveredCluster()!.discoveredCount} discovered
-                </div>
-                {hoveredCluster()!.beingExploredCount > 0 && (
-                  <div class="text-yellow-400">
-                    {hoveredCluster()!.beingExploredCount} exploring
-                  </div>
-                )}
-              </>
-            )}
+                </>
+              )
+            })()}
           </div>
         </div>
       )}

@@ -4,8 +4,7 @@
  * Shows temporary notifications for success/error messages.
  */
 
-import { createSignal, createEffect, onCleanup, Show, For, type Component } from 'solid-js'
-import { createStore } from 'solid-js/store'
+import { createSignal, createEffect, onCleanup, For, type Component } from 'solid-js'
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning'
 
@@ -17,7 +16,7 @@ export interface Toast {
 }
 
 // Global toast store
-let toastListeners: Array<(toasts: Toast[]) => void> = []
+const toastListeners: Array<(toasts: Toast[]) => void> = []
 const globalToasts: Toast[] = []
 
 function notifyListeners() {

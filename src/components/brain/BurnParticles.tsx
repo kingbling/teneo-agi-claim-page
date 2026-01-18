@@ -2,7 +2,7 @@ import { onMount, onCleanup, createEffect, createMemo } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { Ship } from '@/stores/shipStore'
-import { BRAIN_SCALE, TRANCE_CONFIG, constrainToBrainShape } from './core/brainConstants'
+import { TRANCE_CONFIG, constrainToBrainShape } from './core/brainConstants'
 
 interface BurnParticlesProps {
   userAgents: Ship[]

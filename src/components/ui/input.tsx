@@ -1,4 +1,4 @@
-import { createUniqueId, Show, splitProps, type JSX, type Component } from 'solid-js'
+import { createUniqueId, Show, splitProps, type JSX } from 'solid-js'
 import { cn } from '@/lib/utils'
 import { Check, AlertCircle } from 'lucide-solid'
 

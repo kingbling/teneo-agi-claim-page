@@ -16,7 +16,7 @@ interface LogEntry {
   timestamp: number
   level: 'info' | 'warn' | 'error' | 'debug'
   message: string
-  data?: any
+  data?: unknown
 }
 
 export default function LogsPage() {
@@ -46,8 +46,8 @@ export default function LogsPage() {
 
       const data = await response.json()
       setLogs(data.logs || [])
-    } catch (err: any) {
-      setError(err.message || 'Failed to fetch logs')
+    } catch (err) {
+      setError((err as Error).message || 'Failed to fetch logs')
     } finally {
       setIsLoading(false)
     }
@@ -94,7 +94,7 @@ export default function LogsPage() {
             logContainerRef.scrollTop = 0
           }
         }
-      } catch (err) {
+      } catch {
         // Ignore parse errors
       }
     }

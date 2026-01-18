@@ -5,7 +5,7 @@
  * Uses vanilla Three.js integration layer instead of React Three Fiber.
  */
 
-import { type Component, createSignal, createMemo, createEffect, onMount, onCleanup, Show, For } from 'solid-js'
+import { type Component, createSignal, createMemo, createEffect, onMount, onCleanup, Show } from 'solid-js'
 import * as THREE from 'three'
 import { ThreeCanvas } from '@/three'
 import { DashboardHeader, BrainSceneMinimal, BrainMinimap, QualitySettings, LoginOverlay, SynapseListPanel, type QualityPreset } from '@/components/dashboard'
@@ -30,21 +30,7 @@ import {
   getSynapseTypeLabel,
   type SynapseType,
 } from '@/types/game'
-import { BRAIN_SCALE, constrainToBrainShape } from '@/components/brain/core/brainConstants'
-
-// Helper to get dominant synapse type from cluster
-function getDominantSynapseType(typeCounts?: Record<SynapseType, number>): SynapseType {
-  if (!typeCounts) return 'minor'
-  let dominant: SynapseType = 'minor'
-  let maxCount = 0
-  for (const [type, count] of Object.entries(typeCounts)) {
-    if (count > maxCount) {
-      maxCount = count
-      dominant = type as SynapseType
-    }
-  }
-  return dominant
-}
+import { getDominantSynapseType } from '@/utils/synapseUtils'
 
 // Helper to get brain region from position
 function getRegionFromPosition(x: number, y: number, z: number): string {
@@ -74,10 +60,10 @@ export const DiscoveryDashboard: Component = () => {
   const [highlightIntensity, setHighlightIntensity] = createSignal(0)
 
   // Ship deployment dialog state
-  const [deployTarget, setDeployTarget] = createSignal<{ cluster: any; position: THREE.Vector3 } | null>(null)
+  const [deployTarget, setDeployTarget] = createSignal<{ cluster: SynapseCluster; position: THREE.Vector3 } | null>(null)
 
   // Pending deploy (waiting for zoom to complete)
-  const [pendingDeploy, setPendingDeploy] = createSignal<{ cluster: any; position: THREE.Vector3 } | null>(null)
+  const [pendingDeploy, setPendingDeploy] = createSignal<{ cluster: SynapseCluster; position: THREE.Vector3 } | null>(null)
 
   // Zoom animation state
   const [isZooming, setIsZooming] = createSignal(false)

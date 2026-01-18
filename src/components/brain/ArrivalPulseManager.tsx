@@ -5,10 +5,10 @@
  * transition from 'deploying' to 'exploring' state.
  */
 
-import { createSignal, createEffect, createMemo, For, type Component } from 'solid-js'
+import { createSignal, createEffect, For, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { ArrivalPulse } from './ArrivalPulse'
-import { BRAIN_SCALE, constrainToBrainShape } from './core/brainConstants'
+import { constrainToBrainShape } from './core/brainConstants'
 import type { Ship } from '@/stores/shipStore'
 
 interface ArrivalPulseManagerProps {

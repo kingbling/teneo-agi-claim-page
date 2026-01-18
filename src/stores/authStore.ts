@@ -21,6 +21,10 @@ import { wagmiConfig } from '@/lib/wagmi'
 // API Configuration - empty string means same-origin (App Platform deployment)
 const API_URL = import.meta.env.VITE_API_URL ?? ''
 
+// DEV BYPASS: Skip MetaMask and use test wallet
+const DEV_AUTH_BYPASS = import.meta.env.VITE_DEV_AUTH_BYPASS === 'true'
+const DEV_TEST_WALLET = import.meta.env.VITE_DEV_TEST_WALLET || '0xC17Df543f330eF88C30C9862BFcBcF0564aE43BE'
+
 export interface AuthState {
   // Wallet connection
   isConnected: boolean
@@ -62,8 +66,28 @@ function createAuthStore() {
    * Initialize the auth store
    * - Watches for wallet connection changes
    * - Attempts to reconnect previously connected wallet
+   * - DEV BYPASS: Auto-login with test wallet
    */
   async function init(): Promise<{ token: string | null; walletAddress: string | null }> {
+    // DEV BYPASS: Auto-login immediately with test wallet
+    if (DEV_AUTH_BYPASS) {
+      console.log('[AUTH] DEV BYPASS: Auto-login enabled, using test wallet', DEV_TEST_WALLET)
+      setState({
+        isConnected: true,
+        walletAddress: DEV_TEST_WALLET,
+        isInitialized: true,
+      })
+      // Auto-authenticate
+      const result = await authenticate()
+      if (result.success) {
+        console.log('[AUTH] DEV BYPASS: Auto-login successful')
+        return { token: state.token, walletAddress: DEV_TEST_WALLET }
+      } else {
+        console.error('[AUTH] DEV BYPASS: Auto-login failed')
+      }
+      return { token: null, walletAddress: DEV_TEST_WALLET }
+    }
+
     // Watch for account changes (disconnect, switch account)
     watchAccount(wagmiConfig, {
       onChange: (account: GetAccountReturnType) => {
@@ -129,10 +153,21 @@ function createAuthStore() {
   }
 
   /**
-   * Connect to MetaMask wallet
+   * Connect to MetaMask wallet (or use dev bypass)
    */
   async function connectWallet(): Promise<boolean> {
     setState({ isConnecting: true, connectionError: null })
+
+    // DEV BYPASS: Skip MetaMask entirely
+    if (DEV_AUTH_BYPASS) {
+      console.log('[AUTH] DEV BYPASS: Using test wallet', DEV_TEST_WALLET)
+      setState({
+        isConnected: true,
+        walletAddress: DEV_TEST_WALLET,
+        isConnecting: false,
+      })
+      return true
+    }
 
     try {
       const result = await connect(wagmiConfig, {
@@ -146,11 +181,12 @@ function createAuthStore() {
       })
 
       return true
-    } catch (error: any) {
+    } catch (error) {
       console.error('Failed to connect wallet:', error)
+      const err = error as { shortMessage?: string; message?: string }
       setState({
         isConnecting: false,
-        connectionError: error.shortMessage || error.message || 'Failed to connect wallet',
+        connectionError: err.shortMessage || err.message || 'Failed to connect wallet',
       })
       return false
     }
@@ -186,8 +222,10 @@ function createAuthStore() {
    * 1. Request nonce from server
    * 2. Sign message with MetaMask
    * 3. Verify signature and get JWT
+   *
+   * DEV BYPASS: Skip steps 1-2 and send devBypass flag
    */
-  async function authenticate(): Promise<{ success: boolean; user?: any }> {
+  async function authenticate(): Promise<{ success: boolean; user?: unknown }> {
     if (!state.walletAddress) {
       setState({ authError: 'Wallet not connected' })
       return { success: false }
@@ -196,6 +234,36 @@ function createAuthStore() {
     setState({ isAuthenticating: true, authError: null })
 
     try {
+      // DEV BYPASS: Skip nonce and signature
+      if (DEV_AUTH_BYPASS) {
+        console.log('[AUTH] DEV BYPASS: Skipping signature for wallet', state.walletAddress)
+
+        const verifyResponse = await fetch(`${API_URL}/api/auth/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            wallet: state.walletAddress,
+            devBypass: true,
+          }),
+        })
+
+        if (!verifyResponse.ok) {
+          const error = await verifyResponse.json()
+          throw new Error(error.error || 'Authentication failed')
+        }
+
+        const { token, user } = await verifyResponse.json()
+
+        setState({
+          isAuthenticated: true,
+          token,
+          isAuthenticating: false,
+        })
+
+        return { success: true, user }
+      }
+
+      // Production flow: Request nonce, sign, verify
       // Step 1: Request nonce
       const nonceResponse = await fetch(
         `${API_URL}/api/auth/nonce?wallet=${encodeURIComponent(state.walletAddress)}`
@@ -237,11 +305,12 @@ function createAuthStore() {
       })
 
       return { success: true, user }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Authentication failed:', error)
+      const err = error as { shortMessage?: string; message?: string }
       setState({
         isAuthenticating: false,
-        authError: error.shortMessage || error.message || 'Authentication failed',
+        authError: err.shortMessage || err.message || 'Authentication failed',
       })
       return { success: false }
     }

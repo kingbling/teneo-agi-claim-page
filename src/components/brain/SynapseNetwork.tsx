@@ -278,7 +278,7 @@ const SPARKLES_PER_CONNECTION = 3  // Multiple particles per connection for visi
 const SPARKLE_CONNECTION_RATIO = 1.0  // All connections get sparkles (fewer connections now)
 
 export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
-  const { scene, gl, camera } = useThree()
+  const { scene, gl } = useThree()
 
   // Three.js objects (imperative refs)
   let pointsObject: THREE.Points | null = null
@@ -592,7 +592,7 @@ export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
   })
 
   // Animation frame for time updates and sparkle animation
-  useFrame(({ elapsed, clock }) => {
+  useFrame(({ clock }) => {
     // Update scaled time (trance mode deprecated - always normal scale)
     const timeScale = TRANCE_CONFIG.normalScale
 
