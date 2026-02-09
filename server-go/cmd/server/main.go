@@ -76,6 +76,9 @@ func main() {
 	engine.OnClusterUpdate = func(event dto.ClusterUpdateEvent) {
 		hub.Broadcast("cluster:update", event)
 	}
+	engine.OnWorldShipsUpdate = func(batch dto.WorldShipsBatch) {
+		hub.Broadcast("world:ships", batch)
+	}
 
 	// Start engine in background
 	go engine.Start()

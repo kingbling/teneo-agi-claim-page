@@ -21,6 +21,7 @@ import { SolvingBeam } from '@/components/brain/SolvingBeam'
 import { SolvingSparks } from '@/components/brain/SolvingSparks'
 import { SolvingSynapseHighlight } from '@/components/brain/SolvingSynapseHighlight'
 import { ArrivalPulseManager } from '@/components/brain/ArrivalPulseManager'
+import { WorldShipMarkers } from '@/components/brain/WorldShipMarkers'
 import { CAMERA_CONFIG, LOD_THRESHOLDS, SHIP_ZOOM_CONFIG, SHIP_FOLLOW_CONFIG, constrainToBrainShape } from '@/components/brain/core/brainConstants'
 import { TIMING } from '@/constants/timing'
 import type { SynapseCluster, ShipCluster, Ship, Synapse, SynapseDiscoveryEvent } from '@/stores/shipStore'
@@ -527,6 +528,9 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
           isShipZoom={false}  // Disabled: depth cutout looked bad
         />
       )}
+
+      {/* World ships (other users + ambient) */}
+      <WorldShipMarkers />
 
       {/* Ship markers (Masterplan 2026: renamed from agent markers) */}
       {/* Always render - component handles empty array internally. Conditional rendering causes unmount/remount which destroys Three.js objects */}

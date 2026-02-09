@@ -338,10 +338,18 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     }
   })
 
+  // Actionable hover tolerance: prefer actionable synapses within this multiplier of closest distance
+  const ACTIONABLE_HOVER_TOLERANCE = 1.8
+
+  // Helper: check if a synapse index is actionable
+  const isActionable = (idx: number): boolean => {
+    return actionableAttrBuffer !== null && actionableAttrBuffer[idx] > 0.5
+  }
+
   // Find closest synapse/cluster to pointer for hover/click
   // Uses octree when in individual mode for O(log n) performance
   // NOTE: Uses allClusterPositions (not filtered by frustum) to allow clicking at viewport edges
-  // Implements hysteresis: once hovering, uses larger threshold to maintain hover (sticky hover)
+  // Implements hysteresis with actionable preference: sticky on actionable, easy snap to actionable
   const findClosestPoint = (currentHoveredIndex: number | null): number | null => {
     const cam = camera()
     if (!raycaster || !cam) return null
@@ -353,44 +361,109 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     const keepThreshold = baseThreshold * 2.0
     raycaster.setFromCamera(pointer, cam)
 
-    // Helper to check if current hover should be maintained
-    const shouldKeepCurrentHover = (currentIdx: number | null): boolean => {
-      if (currentIdx === null) return false
-
-      // Get position of currently hovered item
-      let currentPos: THREE.Vector3 | null = null
+    // Helper to get position of an index
+    const getPosition = (idx: number): THREE.Vector3 | null => {
       if (props.useIndividualMode && octree) {
         const data = individualGeometryData()
         if (data) {
-          currentPos = new THREE.Vector3(
-            data.positions[currentIdx * 3],
-            data.positions[currentIdx * 3 + 1],
-            data.positions[currentIdx * 3 + 2]
+          return new THREE.Vector3(
+            data.positions[idx * 3],
+            data.positions[idx * 3 + 1],
+            data.positions[idx * 3 + 2]
           )
         }
-      } else if (allClusterPositions[currentIdx]) {
-        currentPos = allClusterPositions[currentIdx]
+      } else if (allClusterPositions[idx]) {
+        return allClusterPositions[idx]
       }
+      return null
+    }
 
+    // Helper to check if current hover should be maintained
+    const shouldKeepCurrentHover = (currentIdx: number | null): boolean => {
+      if (currentIdx === null) return false
+      const currentPos = getPosition(currentIdx)
       if (!currentPos) return false
-
-      // Check if still within the larger "keep" threshold
       const dist = raycaster!.ray.distanceToPoint(currentPos)
       return dist < keepThreshold
     }
 
-    // Individual mode: use octree
-    if (props.useIndividualMode && octree) {
-      const closest = octree.findClosest(raycaster.ray, baseThreshold)
+    // Hysteresis helper: determine switch threshold based on actionable status
+    const getHysteresisRatio = (currentIdx: number | null, newIdx: number | null): number => {
+      if (currentIdx === null || newIdx === null) return 0.7
+      const currentIsActionable = isActionable(currentIdx)
+      const newIsActionable = isActionable(newIdx)
+      if (currentIsActionable && !newIsActionable) return 0.5  // Sticky on actionable: hard to leave
+      if (!currentIsActionable && newIsActionable) return 0.9  // Easy snap to actionable
+      return 0.7  // Both same status: normal rule
+    }
 
-      // If we found something new, use it
-      if (closest !== null) {
-        // Skip if filtered out
-        if (filteredAttrBuffer && filteredAttrBuffer[closest] > 0.5) {
-          // Found point is filtered, check if we should keep current hover
-          return shouldKeepCurrentHover(currentHoveredIndex) ? currentHoveredIndex : null
+    // Choose best candidate considering actionable preference
+    const pickBest = (
+      closestAnyIdx: number | null, closestAnyDist: number,
+      closestActionableIdx: number | null, closestActionableDist: number
+    ): number | null => {
+      // If actionable candidate exists within tolerance of closest-any, prefer it
+      if (closestActionableIdx !== null && closestAnyIdx !== null) {
+        if (closestActionableDist <= closestAnyDist * ACTIONABLE_HOVER_TOLERANCE) {
+          return closestActionableIdx
         }
-        return closest
+      }
+      // If only actionable found (closestAny might also be actionable)
+      if (closestActionableIdx !== null && closestAnyIdx === null) {
+        return closestActionableIdx
+      }
+      return closestAnyIdx
+    }
+
+    // Individual mode: use octree with findAllWithinDistance for actionable scoring
+    if (props.useIndividualMode && octree) {
+      const candidates = octree.findAllWithinDistance(raycaster.ray, baseThreshold)
+
+      let closestAnyIdx: number | null = null
+      let closestAnyDist = baseThreshold
+      let closestActionableIdx: number | null = null
+      let closestActionableDist = baseThreshold
+
+      for (const idx of candidates) {
+        // Skip filtered out
+        if (filteredAttrBuffer && filteredAttrBuffer[idx] > 0.5) continue
+
+        const data = individualGeometryData()
+        if (!data) continue
+        const pos = new THREE.Vector3(
+          data.positions[idx * 3],
+          data.positions[idx * 3 + 1],
+          data.positions[idx * 3 + 2]
+        )
+        const dist = raycaster!.ray.distanceToPoint(pos)
+
+        if (dist < closestAnyDist) {
+          closestAnyDist = dist
+          closestAnyIdx = idx
+        }
+        if (isActionable(idx) && dist < closestActionableDist) {
+          closestActionableDist = dist
+          closestActionableIdx = idx
+        }
+      }
+
+      const best = pickBest(closestAnyIdx, closestAnyDist, closestActionableIdx, closestActionableDist)
+
+      if (best !== null) {
+        // Apply hysteresis
+        if (currentHoveredIndex !== null && shouldKeepCurrentHover(currentHoveredIndex)) {
+          const currentPos = getPosition(currentHoveredIndex)
+          if (currentPos) {
+            const currentDist = raycaster!.ray.distanceToPoint(currentPos)
+            const bestPos = getPosition(best)
+            const bestDist = bestPos ? raycaster!.ray.distanceToPoint(bestPos) : Infinity
+            const ratio = getHysteresisRatio(currentHoveredIndex, best)
+            if (best !== currentHoveredIndex && bestDist >= currentDist * ratio) {
+              return currentHoveredIndex
+            }
+          }
+        }
+        return best
       }
 
       // Nothing found within base threshold - check if we should keep current hover
@@ -403,8 +476,10 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     // Cluster mode: iterate ALL clusters (not just visible) for edge interaction
     if (allClusterPositions.length === 0) return null
 
-    let closestIndex: number | null = null
-    let closestDist = baseThreshold
+    let closestAnyIdx: number | null = null
+    let closestAnyDist = baseThreshold
+    let closestActionableIdx: number | null = null
+    let closestActionableDist = baseThreshold
 
     // Also track distance to current hover for hysteresis comparison
     let currentHoverDist = Infinity
@@ -419,11 +494,17 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
       }
 
       const dist = raycaster!.ray.distanceToPoint(pos)
-      if (dist < closestDist) {
-        closestDist = dist
-        closestIndex = i
+      if (dist < closestAnyDist) {
+        closestAnyDist = dist
+        closestAnyIdx = i
+      }
+      if (isActionable(i) && dist < closestActionableDist) {
+        closestActionableDist = dist
+        closestActionableIdx = i
       }
     })
+
+    const closestIndex = pickBest(closestAnyIdx, closestAnyDist, closestActionableIdx, closestActionableDist)
 
     // Hysteresis: if we have a current hover, only switch to a new one if it's SIGNIFICANTLY closer
     // This prevents flickering between similarly-distanced clusters
@@ -433,8 +514,9 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
         // No new point found or same point - keep current
         return currentHoveredIndex
       }
-      // New point found - only switch if it's significantly closer (at least 30% closer)
-      const significantlyCloser = closestDist < currentHoverDist * 0.7
+      // New point found - use actionable-aware hysteresis ratio
+      const ratio = getHysteresisRatio(currentHoveredIndex, closestIndex)
+      const significantlyCloser = closestAnyDist < currentHoverDist * ratio
       if (!significantlyCloser) {
         // New point isn't significantly closer - keep current hover
         return currentHoveredIndex
@@ -499,6 +581,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
         uCameraWorldPos: { value: new THREE.Vector3() },  // Camera position for distance calc
         uSolvableDensity: { value: 0.3 },       // 30% of solvables visible at once
         uSolvableOnly: { value: 0 },            // 1 = enable density filtering at close zoom
+        uHasActionable: { value: 0 },           // 1 = at least one synapse is actionable
       },
       vertexShader: SYNAPSE_VERTEX_SHADER,
       fragmentShader: SYNAPSE_FRAGMENT_SHADER,
@@ -545,14 +628,22 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
       pointerDownPos = null
     }
 
+    const handlePointerLeave = () => {
+      setHoveredIndex(null)
+      setTooltipPosition(null)
+      document.body.style.cursor = 'auto'
+    }
+
     canvas.addEventListener('pointerdown', handlePointerDown)
     canvas.addEventListener('pointermove', handlePointerMove)
     canvas.addEventListener('pointerup', handlePointerUp)
+    canvas.addEventListener('pointerleave', handlePointerLeave)
 
     onCleanup(() => {
       canvas.removeEventListener('pointerdown', handlePointerDown)
       canvas.removeEventListener('pointermove', handlePointerMove)
       canvas.removeEventListener('pointerup', handlePointerUp)
+      canvas.removeEventListener('pointerleave', handlePointerLeave)
 
       // Remove from scene and dispose
       if (pointsObject && sceneObj) {
@@ -690,6 +781,9 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     const individualData = props.rawSynapseData
     if (!actionableAttrBuffer || !actionableAttr) return
 
+    // Track whether any synapse is actionable (for uHasActionable uniform)
+    let anyActionable = false
+
     // Individual mode
     if (props.useIndividualMode && individualData) {
       for (let i = 0; i < individualData.count && i < actionableAttrBuffer.length; i++) {
@@ -702,8 +796,10 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
         const isActionable = hasIdleShip && isUnlocked && isNotCompleted
 
         actionableAttrBuffer[i] = isActionable ? 1.0 : 0.0
+        if (isActionable && !anyActionable) anyActionable = true
       }
       actionableAttr.needsUpdate = true
+      if (material) material.uniforms.uHasActionable.value = anyActionable ? 1.0 : 0.0
       return
     }
 
@@ -725,9 +821,11 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
       const isActionable = hasIdleShip && isUnlocked && hasAvailableSynapses && hasAvailableSlots
 
       actionableAttrBuffer![i] = isActionable ? 1.0 : 0.0
+      if (isActionable && !anyActionable) anyActionable = true
     })
 
     actionableAttr.needsUpdate = true
+    if (material) material.uniforms.uHasActionable.value = anyActionable ? 1.0 : 0.0
   })
 
   // Animation frame for hover detection and time updates

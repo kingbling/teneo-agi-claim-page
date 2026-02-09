@@ -42,6 +42,7 @@ const (
 	ServerMessageTypeTravelStarted       = "travel:started"
 	ServerMessageTypeTravelPosition      = "travel:position"
 	ServerMessageTypeClusterUpdate       = "cluster:update"
+	ServerMessageTypeWorldShips          = "world:ships"
 	ServerMessageTypeAuthSuccess         = "auth:success"
 	ServerMessageTypeAuthError           = "auth:error"
 	ServerMessageTypeError               = "error"
@@ -208,4 +209,21 @@ type TravelPositionBatch struct {
 type ClusterUpdateEvent struct {
 	Clusters  []SpaceCluster `json:"clusters"`
 	Timestamp int64          `json:"timestamp"`
+}
+
+// WorldShipUpdate represents a single world ship position (ambient or other-user)
+// Uses compact field names for bandwidth efficiency
+type WorldShipUpdate struct {
+	ID        string  `json:"id"`
+	PositionX float64 `json:"x"`
+	PositionY float64 `json:"y"`
+	PositionZ float64 `json:"z"`
+	RotationY float64 `json:"r"`
+	State     int     `json:"s"` // 0=traveling, 1=idle
+}
+
+// WorldShipsBatch batches multiple world ship updates
+type WorldShipsBatch struct {
+	Ships     []WorldShipUpdate `json:"ships"`
+	Timestamp int64             `json:"t"`
 }

@@ -39,6 +39,11 @@ type Config struct {
 	TravelCostPerUnit float64 // Points per unit distance
 	TravelCostMinimum float64 // Minimum cost floor
 	TravelTimePerUnit float64 // Game milliseconds per unit distance (default: 950000 = ~16 min/unit)
+
+	// Ambient Ships (world ships visible to all users)
+	AmbientShipsMin    int     // 5 — minimum ambient ships (when many real ships active)
+	AmbientShipsMax    int     // 15 — maximum ambient ships (when no real ships)
+	AmbientSpeedFactor float64 // 0.8 — speed relative to real ships
 }
 
 // Load loads configuration from environment variables with defaults
@@ -54,7 +59,7 @@ func Load() *Config {
 		WSSShipSyncInterval:   getEnvInt("WS_SHIP_SYNC_INTERVAL", 5000),
 		SimulationEnabled:   getEnvBool("SIMULATION_ENABLED", true),
 		TickInterval:        getEnvInt("TICK_INTERVAL", 1000),
-		TimeMultiplier:      getEnvFloat("TIME_MULTIPLIER", 100),
+		TimeMultiplier:      getEnvFloat("TIME_MULTIPLIER", 5),
 		BrainBoundsMin:      getEnvFloat("BRAIN_BOUNDS_MIN", -50),
 		BrainBoundsMax:      getEnvFloat("BRAIN_BOUNDS_MAX", 50),
 		BoundaryMargin:      getEnvFloat("BOUNDARY_MARGIN", 0.2),
@@ -67,6 +72,10 @@ func Load() *Config {
 		TravelCostPerUnit:   getEnvFloat("TRAVEL_COST_PER_UNIT", 10.0),
 		TravelCostMinimum:   getEnvFloat("TRAVEL_COST_MINIMUM", 5.0),
 		TravelTimePerUnit:   getEnvFloat("TRAVEL_TIME_PER_UNIT", 950000), // ~16 min game time per unit
+
+		AmbientShipsMin:    getEnvInt("AMBIENT_SHIPS_MIN", 5),
+		AmbientShipsMax:    getEnvInt("AMBIENT_SHIPS_MAX", 15),
+		AmbientSpeedFactor: getEnvFloat("AMBIENT_SPEED_FACTOR", 0.8),
 	}
 }
 

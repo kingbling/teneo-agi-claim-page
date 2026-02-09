@@ -8,6 +8,7 @@ import type {
   ServerMessage,
   SynapseCluster,
   TravelPositionBatch,
+  WorldShip,
 } from './shipStore.types'
 import {
   mapServerShipState,
@@ -480,17 +481,18 @@ export function createMessageHandler(
 
         // Update if we have matching synapse loaded
         if (state.currentExplorationSynapse?.id === synapseId) {
-          setState('currentExplorationSynapse', {
-            ...state.currentExplorationSynapse,
-            pointsAccumulated,
-            currentEtaMinutes: etaMinutes,
-          })
+          setState(produce((s) => {
+            if (s.currentExplorationSynapse) {
+              s.currentExplorationSynapse.pointsAccumulated = pointsAccumulated
+              s.currentExplorationSynapse.currentEtaMinutes = etaMinutes
+            }
+          }))
         } else {
           // Check if any of our ships is solving this synapse - if so, fetch details
           const solvingShip = state.userShips?.find(
             s => s.state === 'solving' && s.currentSynapseId === synapseId
           )
-          if (solvingShip && !state.currentExplorationSynapse) {
+          if (solvingShip) {
             log.ws.info(`exploration:progress - Ship ${fmt.shortId(solvingShip.id)} solving synapse ${fmt.shortId(synapseId)}, fetching details`)
             fetchSynapseDetails(synapseId)
           }
@@ -541,6 +543,15 @@ export function createMessageHandler(
 
         // Increment version to trigger reactivity
         setState('rawSynapseDataVersion', v => v + 1)
+        break
+      }
+
+      case 'world:ships': {
+        const batch = message.data as { ships: WorldShip[]; t: number }
+        if (!batch.ships?.length) break
+        // Filter out own ships (ambient IDs start with "ambient-", real IDs are UUIDs)
+        const ownIds = new Set(safeUserShips(state).map(s => s.id))
+        setState('worldShips', batch.ships.filter(s => !ownIds.has(s.id)))
         break
       }
 

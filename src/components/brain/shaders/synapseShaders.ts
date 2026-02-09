@@ -24,6 +24,7 @@ export const SYNAPSE_VERTEX_SHADER = `
   uniform vec3 uCameraWorldPos;    // For distance-based priority
   uniform float uSolvableDensity;  // Fraction visible at once (0.3 = 30%)
   uniform float uSolvableOnly;     // 1.0 = filter mode at close zoom, 0.0 = disabled
+  uniform float uHasActionable;    // 1.0 = at least one synapse is actionable (user has idle ship)
 
   varying vec3 vColor;
   varying float vState;
@@ -140,6 +141,7 @@ export const SYNAPSE_VERTEX_SHADER = `
  */
 export const SYNAPSE_FRAGMENT_SHADER = `
   uniform float uTime;
+  uniform float uHasActionable;    // 1.0 = at least one synapse is actionable
 
   varying vec3 vColor;
   varying float vState;
@@ -289,6 +291,15 @@ export const SYNAPSE_FRAGMENT_SHADER = `
       finalColor += outerHalo * vec3(1.0, 1.0, 0.5) * 0.5;
     }
 
+    // NON-ACTIONABLE DIMMING: When actionable synapses exist, dim non-actionable ones
+    // Creates figure/ground contrast so solvable synapses pop
+    if (uHasActionable > 0.5 && vActionable < 0.5 && vFiltered < 0.5) {
+      float gray = dot(finalColor, vec3(0.299, 0.587, 0.114));
+      finalColor = mix(finalColor, vec3(gray), 0.15);  // 15% desaturation
+      finalColor *= 0.8;  // 20% brightness reduction
+      alpha *= 0.85;      // 15% alpha reduction
+    }
+
     // HOVER HIGHLIGHT: Dramatic pulsating glow when hovered
     if (vHovered > 0.5) {
       // Animated pulse for the entire effect
@@ -327,25 +338,29 @@ export const SYNAPSE_FRAGMENT_SHADER = `
       alpha *= 0.3;  // Much more transparent
     }
 
-    // ACTIONABLE HIGHLIGHT: Bright green pulsing ring for deployable synapses
+    // ACTIONABLE HIGHLIGHT: Enhanced cyan-green pulsing effect for solvable synapses
     if (vActionable > 0.5 && vFiltered < 0.5) {
-      // Animated pulse for attention
-      float pulse = 0.7 + 0.3 * sin(uTime * 3.0);
+      // Dual-frequency pulse for organic breathing (3.5Hz + 1.2Hz)
+      float pulse = 0.7 + 0.2 * sin(uTime * 3.5) + 0.1 * sin(uTime * 1.2 + 0.7);
 
-      // Outer green glow ring
-      float actionRing = smoothstep(0.38, 0.44, dist) * smoothstep(0.52, 0.46, dist);
-      vec3 actionColor = vec3(0.2, 1.0, 0.4) * pulse;  // Bright green
-      finalColor += actionRing * actionColor * 1.5;
+      // Wide outer ring (0.36-0.50 dist) — cyan-green, 1.8x multiplier
+      float outerRing = smoothstep(0.34, 0.38, dist) * smoothstep(0.52, 0.48, dist);
+      vec3 ringColor = vec3(0.15, 1.0, 0.6) * pulse;  // Cyan-green
+      finalColor += outerRing * ringColor * 1.8;
 
-      // Inner green highlight
-      float innerGlow = smoothstep(0.25, 0.15, dist) * 0.3 * pulse;
-      finalColor += innerGlow * vec3(0.3, 1.0, 0.5);
+      // Inner radial wash — subtle green tint over entire point
+      float innerWash = smoothstep(0.4, 0.0, dist) * 0.15 * pulse;
+      finalColor += innerWash * vec3(0.2, 0.9, 0.5);
 
-      // Boost overall brightness slightly
-      finalColor *= 1.1;
+      // Core brightening pulse
+      float corePulse = smoothstep(0.15, 0.0, dist) * 0.4 * pulse;
+      finalColor += corePulse * vec3(0.4, 1.0, 0.7);
 
-      // Ensure visibility
-      alpha = max(alpha, actionRing * 0.8 * pulse);
+      // 1.2x overall brightness boost
+      finalColor *= 1.2;
+
+      // Ensure ring visibility
+      alpha = max(alpha, outerRing * 0.85 * pulse);
     }
 
     // Allow rarer types to exceed 1.0 for bloom effect

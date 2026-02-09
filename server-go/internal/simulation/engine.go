@@ -48,6 +48,9 @@ type Engine struct {
 	// LOD cluster dirty tracking - only recompute when state changes
 	clustersDirty bool
 
+	// Ambient ships manager
+	ambient *AmbientManager
+
 	// Callbacks for WebSocket events
 	OnSpaceDiscovered     func(dto.SpaceDiscovery)
 	OnAgentsUpdated       func([]dto.AgentUpdate)
@@ -58,6 +61,7 @@ type Engine struct {
 	OnUserShipUpdated     func(shipID, userID string) // Send ships:sync to specific user after state change
 	OnTravelPositions     func(dto.TravelPositionBatch) // Stream positions during travel
 	OnClusterUpdate       func(dto.ClusterUpdateEvent) // Immediate cluster update for dashboard sync
+	OnWorldShipsUpdate    func(dto.WorldShipsBatch) // Broadcast ambient + other-user ship positions
 }
 
 // Grid sizes for LOD cluster computation (must match handlers/synapses.go)
@@ -166,6 +170,7 @@ func New(store *database.Store, hub *wshub.Hub, cfg *config.Config) *Engine {
 		cfg:             cfg,
 		stopCh:          make(chan struct{}),
 		spaceOrderIndex: make(map[string]uint32),
+		ambient:         NewAmbientManager(cfg, store),
 	}
 	// Build space order index for delta tracking
 	e.buildSpaceOrderIndex()
@@ -221,6 +226,9 @@ func (e *Engine) Start() {
 
 	log.Printf("[Engine] Starting simulation at tick %d", e.tickCount)
 
+	// Initialize ambient ships
+	e.ambient.Init()
+
 	// Compute clusters on startup so /api/world has data immediately
 	e.recomputeClusters()
 
@@ -273,6 +281,16 @@ func (e *Engine) processTick() {
 	e.processTravelingAgents()
 	e.processSearchingAgents()
 
+	// Tick ambient ships and broadcast world:ships every 3 ticks
+	now := time.Now().UnixMilli()
+	ambientUpdates := e.ambient.Tick(now)
+	if e.tickCount%3 == 0 && e.OnWorldShipsUpdate != nil && len(ambientUpdates) > 0 {
+		e.OnWorldShipsUpdate(dto.WorldShipsBatch{
+			Ships:     ambientUpdates,
+			Timestamp: now,
+		})
+	}
+
 	e.tickCount++
 
 	// Save simulation state every 10 ticks
@@ -288,6 +306,15 @@ func (e *Engine) processTick() {
 	if e.tickCount%30 == 0 && e.clustersDirty {
 		e.clustersDirty = false
 		go e.recomputeClusters()
+	}
+
+	// Adjust ambient ship count every 30 ticks based on real ship activity
+	if e.tickCount%30 == 0 {
+		ctx := context.Background()
+		travelingData, err := e.store.Queries.GetTravelingAgentsWithTargets(ctx)
+		if err == nil {
+			e.ambient.AdjustCount(len(travelingData))
+		}
 	}
 
 	// Broadcast state sync every 5 ticks

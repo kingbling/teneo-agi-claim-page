@@ -282,6 +282,42 @@ func (q *Queries) GetNearestSpace(ctx context.Context, arg GetNearestSpaceParams
 	return i, err
 }
 
+const getRandomSpacePositions = `-- name: GetRandomSpacePositions :many
+SELECT id, position_x, position_y, position_z FROM spaces ORDER BY RANDOM() LIMIT $1
+`
+
+type GetRandomSpacePositionsRow struct {
+	ID        string  `json:"id"`
+	PositionX float64 `json:"position_x"`
+	PositionY float64 `json:"position_y"`
+	PositionZ float64 `json:"position_z"`
+}
+
+func (q *Queries) GetRandomSpacePositions(ctx context.Context, limit int32) ([]GetRandomSpacePositionsRow, error) {
+	rows, err := q.db.Query(ctx, getRandomSpacePositions, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetRandomSpacePositionsRow{}
+	for rows.Next() {
+		var i GetRandomSpacePositionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PositionX,
+			&i.PositionY,
+			&i.PositionZ,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getRandomUndiscoveredSpace = `-- name: GetRandomUndiscoveredSpace :one
 SELECT id, position_x, position_y, position_z, region, zone, synapse_count, state, discovered_at, synapse_type, points_required, points_accumulated, current_eta_minutes, sector_id, agi_reward, brain_xp_reward FROM spaces WHERE state = 'undiscovered' ORDER BY RANDOM() LIMIT 1
 `

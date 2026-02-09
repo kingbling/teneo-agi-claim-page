@@ -39,6 +39,9 @@ SELECT * FROM spaces WHERE state = 'undiscovered' ORDER BY RANDOM() LIMIT 1;
 -- name: GetRandomUndiscoveredSpaceInRegion :one
 SELECT * FROM spaces WHERE state = 'undiscovered' AND region = $1 ORDER BY RANDOM() LIMIT 1;
 
+-- name: GetRandomSpacePositions :many
+SELECT id, position_x, position_y, position_z FROM spaces ORDER BY RANDOM() LIMIT $1;
+
 -- name: GetBulkSpaces :many
 SELECT position_x, position_y, position_z, state, synapse_type
 FROM spaces ORDER BY id;

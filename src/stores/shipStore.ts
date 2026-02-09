@@ -16,6 +16,7 @@ export type {
   SynapseCluster,
   ShipCluster,
   WorldState,
+  WorldShip,
   ExplorerInfo,
   SynapseDiscoveryEvent,
   LootEvent,
@@ -392,6 +393,7 @@ function createShipStore() {
     // Ship State (LOD clusters + user's ships)
     get shipClusters() { return state.shipClusters },
     get userShips() { return state.userShips },
+    get worldShips() { return state.worldShips },
     get selectedShipId() { return state.selectedShipId },
 
     // Current Exploration (for selected ship)

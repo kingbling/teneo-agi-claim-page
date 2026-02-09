@@ -287,6 +287,16 @@ export interface TravelPositionBatch {
   timestamp: number
 }
 
+// World Ship (ambient + other users, broadcast via world:ships)
+export interface WorldShip {
+  id: string
+  x: number
+  y: number
+  z: number
+  r: number   // rotationY
+  s: number   // 0=traveling, 1=idle
+}
+
 // Server Messages
 export type ServerMessage =
   | { type: 'state:sync'; data: WorldState & { timestamp?: number } }
@@ -296,6 +306,7 @@ export type ServerMessage =
   | { type: 'ships:sync'; data: { ships: Ship[]; timestamp: number } }  // Full ship state from server
   | { type: 'travel:started'; data: TravelStartedEvent }  // Ship started traveling
   | { type: 'travel:position'; data: TravelPositionBatch }  // Position updates during travel
+  | { type: 'world:ships'; data: { ships: WorldShip[]; t: number } }  // Ambient + other-user ships
   | { type: 'auth:success'; data: { userId: string } }
   | { type: 'auth:error'; data: { message: string } }
   | { type: 'agents:update'; data: unknown[] }  // Legacy - server agent updates
@@ -332,6 +343,7 @@ export interface ShipStoreState {
   // Ship State (clusters + user's ships)
   shipClusters: ShipCluster[]
   userShips: Ship[]
+  worldShips: WorldShip[]  // Ambient + other-user ships
   selectedShipId: string | null
 
   // Current Exploration (for selected ship)
@@ -368,6 +380,7 @@ export const initialState: ShipStoreState = {
   // Ships
   shipClusters: [],
   userShips: [],
+  worldShips: [],
   selectedShipId: null,
 
   // Current Exploration

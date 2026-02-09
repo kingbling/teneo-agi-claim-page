@@ -131,8 +131,8 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
               {/* Exploring Synapse */}
               <Show when={currentShip().state === 'solving' && synapse()}>
                 {(currentSynapse) => {
-                  const config = SYNAPSE_CONFIG[currentSynapse().synapseType] || SYNAPSE_CONFIG.minor
-                  const pct = currentSynapse().pointsRequired > 0
+                  const config = () => SYNAPSE_CONFIG[currentSynapse().synapseType] || SYNAPSE_CONFIG.minor
+                  const pct = () => currentSynapse().pointsRequired > 0
                     ? (currentSynapse().pointsAccumulated / currentSynapse().pointsRequired) * 100
                     : 0
 
@@ -148,11 +148,11 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
                       {/* Progress */}
                       <div class="space-y-1">
                         <div class="flex justify-between text-xs">
-                          <span class="text-gray-400">{Math.round(pct)}%</span>
+                          <span class="text-gray-400">{Math.round(pct())}%</span>
                           <span class="text-teal-400">{currentShip().currentPointsPerMin} pts/min</span>
                         </div>
                         <div class="h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                          <div class="h-full bg-teal-500" style={{ width: `${pct}%` }} />
+                          <div class="h-full bg-teal-500" style={{ width: `${pct()}%` }} />
                         </div>
                       </div>
 
@@ -168,7 +168,7 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
                       {/* Reward */}
                       <div class="flex items-center justify-between text-xs">
                         <span class="text-gray-500">Reward</span>
-                        <span class="text-amber-400 font-medium">{formatPoints(config.agiReward)} $AGI</span>
+                        <span class="text-amber-400 font-medium">{formatPoints(config().agiReward)} $AGI</span>
                       </div>
 
                       {/* Explorers count */}
