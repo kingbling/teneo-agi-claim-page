@@ -1,68 +1,87 @@
 package admin
 
 import (
+	"errors"
 	"strconv"
 	"time"
 
-	"teneo/server-go/internal/db"
-	"teneo/server-go/internal/models"
+	"teneo/server-go/internal/database"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 )
-
-// AgentWithOwner is a struct to hold agent with owner wallet info
-type AgentWithOwner struct {
-	models.Agent
-	OwnerWallet string `gorm:"column:wallet"`
-}
 
 // ListAgents returns paginated list of agents/ships
 func ListAgents(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "50"))
 	state := c.Query("state", "")
 	offset := (page - 1) * limit
 
-	// Build query
-	query := database.Model(&models.Agent{})
-	if state != "" {
-		query = query.Where("state = ?", state)
-	}
-
-	// Count total
 	var total int64
-	query.Count(&total)
+	var err error
 
-	// Get agents with owner wallet via join
-	var results []struct {
-		ID               string   `gorm:"column:id"`
-		OwnerID          string   `gorm:"column:owner_id"`
-		Name             string   `gorm:"column:name"`
-		State            string   `gorm:"column:state"`
-		PositionX        float64  `gorm:"column:position_x"`
-		PositionY        float64  `gorm:"column:position_y"`
-		PositionZ        float64  `gorm:"column:position_z"`
-		TargetSpaceID    *string  `gorm:"column:target_space_id"`
-		AutopilotEnabled bool     `gorm:"column:autopilot_enabled"`
-		CreatedAt        int64    `gorm:"column:created_at"`
-		OwnerWallet      *string  `gorm:"column:wallet"`
+	if state != "" {
+		total, err = store.Queries.GetAgentCountByState(ctx, state)
+	} else {
+		total, err = store.Queries.GetAgentCount(ctx)
+	}
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to count agents"})
 	}
 
-	database.Table("agents a").
-		Select("a.id, a.owner_id, a.name, a.state, a.position_x, a.position_y, a.position_z, a.target_space_id, a.autopilot_enabled, a.created_at, u.wallet").
-		Joins("LEFT JOIN users u ON a.owner_id = u.id").
-		Where(func() string {
-			if state != "" {
-				return "a.state = ?"
-			}
-			return "1=1"
-		}(), state).
-		Order("a.created_at DESC").
-		Limit(limit).
-		Offset(offset).
-		Find(&results)
+	// Get agents with owner wallet via raw SQL join
+	type agentRow struct {
+		ID               string
+		OwnerID          string
+		Name             string
+		State            string
+		PositionX        float64
+		PositionY        float64
+		PositionZ        float64
+		TargetSpaceID    *string
+		AutopilotEnabled bool
+		CreatedAt        int64
+		OwnerWallet      *string
+	}
+
+	var query string
+	var args []interface{}
+	if state != "" {
+		query = `SELECT a.id, a.owner_id, a.name, a.state, a.position_x, a.position_y, a.position_z,
+		                a.target_space_id::TEXT, a.autopilot_enabled, a.created_at, u.wallet
+		         FROM agents a LEFT JOIN users u ON a.owner_id = u.id
+		         WHERE a.state = $1 ORDER BY a.created_at DESC LIMIT $2 OFFSET $3`
+		args = []interface{}{state, limit, offset}
+	} else {
+		query = `SELECT a.id, a.owner_id, a.name, a.state, a.position_x, a.position_y, a.position_z,
+		                a.target_space_id::TEXT, a.autopilot_enabled, a.created_at, u.wallet
+		         FROM agents a LEFT JOIN users u ON a.owner_id = u.id
+		         ORDER BY a.created_at DESC LIMIT $1 OFFSET $2`
+		args = []interface{}{limit, offset}
+	}
+
+	rows, err := store.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to query agents"})
+	}
+	defer rows.Close()
+
+	var results []agentRow
+	for rows.Next() {
+		var r agentRow
+		if err := rows.Scan(&r.ID, &r.OwnerID, &r.Name, &r.State, &r.PositionX, &r.PositionY, &r.PositionZ,
+			&r.TargetSpaceID, &r.AutopilotEnabled, &r.CreatedAt, &r.OwnerWallet); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to scan agent"})
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to iterate agents"})
+	}
 
 	agents := make([]fiber.Map, len(results))
 	for i, r := range results {
@@ -99,20 +118,25 @@ func ListAgents(c *fiber.Ctx) error {
 
 // GetAgentsByOwner returns all agents for a specific user
 func GetAgentsByOwner(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 	ownerID := c.Params("ownerId")
 
-	var agents []models.Agent
-	if err := database.Select("id, name, state, position_x, position_y, position_z, target_space_id, autopilot_enabled, created_at").
-		Where("owner_id = ?", ownerID).Find(&agents).Error; err != nil {
+	agents, err := store.Queries.GetAgentsByOwner(ctx, ownerID)
+	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to query agents"})
 	}
 
 	result := make([]fiber.Map, len(agents))
 	for i, agent := range agents {
 		targetSpaceID := ""
-		if agent.TargetSpaceID != nil {
-			targetSpaceID = *agent.TargetSpaceID
+		if agent.TargetSpaceID.Valid {
+			b, _ := agent.TargetSpaceID.MarshalJSON()
+			targetSpaceID = string(b)
+			// Strip quotes from JSON marshaled UUID
+			if len(targetSpaceID) > 2 {
+				targetSpaceID = targetSpaceID[1 : len(targetSpaceID)-1]
+			}
 		}
 		result[i] = fiber.Map{
 			"id":               agent.ID,
@@ -132,50 +156,40 @@ func GetAgentsByOwner(c *fiber.Ctx) error {
 
 // GetStuckAgents returns agents that appear to be stuck
 func GetStuckAgents(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
-	// Agents stuck in traveling state for more than 1 hour
-	stuckThreshold := int64(3600000) // 1 hour in ms
 	now := currentTimeMs()
 
-	var results []struct {
-		ID              string  `gorm:"column:id"`
-		OwnerID         string  `gorm:"column:owner_id"`
-		Name            string  `gorm:"column:name"`
-		State           string  `gorm:"column:state"`
-		TravelStartTime *int64  `gorm:"column:travel_start_time"`
-		Wallet          *string `gorm:"column:wallet"`
+	stuckAgents, err := store.Queries.GetStuckAgents(ctx, &now)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get stuck agents"})
 	}
 
-	database.Table("agents a").
-		Select("a.id, a.owner_id, a.name, a.state, a.travel_start_time, u.wallet").
-		Joins("LEFT JOIN users u ON a.owner_id = u.id").
-		Where("a.state = ? AND a.travel_start_time IS NOT NULL AND (? - a.travel_start_time) > ?",
-			"traveling", now, stuckThreshold).
-		Order("a.travel_start_time ASC").
-		Find(&results)
-
-	agents := make([]fiber.Map, len(results))
-	for i, r := range results {
+	// Get owner wallets for stuck agents
+	agents := make([]fiber.Map, len(stuckAgents))
+	for i, a := range stuckAgents {
 		wallet := ""
-		if r.Wallet != nil {
-			wallet = *r.Wallet
+		owner, err := store.Queries.GetUser(ctx, a.OwnerID)
+		if err == nil {
+			wallet = owner.Wallet
 		}
+
 		stuckDuration := int64(0)
-		if r.TravelStartTime != nil {
-			stuckDuration = now - *r.TravelStartTime
+		if a.TravelStartTime != nil {
+			stuckDuration = now - *a.TravelStartTime
 		}
 		travelStartTime := int64(0)
-		if r.TravelStartTime != nil {
-			travelStartTime = *r.TravelStartTime
+		if a.TravelStartTime != nil {
+			travelStartTime = *a.TravelStartTime
 		}
 
 		agents[i] = fiber.Map{
-			"id":              r.ID,
-			"ownerId":         r.OwnerID,
+			"id":              a.ID,
+			"ownerId":         a.OwnerID,
 			"ownerWallet":     wallet,
-			"name":            r.Name,
-			"state":           r.State,
+			"name":            a.Name,
+			"state":           a.State,
 			"travelStartTime": travelStartTime,
 			"stuckDuration":   stuckDuration,
 		}
@@ -186,22 +200,29 @@ func GetStuckAgents(c *fiber.Ctx) error {
 
 // GetAgentDetail returns detailed info about a specific agent
 func GetAgentDetail(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 	agentID := c.Params("id")
 
-	var agent models.Agent
-	if err := database.First(&agent, "id = ?", agentID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Agent not found"})
+	agent, err := store.Queries.GetAgent(ctx, agentID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Agent not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get agent"})
 	}
 
 	// Get owner wallet
-	var ownerWallet string
-	database.Model(&models.User{}).Select("wallet").Where("id = ?", agent.OwnerID).Scan(&ownerWallet)
+	ownerWallet := ""
+	owner, err := store.Queries.GetUser(ctx, agent.OwnerID)
+	if err == nil {
+		ownerWallet = owner.Wallet
+	}
 
 	// Get current exploration if any
 	var currentExploration fiber.Map
-	var explorer models.SynapseExplorer
-	if err := database.First(&explorer, "ship_id = ?", agentID).Error; err == nil {
+	explorer, err := store.Queries.GetExplorerByShip(ctx, agentID)
+	if err == nil {
 		currentExploration = fiber.Map{
 			"explorerId":        explorer.ID,
 			"synapseId":         explorer.SynapseID,
@@ -211,8 +232,12 @@ func GetAgentDetail(c *fiber.Ctx) error {
 	}
 
 	targetSpaceID := ""
-	if agent.TargetSpaceID != nil {
-		targetSpaceID = *agent.TargetSpaceID
+	if agent.TargetSpaceID.Valid {
+		b, _ := agent.TargetSpaceID.MarshalJSON()
+		targetSpaceID = string(b)
+		if len(targetSpaceID) > 2 {
+			targetSpaceID = targetSpaceID[1 : len(targetSpaceID)-1]
+		}
 	}
 	travelStartTime := int64(0)
 	if agent.TravelStartTime != nil {
@@ -247,3 +272,4 @@ func GetAgentDetail(c *fiber.Ctx) error {
 func currentTimeMs() int64 {
 	return time.Now().UnixMilli()
 }
+

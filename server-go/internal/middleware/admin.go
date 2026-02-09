@@ -1,14 +1,15 @@
 package middleware
 
 import (
+	"errors"
 	"os"
 	"strings"
 
-	"teneo/server-go/internal/db"
+	"teneo/server-go/internal/database"
 	"teneo/server-go/internal/handlers"
-	"teneo/server-go/internal/models"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 )
 
 var adminWallets []string
@@ -38,10 +39,14 @@ func RequireAdmin(c *fiber.Ctx) error {
 	}
 
 	// Check if user is admin
-	database := db.Get()
-	var user models.User
-	err = database.Select("is_admin, wallet").Where("id = ?", userID).First(&user).Error
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
+
+	user, err := store.Queries.GetUserAdminInfo(ctx, userID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(401).JSON(fiber.Map{"error": "User not found"})
+		}
 		return c.Status(401).JSON(fiber.Map{"error": "User not found"})
 	}
 

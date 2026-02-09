@@ -62,7 +62,6 @@ interface ShipDetailPanelProps {
  * ShipDetailPanel - Compact floating panel for ship details
  *
  * Shows selected ship info, exploration progress, and actions.
- * Deployment is handled separately by DeploymentPanel.
  */
 export function ShipDetailPanel(props: ShipDetailPanelProps) {
   const ship = createMemo(() => shipStore.selectedShip)

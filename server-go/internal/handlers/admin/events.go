@@ -1,21 +1,29 @@
 package admin
 
 import (
+	"errors"
 	"time"
 
-	"teneo/server-go/internal/db"
-	"teneo/server-go/internal/models"
+	"teneo/server-go/internal/database"
+	"teneo/server-go/internal/database/generated"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // ListEvents returns all events
 func ListEvents(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
-	var events []models.LiveEvent
-	database.Order("start_time DESC").Find(&events)
+	events, err := store.Queries.ListEvents(ctx, generated.ListEventsParams{
+		Limit:  1000,
+		Offset: 0,
+	})
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list events"})
+	}
 
 	result := make([]fiber.Map, len(events))
 	for i, event := range events {
@@ -41,12 +49,16 @@ func ListEvents(c *fiber.Ctx) error {
 
 // GetEventDetail returns detailed event info
 func GetEventDetail(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 	eventID := c.Params("id")
 
-	var event models.LiveEvent
-	if err := database.First(&event, "id = ?", eventID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Event not found"})
+	event, err := store.Queries.GetEvent(ctx, eventID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Event not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get event"})
 	}
 
 	description := ""
@@ -68,7 +80,8 @@ func GetEventDetail(c *fiber.Ctx) error {
 
 // CreateEvent creates a new event
 func CreateEvent(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
 	var req struct {
 		Name        string  `json:"name"`
@@ -97,7 +110,8 @@ func CreateEvent(c *fiber.Ctx) error {
 	if req.Description != "" {
 		description = &req.Description
 	}
-	event := models.LiveEvent{
+
+	event, err := store.Queries.CreateEvent(ctx, generated.CreateEventParams{
 		ID:          uuid.New().String(),
 		Name:        req.Name,
 		Description: description,
@@ -107,9 +121,8 @@ func CreateEvent(c *fiber.Ctx) error {
 		EndTime:     req.EndTime,
 		IsActive:    false,
 		CreatedAt:   time.Now().UnixMilli(),
-	}
-
-	if err := database.Create(&event).Error; err != nil {
+	})
+	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create event"})
 	}
 
@@ -118,7 +131,8 @@ func CreateEvent(c *fiber.Ctx) error {
 
 // UpdateEvent updates an existing event
 func UpdateEvent(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 	eventID := c.Params("id")
 
 	var req struct {
@@ -134,32 +148,50 @@ func UpdateEvent(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
-	updates := make(map[string]interface{})
-
-	if req.Name != nil {
-		updates["name"] = *req.Name
-	}
-	if req.Description != nil {
-		updates["description"] = *req.Description
-	}
-	if req.Type != nil {
-		updates["event_type"] = *req.Type
-	}
-	if req.Multiplier != nil {
-		updates["multiplier"] = *req.Multiplier
-	}
-	if req.StartTime != nil {
-		updates["start_time"] = *req.StartTime
-	}
-	if req.EndTime != nil {
-		updates["end_time"] = *req.EndTime
-	}
-
-	if len(updates) == 0 {
+	if req.Name == nil && req.Description == nil && req.Type == nil && req.Multiplier == nil && req.StartTime == nil && req.EndTime == nil {
 		return c.Status(400).JSON(fiber.Map{"error": "No fields to update"})
 	}
 
-	if err := database.Model(&models.LiveEvent{}).Where("id = ?", eventID).Updates(updates).Error; err != nil {
+	// Get existing event to merge changes
+	event, err := store.Queries.GetEvent(ctx, eventID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Event not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get event"})
+	}
+
+	params := generated.UpdateEventParams{
+		ID:          event.ID,
+		Name:        event.Name,
+		Description: event.Description,
+		EventType:   event.EventType,
+		Multiplier:  event.Multiplier,
+		StartTime:   event.StartTime,
+		EndTime:     event.EndTime,
+		IsActive:    event.IsActive,
+	}
+
+	if req.Name != nil {
+		params.Name = *req.Name
+	}
+	if req.Description != nil {
+		params.Description = req.Description
+	}
+	if req.Type != nil {
+		params.EventType = *req.Type
+	}
+	if req.Multiplier != nil {
+		params.Multiplier = *req.Multiplier
+	}
+	if req.StartTime != nil {
+		params.StartTime = *req.StartTime
+	}
+	if req.EndTime != nil {
+		params.EndTime = *req.EndTime
+	}
+
+	if err := store.Queries.UpdateEvent(ctx, params); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update event"})
 	}
 
@@ -168,16 +200,21 @@ func UpdateEvent(c *fiber.Ctx) error {
 
 // DeleteEvent deletes an event
 func DeleteEvent(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 	eventID := c.Params("id")
 
-	result := database.Delete(&models.LiveEvent{}, "id = ?", eventID)
-	if result.Error != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete event"})
+	// Verify event exists first
+	_, err := store.Queries.GetEvent(ctx, eventID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Event not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to check event"})
 	}
 
-	if result.RowsAffected == 0 {
-		return c.Status(404).JSON(fiber.Map{"error": "Event not found"})
+	if err := store.Queries.DeleteEvent(ctx, eventID); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete event"})
 	}
 
 	return c.JSON(fiber.Map{"success": true})
@@ -185,16 +222,21 @@ func DeleteEvent(c *fiber.Ctx) error {
 
 // ActivateEvent activates an event
 func ActivateEvent(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 	eventID := c.Params("id")
 
-	result := database.Model(&models.LiveEvent{}).Where("id = ?", eventID).Update("is_active", true)
-	if result.Error != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to activate event"})
+	// Verify event exists
+	_, err := store.Queries.GetEvent(ctx, eventID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Event not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to check event"})
 	}
 
-	if result.RowsAffected == 0 {
-		return c.Status(404).JSON(fiber.Map{"error": "Event not found"})
+	if err := store.Queries.ActivateEvent(ctx, eventID); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to activate event"})
 	}
 
 	return c.JSON(fiber.Map{"success": true, "message": "Event activated"})
@@ -202,16 +244,21 @@ func ActivateEvent(c *fiber.Ctx) error {
 
 // DeactivateEvent deactivates an event
 func DeactivateEvent(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 	eventID := c.Params("id")
 
-	result := database.Model(&models.LiveEvent{}).Where("id = ?", eventID).Update("is_active", false)
-	if result.Error != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to deactivate event"})
+	// Verify event exists
+	_, err := store.Queries.GetEvent(ctx, eventID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Event not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to check event"})
 	}
 
-	if result.RowsAffected == 0 {
-		return c.Status(404).JSON(fiber.Map{"error": "Event not found"})
+	if err := store.Queries.DeactivateEvent(ctx, eventID); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to deactivate event"})
 	}
 
 	return c.JSON(fiber.Map{"success": true, "message": "Event deactivated"})

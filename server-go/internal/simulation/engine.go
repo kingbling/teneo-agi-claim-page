@@ -1,6 +1,9 @@
 package simulation
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -8,12 +11,14 @@ import (
 	"time"
 
 	"teneo/server-go/internal/config"
+	"teneo/server-go/internal/database"
+	"teneo/server-go/internal/database/generated"
 	"teneo/server-go/internal/dto"
-	"teneo/server-go/internal/models"
 	wshub "teneo/server-go/internal/websocket"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // explorerData holds explorer info for synapse completion
@@ -27,7 +32,7 @@ type explorerData struct {
 
 // Engine handles the game simulation tick loop
 type Engine struct {
-	db        *gorm.DB
+	store     *database.Store
 	hub       *wshub.Hub
 	cfg       *config.Config
 	tickCount int64
@@ -38,7 +43,7 @@ type Engine struct {
 	// Delta tracking for efficient synapse state updates
 	synapseDeltaQueue []dto.SynapseDelta
 	synapseDeltaMu    sync.Mutex
-	spaceOrderIndex   map[string]uint32 // space ID → array index (matches bulk endpoint order)
+	spaceOrderIndex   map[string]uint32 // space ID -> array index (matches bulk endpoint order)
 
 	// LOD cluster dirty tracking - only recompute when state changes
 	clustersDirty bool
@@ -62,6 +67,24 @@ var lodGridSizes = map[int]float64{
 	2: 1.0,
 }
 
+// --- pgtype.UUID conversion helpers ---
+
+func stringToPgUUID(s string) pgtype.UUID {
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+func pgUUIDToString(u pgtype.UUID) string {
+	if !u.Valid {
+		return ""
+	}
+	id, _ := uuid.FromBytes(u.Bytes[:])
+	return id.String()
+}
+
 // getClusterIDForPosition computes the cluster ID for a given position and LOD level
 func getClusterIDForPosition(x, y, z float64, lodLevel int) string {
 	gridSize := lodGridSizes[lodLevel]
@@ -75,6 +98,7 @@ func getClusterIDForPosition(x, y, z float64, lodLevel int) string {
 // beingSolvedDelta: +1/-1 for being_solved state changes
 // discoveredDelta: +1 for discovered state changes
 func (e *Engine) updateClusterCounts(posX, posY, posZ float64, beingSolvedDelta, discoveredDelta int) {
+	ctx := context.Background()
 	now := time.Now().UnixMilli()
 
 	// Mark clusters as dirty so they get recomputed on the next interval
@@ -82,13 +106,14 @@ func (e *Engine) updateClusterCounts(posX, posY, posZ float64, beingSolvedDelta,
 
 	for lodLevel := 0; lodLevel <= 2; lodLevel++ {
 		clusterID := getClusterIDForPosition(posX, posY, posZ, lodLevel)
-		e.db.Model(&models.SpaceCluster{}).
-			Where("id = ?", clusterID).
-			Updates(map[string]interface{}{
-				"being_solved_count": gorm.Expr("MAX(0, being_solved_count + ?)", beingSolvedDelta),
-				"discovered_count":   gorm.Expr("discovered_count + ?", discoveredDelta),
-				"updated_at":         now,
-			})
+		if err := e.store.Queries.UpdateClusterCounts(ctx, generated.UpdateClusterCountsParams{
+			ID:               clusterID,
+			BeingSolvedCount: int32(beingSolvedDelta),
+			DiscoveredCount:  int32(discoveredDelta),
+			UpdatedAt:        now,
+		}); err != nil {
+			log.Printf("[Engine] Failed to update cluster counts for %s: %v", clusterID, err)
+		}
 	}
 }
 
@@ -98,25 +123,31 @@ func (e *Engine) broadcastClusterUpdate(posX, posY, posZ float64) {
 		return
 	}
 
+	ctx := context.Background()
 	var clusters []dto.SpaceCluster
 	now := time.Now().UnixMilli()
 
 	for lodLevel := 0; lodLevel <= 2; lodLevel++ {
 		clusterID := getClusterIDForPosition(posX, posY, posZ, lodLevel)
-		var cluster models.SpaceCluster
-		if err := e.db.First(&cluster, "id = ?", clusterID).Error; err == nil {
-			clusters = append(clusters, dto.SpaceCluster{
-				ID:               cluster.ID,
-				LODLevel:         cluster.LodLevel,
-				PositionX:        cluster.PositionX,
-				PositionY:        cluster.PositionY,
-				PositionZ:        cluster.PositionZ,
-				SpaceCount:       cluster.SpaceCount,
-				DiscoveredCount:  cluster.DiscoveredCount,
-				BeingSolvedCount: cluster.BeingSolvedCount,
-				UpdatedAt:        cluster.UpdatedAt,
-			})
+		cluster, err := e.store.Queries.GetSpaceCluster(ctx, clusterID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			log.Printf("[Engine] Failed to get space cluster %s: %v", clusterID, err)
+			continue
 		}
+		clusters = append(clusters, dto.SpaceCluster{
+			ID:               cluster.ID,
+			LODLevel:         int(cluster.LodLevel),
+			PositionX:        cluster.PositionX,
+			PositionY:        cluster.PositionY,
+			PositionZ:        cluster.PositionZ,
+			SpaceCount:       int(cluster.SpaceCount),
+			DiscoveredCount:  int(cluster.DiscoveredCount),
+			BeingSolvedCount: int(cluster.BeingSolvedCount),
+			UpdatedAt:        cluster.UpdatedAt,
+		})
 	}
 
 	if len(clusters) > 0 {
@@ -128,9 +159,9 @@ func (e *Engine) broadcastClusterUpdate(posX, posY, posZ float64) {
 }
 
 // New creates a new simulation engine
-func New(db *gorm.DB, hub *wshub.Hub, cfg *config.Config) *Engine {
+func New(store *database.Store, hub *wshub.Hub, cfg *config.Config) *Engine {
 	e := &Engine{
-		db:              db,
+		store:           store,
 		hub:             hub,
 		cfg:             cfg,
 		stopCh:          make(chan struct{}),
@@ -144,8 +175,12 @@ func New(db *gorm.DB, hub *wshub.Hub, cfg *config.Config) *Engine {
 // buildSpaceOrderIndex creates a mapping from space ID to array index
 // This index matches the order used by the /api/synapses/bulk endpoint
 func (e *Engine) buildSpaceOrderIndex() {
-	var ids []string
-	e.db.Model(&models.Space{}).Order("id").Pluck("id", &ids)
+	ctx := context.Background()
+	ids, err := e.store.Queries.GetAllSpaceIDs(ctx)
+	if err != nil {
+		log.Printf("[Engine] Failed to build space order index: %v", err)
+		return
+	}
 	for i, id := range ids {
 		e.spaceOrderIndex[id] = uint32(i)
 	}
@@ -176,9 +211,13 @@ func (e *Engine) Start() {
 	e.mu.Unlock()
 
 	// Load saved tick count
-	var simState models.SimulationState
-	e.db.First(&simState)
-	e.tickCount = simState.TickCount
+	ctx := context.Background()
+	simState, err := e.store.Queries.GetSimulationState(ctx)
+	if err != nil {
+		log.Printf("[Engine] Failed to load simulation state: %v (starting from tick 0)", err)
+	} else {
+		e.tickCount = simState.TickCount
+	}
 
 	log.Printf("[Engine] Starting simulation at tick %d", e.tickCount)
 
@@ -235,7 +274,10 @@ func (e *Engine) processTick() {
 
 	// Save simulation state every 10 ticks
 	if e.tickCount%10 == 0 {
-		e.db.Model(&models.SimulationState{}).Where("id = 1").Update("tick_count", e.tickCount)
+		ctx := context.Background()
+		if err := e.store.Queries.UpdateTickCount(ctx, e.tickCount); err != nil {
+			log.Printf("[Engine] Failed to save tick count: %v", err)
+		}
 		e.logTickStats()
 	}
 
@@ -257,14 +299,14 @@ func (e *Engine) processTick() {
 }
 
 func (e *Engine) logTickStats() {
-	type stateCount struct {
-		State string
-		Count int
+	ctx := context.Background()
+	results, err := e.store.Queries.GetAgentStateCounts(ctx)
+	if err != nil {
+		log.Printf("[Engine] Failed to get agent state counts: %v", err)
+		return
 	}
-	var results []stateCount
-	e.db.Model(&models.Agent{}).Select("state, COUNT(*) as count").Group("state").Scan(&results)
 
-	stats := make(map[string]int)
+	stats := make(map[string]int64)
 	for _, r := range results {
 		stats[r.State] = r.Count
 	}
@@ -280,36 +322,15 @@ func (e *Engine) processSearchingAgents() {
 	// No-op: searching/wandering behavior has been removed
 }
 
-// travelingAgentData holds agent and target data
-type travelingAgentData struct {
-	ID                  string
-	OwnerID             string
-	TargetSpaceID       string
-	StartPositionX      float64
-	StartPositionY      float64
-	StartPositionZ      float64
-	TravelStartTime     int64
-	TravelDuration      int64
-	CurrentPointsPerMin int // matches column name current_points_per_min
-	TargetX             float64
-	TargetY             float64
-	TargetZ             float64
-}
-
 // processTravelingAgents checks for arrivals and handles state transitions
 // Also streams position updates for mid-travel ships for smooth animation
 func (e *Engine) processTravelingAgents() {
-	var travelingData []travelingAgentData
-
-	// Use GORM with JOIN to fetch traveling agents with their target positions
-	e.db.Model(&models.Agent{}).
-		Select("agents.id, agents.owner_id, agents.target_space_id, "+
-			"agents.start_position_x, agents.start_position_y, agents.start_position_z, "+
-			"agents.travel_start_time, agents.travel_duration, agents.current_points_per_min, "+
-			"spaces.position_x as target_x, spaces.position_y as target_y, spaces.position_z as target_z").
-		Joins("JOIN spaces ON agents.target_space_id = spaces.id").
-		Where("agents.state = ?", "traveling").
-		Scan(&travelingData)
+	ctx := context.Background()
+	travelingData, err := e.store.Queries.GetTravelingAgentsWithTargets(ctx)
+	if err != nil {
+		log.Printf("[Engine] Failed to get traveling agents: %v", err)
+		return
+	}
 
 	now := time.Now().UnixMilli()
 	var arrivalUpdates []dto.AgentUpdate
@@ -317,12 +338,29 @@ func (e *Engine) processTravelingAgents() {
 	var positionUpdates []dto.TravelPositionUpdate        // Mid-travel position updates
 
 	for _, agent := range travelingData {
-		if agent.TravelStartTime == 0 || agent.TravelDuration == 0 {
+		if agent.TravelStartTime == nil || agent.TravelDuration == nil ||
+			*agent.TravelStartTime == 0 || *agent.TravelDuration == 0 {
 			continue
 		}
 
-		elapsed := now - agent.TravelStartTime
-		progress := float64(elapsed) / float64(agent.TravelDuration)
+		// Safely dereference start positions (nullable in DB)
+		startX := 0.0
+		startY := 0.0
+		startZ := 0.0
+		if agent.StartPositionX != nil {
+			startX = *agent.StartPositionX
+		}
+		if agent.StartPositionY != nil {
+			startY = *agent.StartPositionY
+		}
+		if agent.StartPositionZ != nil {
+			startZ = *agent.StartPositionZ
+		}
+
+		elapsed := now - *agent.TravelStartTime
+		progress := float64(elapsed) / float64(*agent.TravelDuration)
+
+		targetSpaceID := pgUUIDToString(agent.TargetSpaceID)
 
 		if progress >= 1.0 {
 			// Calculate final position at arrival
@@ -331,28 +369,25 @@ func (e *Engine) processTravelingAgents() {
 			finalZ := agent.TargetZ
 
 			// Arrived - auto-start exploring
-			success := e.joinSynapseExploration(agent.TargetSpaceID, agent.ID, agent.OwnerID, float64(agent.CurrentPointsPerMin))
+			success := e.joinSynapseExploration(targetSpaceID, agent.ID, agent.OwnerID, float64(agent.CurrentPointsPerMin))
 
 			if success {
-				e.db.Model(&models.Agent{}).Where("id = ?", agent.ID).Updates(map[string]interface{}{
-					"position_x":        finalX,
-					"position_y":        finalY,
-					"position_z":        finalZ,
-					"travel_start_time": nil,
-					"travel_duration":   nil,
-					"start_position_x":  nil,
-					"start_position_y":  nil,
-					"start_position_z":  nil,
-				})
+				if err := e.store.Queries.UpdateAgentArrival(ctx, generated.UpdateAgentArrivalParams{
+					ID:        agent.ID,
+					PositionX: finalX,
+					PositionY: finalY,
+					PositionZ: finalZ,
+				}); err != nil {
+					log.Printf("[Engine] Failed to update agent arrival %s: %v", agent.ID, err)
+				}
 
-				targetID := agent.TargetSpaceID
 				arrivalUpdates = append(arrivalUpdates, dto.AgentUpdate{
 					ID:            agent.ID,
 					PositionX:     finalX,
 					PositionY:     finalY,
 					PositionZ:     finalZ,
 					State:         dto.AgentSolving,
-					TargetSpaceID: &targetID,
+					TargetSpaceID: &targetSpaceID,
 				})
 				// Track for user-specific sync
 				shipUserUpdates = append(shipUserUpdates, struct{ shipID, userID string }{agent.ID, agent.OwnerID})
@@ -365,18 +400,18 @@ func (e *Engine) processTravelingAgents() {
 					shipUserUpdates = append(shipUserUpdates, struct{ shipID, userID string }{agent.ID, agent.OwnerID})
 				} else {
 					// No nearby synapses available - return to idle
-					e.db.Model(&models.Agent{}).Where("id = ?", agent.ID).Updates(map[string]interface{}{
-						"state":             "idle",
-						"position_x":        finalX,
-						"position_y":        finalY,
-						"position_z":        finalZ,
-						"target_space_id":   nil,
-						"travel_start_time": nil,
-						"travel_duration":   nil,
-						"start_position_x":  nil,
-						"start_position_y":  nil,
-						"start_position_z":  nil,
-					})
+					// Set position first, then idle state
+					if err := e.store.Queries.UpdateAgentPosition(ctx, generated.UpdateAgentPositionParams{
+						ID:        agent.ID,
+						PositionX: finalX,
+						PositionY: finalY,
+						PositionZ: finalZ,
+					}); err != nil {
+						log.Printf("[Engine] Failed to update agent position %s: %v", agent.ID, err)
+					}
+					if err := e.store.Queries.UpdateAgentToIdle(ctx, agent.ID); err != nil {
+						log.Printf("[Engine] Failed to set agent idle %s: %v", agent.ID, err)
+					}
 
 					arrivalUpdates = append(arrivalUpdates, dto.AgentUpdate{
 						ID:        agent.ID,
@@ -391,9 +426,9 @@ func (e *Engine) processTravelingAgents() {
 			}
 		} else {
 			// Mid-travel: Calculate interpolated position and rotation
-			interpX := agent.StartPositionX + (agent.TargetX-agent.StartPositionX)*progress
-			interpY := agent.StartPositionY + (agent.TargetY-agent.StartPositionY)*progress
-			interpZ := agent.StartPositionZ + (agent.TargetZ-agent.StartPositionZ)*progress
+			interpX := startX + (agent.TargetX-startX)*progress
+			interpY := startY + (agent.TargetY-startY)*progress
+			interpZ := startZ + (agent.TargetZ-startZ)*progress
 
 			// Calculate rotation (yaw) toward target
 			// Ship model faces -Z direction, so we use atan2(dx, -dz)
@@ -428,7 +463,7 @@ func (e *Engine) processTravelingAgents() {
 	if len(positionUpdates) > 0 && e.tickCount%2 == 0 && e.OnTravelPositions != nil {
 		log.Printf("[Travel] Streaming %d ship positions (rotation included)", len(positionUpdates))
 		for _, u := range positionUpdates {
-			log.Printf("[Travel] Ship %s: pos=(%.3f,%.3f,%.3f) rot=%.3frad (%.1f°) progress=%.2f",
+			log.Printf("[Travel] Ship %s: pos=(%.3f,%.3f,%.3f) rot=%.3frad (%.1f) progress=%.2f",
 				u.ShipID[:8], u.PositionX, u.PositionY, u.PositionZ,
 				u.RotationY, u.RotationY*180/math.Pi, u.Progress)
 		}
@@ -441,8 +476,12 @@ func (e *Engine) processTravelingAgents() {
 
 // processSynapseExploration updates points for all active explorations
 func (e *Engine) processSynapseExploration(deltaSeconds float64) {
-	var synapseIDs []string
-	e.db.Model(&models.SynapseExplorer{}).Distinct().Pluck("synapse_id", &synapseIDs)
+	ctx := context.Background()
+	synapseIDs, err := e.store.Queries.GetActiveSynapseIDs(ctx)
+	if err != nil {
+		log.Printf("[Engine] Failed to get active synapse IDs: %v", err)
+		return
+	}
 
 	for _, synapseID := range synapseIDs {
 		e.updateSynapseProgress(synapseID, deltaSeconds)
@@ -450,15 +489,26 @@ func (e *Engine) processSynapseExploration(deltaSeconds float64) {
 }
 
 func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
+	ctx := context.Background()
+
 	// Get synapse details
-	var space models.Space
-	if err := e.db.First(&space, "id = ?", synapseID).Error; err != nil || space.State == "discovered" {
+	space, err := e.store.Queries.GetSpace(ctx, synapseID)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("[Engine] Failed to get space %s: %v", synapseID, err)
+		}
+		return
+	}
+	if space.State == "discovered" {
 		return
 	}
 
 	// Get explorers
-	var explorers []models.SynapseExplorer
-	e.db.Where("synapse_id = ?", synapseID).Find(&explorers)
+	explorers, err := e.store.Queries.GetSynapseExplorers(ctx, synapseID)
+	if err != nil {
+		log.Printf("[Engine] Failed to get explorers for %s: %v", synapseID, err)
+		return
+	}
 
 	if len(explorers) == 0 {
 		return
@@ -490,10 +540,13 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 		totalPointsThisTick += pointsThisTick
 
 		// Update explorer contribution
-		e.db.Model(&models.SynapseExplorer{}).Where("id = ?", exp.ID).Updates(map[string]interface{}{
-			"points_contributed": gorm.Expr("points_contributed + ?", int(pointsThisTick)),
-			"last_updated_at":    now,
-		})
+		if err := e.store.Queries.UpdateExplorerPoints(ctx, generated.UpdateExplorerPointsParams{
+			ID:                exp.ID,
+			PointsContributed: int32(pointsThisTick),
+			LastUpdatedAt:     now,
+		}); err != nil {
+			log.Printf("[Engine] Failed to update explorer points %s: %v", exp.ID, err)
+		}
 	}
 
 	// Update synapse points
@@ -502,16 +555,15 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 
 	// Calculate ETA
 	exp := explorerDataList[0]
-	var user models.User
-	e.db.First(&user, "id = ?", exp.userID)
-	userLevel := user.UserLevel
-	if userLevel == 0 {
-		userLevel = 1
+	user, err := e.store.Queries.GetUser(ctx, exp.userID)
+	userLevel := int32(1)
+	if err == nil && user.UserLevel > 0 {
+		userLevel = user.UserLevel
 	}
 
 	synapseConfig := dto.GetDefaultSynapseConfig()[dto.SynapseType(space.SynapseType)]
 	speedBoost := e.getShipSpeedBoost(exp.shipID)
-	currentETA := dto.CalculateFinalETA(synapseConfig.ETAMinutes, userLevel, speedBoost)
+	currentETA := dto.CalculateFinalETA(synapseConfig.ETAMinutes, int(userLevel), speedBoost)
 
 	newState := "being_solved"
 	if isCompleted {
@@ -519,11 +571,15 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 		newAccumulated = float64(space.PointsRequired)
 	}
 
-	e.db.Model(&models.Space{}).Where("id = ?", synapseID).Updates(map[string]interface{}{
-		"points_accumulated":  int(math.Round(newAccumulated)),
-		"current_eta_minutes": currentETA,
-		"state":               newState,
-	})
+	etaMinutes := int32(currentETA)
+	if err := e.store.Queries.UpdateSpacePointsAndETA(ctx, generated.UpdateSpacePointsAndETAParams{
+		ID:                synapseID,
+		PointsAccumulated: int32(math.Round(newAccumulated)),
+		CurrentEtaMinutes: &etaMinutes,
+		State:             newState,
+	}); err != nil {
+		log.Printf("[Engine] Failed to update space points %s: %v", synapseID, err)
+	}
 
 	// Emit progress event
 	if e.OnExplorationProgress != nil {
@@ -545,12 +601,13 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 }
 
 func (e *Engine) completeSynapse(synapseID string, synapseType dto.SynapseType, explorers []explorerData) {
+	ctx := context.Background()
 	config := dto.GetDefaultSynapseConfig()[synapseType]
 	now := time.Now().UnixMilli()
 
 	// Fetch space for position data (needed for completion event)
-	var space models.Space
-	if err := e.db.First(&space, "id = ?", synapseID).Error; err != nil {
+	space, err := e.store.Queries.GetSpace(ctx, synapseID)
+	if err != nil {
 		log.Printf("[ERROR] Failed to fetch space for completion event: %v", err)
 		return
 	}
@@ -576,51 +633,51 @@ func (e *Engine) completeSynapse(synapseID string, synapseType dto.SynapseType, 
 	mintNFT := nftEligibleTypes[synapseType]
 
 	// Use transaction for atomic completion
-	err := e.db.Transaction(func(tx *gorm.DB) error {
+	err = e.store.WithTx(ctx, func(q *generated.Queries) error {
 		// 1. Update user AGI balance
-		if err := tx.Model(&models.User{}).Where("id = ?", exp.userID).
-			Update("total_agi_earned", gorm.Expr("total_agi_earned + ?", int(amplifiedReward))).Error; err != nil {
+		if err := q.IncrementUserAGI(ctx, generated.IncrementUserAGIParams{
+			ID:             exp.userID,
+			TotalAgiEarned: int32(amplifiedReward),
+		}); err != nil {
 			return err
 		}
 
 		// 2. Update ship stats
-		if err := tx.Model(&models.Agent{}).Where("id = ?", exp.shipID).Updates(map[string]interface{}{
-			"total_agi_earned":  gorm.Expr("total_agi_earned + ?", int(amplifiedReward)),
-			"spaces_discovered": gorm.Expr("spaces_discovered + 1"),
-		}).Error; err != nil {
+		if err := q.IncrementAgentStats(ctx, generated.IncrementAgentStatsParams{
+			ID:             exp.shipID,
+			TotalAgiEarned: int32(amplifiedReward),
+		}); err != nil {
 			return err
 		}
 
 		// 3. Mint NFT for rare+ synapses
 		if mintNFT {
-			nft := models.NFT{
+			if _, err := q.CreateNFT(ctx, generated.CreateNFTParams{
 				ID:        uuid.New().String(),
 				UserID:    exp.userID,
 				NftType:   "synapse_discovery",
-				SynapseID: &synapseID,
-				Metadata:  "{}",
+				SynapseID: stringToPgUUID(synapseID),
+				Metadata:  json.RawMessage("{}"),
 				MintedAt:  now,
-			}
-			if err := tx.Create(&nft).Error; err != nil {
+			}); err != nil {
 				return err
 			}
 
-			if err := tx.Model(&models.User{}).Where("id = ?", exp.userID).
-				Update("nft_count", gorm.Expr("nft_count + 1")).Error; err != nil {
+			if err := q.IncrementUserNftCount(ctx, exp.userID); err != nil {
 				return err
 			}
 		}
 
 		// 4. Clear explorers
-		if err := tx.Where("synapse_id = ?", synapseID).Delete(&models.SynapseExplorer{}).Error; err != nil {
+		if err := q.ClearSynapseExplorers(ctx, synapseID); err != nil {
 			return err
 		}
 
 		// 5. Update synapse state
-		if err := tx.Model(&models.Space{}).Where("id = ?", synapseID).Updates(map[string]interface{}{
-			"state":         "discovered",
-			"discovered_at": now,
-		}).Error; err != nil {
+		if err := q.CompleteSpace(ctx, generated.CompleteSpaceParams{
+			ID:           synapseID,
+			DiscoveredAt: &now,
+		}); err != nil {
 			return err
 		}
 
@@ -644,7 +701,7 @@ func (e *Engine) completeSynapse(synapseID string, synapseType dto.SynapseType, 
 		log.Printf("[NFT] Minted %s synapse NFT for user %s", synapseType, exp.userID[:8])
 	}
 
-	log.Printf("[SOLVED] ✓ %s synapse completed! +%.0f $AGI", synapseType, amplifiedReward)
+	log.Printf("[SOLVED] %s synapse completed! +%.0f $AGI", synapseType, amplifiedReward)
 
 	// Emit completion event (includes position for client-side visual effects)
 	if e.OnSynapseCompleted != nil {
@@ -675,14 +732,19 @@ func (e *Engine) completeSynapse(synapseID string, synapseType dto.SynapseType, 
 }
 
 func (e *Engine) joinSynapseExploration(synapseID, shipID, userID string, pointsPerMin float64) bool {
-	var space models.Space
-	if err := e.db.First(&space, "id = ?", synapseID).Error; err != nil || space.State == "discovered" {
+	ctx := context.Background()
+
+	space, err := e.store.Queries.GetSpace(ctx, synapseID)
+	if err != nil || space.State == "discovered" {
 		return false
 	}
 
 	// Check if already occupied
-	var count int64
-	e.db.Model(&models.SynapseExplorer{}).Where("synapse_id = ?", synapseID).Count(&count)
+	count, err := e.store.Queries.GetSynapseExplorerCount(ctx, synapseID)
+	if err != nil {
+		log.Printf("[Engine] Failed to get explorer count for %s: %v", synapseID, err)
+		return false
+	}
 	if count >= 1 {
 		return false
 	}
@@ -692,22 +754,26 @@ func (e *Engine) joinSynapseExploration(synapseID, shipID, userID string, points
 	now := time.Now().UnixMilli()
 
 	// Add explorer
-	explorer := models.SynapseExplorer{
+	if _, err := e.store.Queries.AddSynapseExplorer(ctx, generated.AddSynapseExplorerParams{
 		ID:                uuid.New().String(),
 		SynapseID:         synapseID,
 		ShipID:            shipID,
 		UserID:            userID,
 		PointsContributed: 0,
-		PointsPerMinute:   int(effectiveRate),
+		PointsPerMinute:   int32(effectiveRate),
 		JoinedAt:          now,
 		LastUpdatedAt:     now,
+	}); err != nil {
+		log.Printf("[Engine] Failed to add synapse explorer: %v", err)
+		return false
 	}
-	e.db.Create(&explorer)
 
 	// Update synapse state and track delta
-	result := e.db.Model(&models.Space{}).Where("id = ? AND state = ?", synapseID, "undiscovered").
-		Update("state", "being_solved")
-	if result.RowsAffected > 0 {
+	rowsAffected, err := e.store.Queries.UpdateSpaceStateIfUndiscovered(ctx, synapseID)
+	if err != nil {
+		log.Printf("[Engine] Failed to update space state for %s: %v", synapseID, err)
+	}
+	if rowsAffected > 0 {
 		e.trackSynapseStateChange(synapseID, 1) // 1 = being_solved
 		// Update cluster counts and broadcast for immediate dashboard sync
 		e.updateClusterCounts(space.PositionX, space.PositionY, space.PositionZ, 1, 0)
@@ -716,12 +782,13 @@ func (e *Engine) joinSynapseExploration(synapseID, shipID, userID string, points
 
 	// Update ship state - set both target_space_id and current_space_id
 	// current_space_id is what the frontend uses to know which synapse the ship is at
-	e.db.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
-		"state":                  "solving",
-		"target_space_id":        synapseID,
-		"current_space_id":       synapseID,
-		"current_points_per_min": int(effectiveRate),
-	})
+	if err := e.store.Queries.UpdateAgentStateToSolving(ctx, generated.UpdateAgentStateToSolvingParams{
+		ID:                  shipID,
+		TargetSpaceID:       stringToPgUUID(synapseID),
+		CurrentPointsPerMin: int32(effectiveRate),
+	}); err != nil {
+		log.Printf("[Engine] Failed to update agent to solving %s: %v", shipID, err)
+	}
 
 	log.Printf("[Exploration] Ship %s started exploring at %.0f pts/min", shipID[:8], effectiveRate)
 	return true
@@ -729,19 +796,19 @@ func (e *Engine) joinSynapseExploration(synapseID, shipID, userID string, points
 
 // redirectToNearbySynapse finds and redirects a ship to a nearby unoccupied synapse
 func (e *Engine) redirectToNearbySynapse(shipID, userID string, currentX, currentY, currentZ, pointsPerMin float64) *dto.AgentUpdate {
+	ctx := context.Background()
+
 	// Find nearby undiscovered synapses that aren't being explored
 	// Order by distance from current position
-	var nearbySpaces []models.Space
-	e.db.Raw(`
-		SELECT s.* FROM spaces s
-		LEFT JOIN synapse_explorers se ON s.id = se.synapse_id
-		WHERE s.state = 'undiscovered' AND se.id IS NULL
-		ORDER BY
-			(s.position_x - ?) * (s.position_x - ?) +
-			(s.position_y - ?) * (s.position_y - ?) +
-			(s.position_z - ?) * (s.position_z - ?)
-		LIMIT 5
-	`, currentX, currentX, currentY, currentY, currentZ, currentZ).Scan(&nearbySpaces)
+	nearbySpaces, err := e.store.Queries.GetNearbyUnoccupiedSpaces(ctx, generated.GetNearbyUnoccupiedSpacesParams{
+		PositionX: currentX,
+		PositionY: currentY,
+		PositionZ: currentZ,
+	})
+	if err != nil {
+		log.Printf("[Engine] Failed to get nearby unoccupied spaces: %v", err)
+		return nil
+	}
 
 	if len(nearbySpaces) == 0 {
 		return nil
@@ -763,19 +830,18 @@ func (e *Engine) redirectToNearbySynapse(shipID, userID string, currentX, curren
 	now := time.Now().UnixMilli()
 
 	// Update ship to start traveling to new synapse - clear current_space_id since ship is leaving
-	e.db.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
-		"state":             "traveling",
-		"target_space_id":   nextSpace.ID,
-		"current_space_id":  nil,
-		"position_x":        currentX,
-		"position_y":        currentY,
-		"position_z":        currentZ,
-		"start_position_x":  currentX,
-		"start_position_y":  currentY,
-		"start_position_z":  currentZ,
-		"travel_start_time": now,
-		"travel_duration":   travelDuration,
-	})
+	if err := e.store.Queries.UpdateAgentToTraveling(ctx, generated.UpdateAgentToTravelingParams{
+		ID:              shipID,
+		TargetSpaceID:   stringToPgUUID(nextSpace.ID),
+		PositionX:       currentX,
+		PositionY:       currentY,
+		PositionZ:       currentZ,
+		TravelStartTime: &now,
+		TravelDuration:  &travelDuration,
+	}); err != nil {
+		log.Printf("[Engine] Failed to update agent to traveling %s: %v", shipID, err)
+		return nil
+	}
 
 	log.Printf("[Redirect] Ship %s redirected to nearby synapse (occupied on arrival)", shipID[:8])
 	targetID := nextSpace.ID
@@ -792,14 +858,14 @@ func (e *Engine) redirectToNearbySynapse(shipID, userID string, currentX, curren
 }
 
 func (e *Engine) processAutopilot(shipID, userID string, currentX, currentY, currentZ float64) *dto.AgentUpdate {
-	var agent models.Agent
-	if err := e.db.First(&agent, "id = ?", shipID).Error; err != nil || !agent.AutopilotEnabled {
+	ctx := context.Background()
+
+	agent, err := e.store.Queries.GetAgent(ctx, shipID)
+	if err != nil || !agent.AutopilotEnabled {
 		// Return to idle - clear both target and current space
-		e.db.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
-			"state":            "idle",
-			"target_space_id":  nil,
-			"current_space_id": nil,
-		})
+		if err := e.store.Queries.UpdateAgentToIdle(ctx, shipID); err != nil {
+			log.Printf("[Engine] Failed to set agent idle %s: %v", shipID, err)
+		}
 		return &dto.AgentUpdate{
 			ID:        shipID,
 			PositionX: currentX,
@@ -810,14 +876,12 @@ func (e *Engine) processAutopilot(shipID, userID string, currentX, currentY, cur
 	}
 
 	// Find next available synapse
-	var nextSpace models.Space
-	if err := e.db.Where("state = ?", "undiscovered").Order("RANDOM()").First(&nextSpace).Error; err != nil {
+	nextSpace, err := e.store.Queries.GetRandomUndiscoveredSpace(ctx)
+	if err != nil {
 		// No available synapses - clear both target and current space
-		e.db.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
-			"state":            "idle",
-			"target_space_id":  nil,
-			"current_space_id": nil,
-		})
+		if err := e.store.Queries.UpdateAgentToIdle(ctx, shipID); err != nil {
+			log.Printf("[Engine] Failed to set agent idle %s: %v", shipID, err)
+		}
 		return &dto.AgentUpdate{
 			ID:        shipID,
 			PositionX: currentX,
@@ -840,16 +904,17 @@ func (e *Engine) processAutopilot(shipID, userID string, currentX, currentY, cur
 	now := time.Now().UnixMilli()
 
 	// Start traveling - clear current_space_id since ship is leaving synapse
-	e.db.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
-		"state":             "traveling",
-		"target_space_id":   nextSpace.ID,
-		"current_space_id":  nil,
-		"start_position_x":  currentX,
-		"start_position_y":  currentY,
-		"start_position_z":  currentZ,
-		"travel_start_time": now,
-		"travel_duration":   travelDuration,
-	})
+	if err := e.store.Queries.UpdateAgentToTraveling(ctx, generated.UpdateAgentToTravelingParams{
+		ID:              shipID,
+		TargetSpaceID:   stringToPgUUID(nextSpace.ID),
+		PositionX:       currentX,
+		PositionY:       currentY,
+		PositionZ:       currentZ,
+		TravelStartTime: &now,
+		TravelDuration:  &travelDuration,
+	}); err != nil {
+		log.Printf("[Engine] Failed to update agent to traveling %s: %v", shipID, err)
+	}
 
 	log.Printf("[Autopilot] Ship %s traveling to next synapse", shipID[:8])
 	targetID := nextSpace.ID
@@ -928,60 +993,55 @@ func (e *Engine) applyBrainBounds(posX, posY, posZ, dirX, dirY, dirZ float64) (f
 }
 
 func (e *Engine) getShipSpeedBoost(shipID string) float64 {
-	var speedBoost float64
+	ctx := context.Background()
 	now := time.Now().UnixMilli()
 
-	type effectResult struct {
-		EffectValue float64
+	results, err := e.store.Queries.GetShipSpeedBoost(ctx, generated.GetShipSpeedBoostParams{
+		ShipID:    stringToPgUUID(shipID),
+		ExpiresAt: &now,
+	})
+	if err != nil {
+		log.Printf("[Engine] Failed to get ship speed boost for %s: %v", shipID[:8], err)
+		return 0
 	}
 
-	var results []effectResult
-	e.db.Model(&models.UserPurchase{}).
-		Select("item_shop.effect_value").
-		Joins("JOIN item_shop ON user_purchases.item_id = item_shop.id").
-		Where("user_purchases.ship_id = ? AND user_purchases.is_active = ?", shipID, true).
-		Where("item_shop.effect_type = ?", "speed_boost").
-		Where("user_purchases.expires_at IS NULL OR user_purchases.expires_at > ?", now).
-		Scan(&results)
-
+	var speedBoost float64
 	for _, r := range results {
-		speedBoost += r.EffectValue
+		speedBoost += r
 	}
 	return speedBoost
 }
 
 func (e *Engine) getShipXPMultiplier(shipID string) float64 {
-	var xpMult float64
+	ctx := context.Background()
 	now := time.Now().UnixMilli()
 
-	type effectResult struct {
-		EffectValue float64
+	results, err := e.store.Queries.GetShipXPMultiplier(ctx, generated.GetShipXPMultiplierParams{
+		ShipID:    stringToPgUUID(shipID),
+		ExpiresAt: &now,
+	})
+	if err != nil {
+		log.Printf("[Engine] Failed to get ship XP multiplier for %s: %v", shipID[:8], err)
+		return 0
 	}
 
-	var results []effectResult
-	e.db.Model(&models.UserPurchase{}).
-		Select("item_shop.effect_value").
-		Joins("JOIN item_shop ON user_purchases.item_id = item_shop.id").
-		Where("user_purchases.ship_id = ? AND user_purchases.is_active = ?", shipID, true).
-		Where("item_shop.effect_type = ?", "xp_amplifier").
-		Where("user_purchases.expires_at IS NULL OR user_purchases.expires_at > ?", now).
-		Scan(&results)
-
+	var xpMult float64
 	for _, r := range results {
-		xpMult += r.EffectValue
+		xpMult += r
 	}
 	return xpMult
 }
 
 func (e *Engine) getActiveRewardMultiplier() float64 {
+	ctx := context.Background()
 	now := time.Now().UnixMilli()
 	var multiplier float64 = 1.0
 
-	var events []models.LiveEvent
-	e.db.Where("is_active = ? AND start_time <= ? AND end_time >= ?", true, now, now).
-		Where("event_type IN ?", []string{"bonus_agi", "double_rewards"}).
-		Order("multiplier DESC").
-		Find(&events)
+	events, err := e.store.Queries.GetActiveRewardEvents(ctx, now)
+	if err != nil {
+		log.Printf("[Engine] Failed to get active reward events: %v", err)
+		return multiplier
+	}
 
 	for _, event := range events {
 		if event.Multiplier > multiplier {
@@ -992,11 +1052,18 @@ func (e *Engine) getActiveRewardMultiplier() float64 {
 }
 
 func (e *Engine) recomputeClusters() {
+	ctx := context.Background()
 	log.Println("[Engine] Recomputing LOD clusters...")
 
 	// Delete existing clusters
-	e.db.Exec("DELETE FROM space_clusters")
-	e.db.Exec("DELETE FROM agent_clusters")
+	if err := e.store.Queries.DeleteAllSpaceClusters(ctx); err != nil {
+		log.Printf("[Engine] Failed to delete space clusters: %v", err)
+		return
+	}
+	if err := e.store.Queries.DeleteAllAgentClusters(ctx); err != nil {
+		log.Printf("[Engine] Failed to delete agent clusters: %v", err)
+		return
+	}
 
 	now := time.Now().UnixMilli()
 
@@ -1012,66 +1079,49 @@ func (e *Engine) recomputeClusters() {
 		default:
 			gridSize = 1.0 // ~8 clusters for far view
 		}
-		e.db.Exec(`
-			INSERT INTO space_clusters (id, lod_level, position_x, position_y, position_z, space_count, discovered_count, being_solved_count, updated_at)
-			SELECT
-				printf('%d_%d_%d_%d', ?, CAST(position_x/? AS INTEGER), CAST(position_y/? AS INTEGER), CAST(position_z/? AS INTEGER)),
-				?,
-				ROUND(AVG(position_x), 2),
-				ROUND(AVG(position_y), 2),
-				ROUND(AVG(position_z), 2),
-				COUNT(*),
-				SUM(CASE WHEN state = 'discovered' THEN 1 ELSE 0 END),
-				SUM(CASE WHEN state = 'being_solved' THEN 1 ELSE 0 END),
-				?
-			FROM spaces
-			GROUP BY CAST(position_x/? AS INTEGER), CAST(position_y/? AS INTEGER), CAST(position_z/? AS INTEGER)
-		`, lodLevel, gridSize, gridSize, gridSize, lodLevel, now, gridSize, gridSize, gridSize)
+		if err := e.store.Queries.InsertSpaceClusters(ctx, generated.InsertSpaceClustersParams{
+			Column1: int32(lodLevel),
+			Column2: gridSize,
+			Column3: now,
+		}); err != nil {
+			log.Printf("[Engine] Failed to insert space clusters LOD %d: %v", lodLevel, err)
+		}
 	}
 
 	// Recompute agent clusters at 3 LOD levels
 	for lodLevel := 0; lodLevel <= 2; lodLevel++ {
 		gridSize := 0.5 * float64(lodLevel+1)
-		e.db.Exec(`
-			INSERT INTO agent_clusters (id, lod_level, position_x, position_y, position_z, agent_count, dominant_state, avg_progress, updated_at)
-			SELECT
-				printf('a%d_%d_%d_%d', ?, CAST(position_x/? AS INTEGER), CAST(position_y/? AS INTEGER), CAST(position_z/? AS INTEGER)),
-				?,
-				ROUND(AVG(position_x), 2),
-				ROUND(AVG(position_y), 2),
-				ROUND(AVG(position_z), 2),
-				COUNT(*),
-				(SELECT state FROM agents a2 WHERE
-					CAST(a2.position_x/? AS INTEGER) = CAST(agents.position_x/? AS INTEGER) AND
-					CAST(a2.position_y/? AS INTEGER) = CAST(agents.position_y/? AS INTEGER) AND
-					CAST(a2.position_z/? AS INTEGER) = CAST(agents.position_z/? AS INTEGER)
-					GROUP BY state ORDER BY COUNT(*) DESC LIMIT 1),
-				0,
-				?
-			FROM agents
-			GROUP BY CAST(position_x/? AS INTEGER), CAST(position_y/? AS INTEGER), CAST(position_z/? AS INTEGER)
-		`, lodLevel, gridSize, gridSize, gridSize, lodLevel, gridSize, gridSize, gridSize, gridSize, gridSize, gridSize, now, gridSize, gridSize, gridSize)
+		if err := e.store.Queries.InsertAgentClusters(ctx, generated.InsertAgentClustersParams{
+			Column1: int32(lodLevel),
+			Column2: gridSize,
+			Column3: now,
+		}); err != nil {
+			log.Printf("[Engine] Failed to insert agent clusters LOD %d: %v", lodLevel, err)
+		}
 	}
 }
 
 func (e *Engine) broadcastStateSync() {
+	ctx := context.Background()
+
 	// Get clusters
-	spaceClusters := e.getSpaceClusters()
-	agentClusters := e.getAgentClusters()
+	spaceClusters := e.getSpaceClusters(ctx)
+	agentClusters := e.getAgentClusters(ctx)
 
 	// Get discovery progress
-	var total, discovered, beingExplored int64
-	e.db.Model(&models.Space{}).Count(&total)
-	e.db.Model(&models.Space{}).Where("state = ?", "discovered").Count(&discovered)
-	e.db.Model(&models.Space{}).Where("state = ?", "being_solved").Count(&beingExplored)
+	stats, err := e.store.Queries.GetSpaceStats(ctx)
+	if err != nil {
+		log.Printf("[Engine] Failed to get space stats: %v", err)
+		return
+	}
 
 	worldState := dto.WorldState{
 		SynapseClusters: spaceClusters,
 		AgentClusters:   agentClusters,
 		DiscoveryProgress: dto.DiscoveryProgress{
-			Total:         int(total),
-			Discovered:    int(discovered),
-			BeingExplored: int(beingExplored),
+			Total:         int(stats.Total),
+			Discovered:    int(stats.Discovered),
+			BeingExplored: int(stats.BeingSolved),
 		},
 		Timestamp: time.Now().UnixMilli(),
 	}
@@ -1090,40 +1140,46 @@ func (e *Engine) broadcastStateSync() {
 	e.synapseDeltaMu.Unlock()
 }
 
-func (e *Engine) getSpaceClusters() []dto.SpaceCluster {
-	var clusters []models.SpaceCluster
-	e.db.Find(&clusters)
+func (e *Engine) getSpaceClusters(ctx context.Context) []dto.SpaceCluster {
+	clusters, err := e.store.Queries.GetAllSpaceClusters(ctx)
+	if err != nil {
+		log.Printf("[Engine] Failed to get space clusters: %v", err)
+		return nil
+	}
 
 	result := make([]dto.SpaceCluster, len(clusters))
 	for i, c := range clusters {
 		result[i] = dto.SpaceCluster{
 			ID:               c.ID,
-			LODLevel:         c.LodLevel,
+			LODLevel:         int(c.LodLevel),
 			PositionX:        c.PositionX,
 			PositionY:        c.PositionY,
 			PositionZ:        c.PositionZ,
-			SpaceCount:       c.SpaceCount,
-			DiscoveredCount:  c.DiscoveredCount,
-			BeingSolvedCount: c.BeingSolvedCount,
+			SpaceCount:       int(c.SpaceCount),
+			DiscoveredCount:  int(c.DiscoveredCount),
+			BeingSolvedCount: int(c.BeingSolvedCount),
 			UpdatedAt:        c.UpdatedAt,
 		}
 	}
 	return result
 }
 
-func (e *Engine) getAgentClusters() []dto.AgentCluster {
-	var clusters []models.AgentCluster
-	e.db.Find(&clusters)
+func (e *Engine) getAgentClusters(ctx context.Context) []dto.AgentCluster {
+	clusters, err := e.store.Queries.GetAllAgentClusters(ctx)
+	if err != nil {
+		log.Printf("[Engine] Failed to get agent clusters: %v", err)
+		return nil
+	}
 
 	result := make([]dto.AgentCluster, len(clusters))
 	for i, c := range clusters {
 		result[i] = dto.AgentCluster{
 			ID:            c.ID,
-			LODLevel:      c.LodLevel,
+			LODLevel:      int(c.LodLevel),
 			PositionX:     c.PositionX,
 			PositionY:     c.PositionY,
 			PositionZ:     c.PositionZ,
-			AgentCount:    c.AgentCount,
+			AgentCount:    int(c.AgentCount),
 			DominantState: dto.AgentState(c.DominantState),
 			AvgProgress:   c.AvgProgress,
 			UpdatedAt:     c.UpdatedAt,

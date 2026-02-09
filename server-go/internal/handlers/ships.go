@@ -1,20 +1,23 @@
 package handlers
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
 	"time"
 
 	"teneo/server-go/internal/config"
-	"teneo/server-go/internal/db"
+	"teneo/server-go/internal/database"
+	"teneo/server-go/internal/database/generated"
 	"teneo/server-go/internal/dto"
-	"teneo/server-go/internal/models"
 	wshub "teneo/server-go/internal/websocket"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TravelParams contains the calculated parameters for starting travel
@@ -53,54 +56,42 @@ func calculateTravelParams(distance float64, cfg *config.Config) TravelParams {
 	}
 }
 
-// setAgentTravelState updates an agent's state for traveling to a target
-// IMPORTANT: All pointer fields must be heap-allocated to avoid dangling pointers
-func setAgentTravelState(agent *models.Agent, synapseID string, targetX, targetY, targetZ float64, params TravelParams) {
-	agent.State = string(dto.AgentTraveling)
-
-	// Heap-allocate synapse ID (function param would become dangling)
-	sid := new(string)
-	*sid = synapseID
-	agent.TargetSpaceID = sid
-
-	// Heap-allocate start positions (copying from agent's current position)
-	startPosX := new(float64)
-	startPosY := new(float64)
-	startPosZ := new(float64)
-	*startPosX = agent.PositionX
-	*startPosY = agent.PositionY
-	*startPosZ = agent.PositionZ
-	agent.StartPositionX = startPosX
-	agent.StartPositionY = startPosY
-	agent.StartPositionZ = startPosZ
-
-	// Heap-allocate target positions (function params would become dangling)
-	tgtX := new(float64)
-	tgtY := new(float64)
-	tgtZ := new(float64)
-	*tgtX = targetX
-	*tgtY = targetY
-	*tgtZ = targetZ
-	agent.TargetX = tgtX
-	agent.TargetY = tgtY
-	agent.TargetZ = tgtZ
-
-	// Heap-allocate travel timing (struct fields would become dangling)
-	startTime := new(int64)
-	duration := new(int64)
-	*startTime = params.StartTime
-	*duration = params.TravelDuration
-	agent.TravelStartTime = startTime
-	agent.TravelDuration = duration
+// buildTravelUpdateParams creates UpdateAgentParams for an agent starting travel to a target
+func buildTravelUpdateParams(agent generated.Agent, synapseID string, targetX, targetY, targetZ float64, params TravelParams) generated.UpdateAgentParams {
+	startTime := params.StartTime
+	duration := params.TravelDuration
+	return generated.UpdateAgentParams{
+		ID:                  agent.ID,
+		Name:                agent.Name,
+		State:               string(dto.AgentTraveling),
+		PositionX:           agent.PositionX,
+		PositionY:           agent.PositionY,
+		PositionZ:           agent.PositionZ,
+		StartPositionX:      &agent.PositionX,
+		StartPositionY:      &agent.PositionY,
+		StartPositionZ:      &agent.PositionZ,
+		TargetSpaceID:       StringToPgUUID(synapseID),
+		TravelStartTime:     &startTime,
+		TravelDuration:      &duration,
+		TargetX:             &targetX,
+		TargetY:             &targetY,
+		TargetZ:             &targetZ,
+		CurrentSpaceID:      pgtype.UUID{Valid: false},
+		CurrentPointsPerMin: agent.CurrentPointsPerMin,
+		AutopilotEnabled:    agent.AutopilotEnabled,
+		HomeX:               agent.HomeX,
+		HomeY:               agent.HomeY,
+		HomeZ:               agent.HomeZ,
+	}
 }
 
 // broadcastTravelStarted sends the travel:started WebSocket event
-func broadcastTravelStarted(hub *wshub.Hub, agent *models.Agent, space *models.Space, params TravelParams) {
+func broadcastTravelStarted(hub *wshub.Hub, agent generated.Agent, space generated.Space, params TravelParams) {
 	hub.SendToUser(agent.OwnerID, dto.ServerMessageTypeTravelStarted, dto.TravelStartedEvent{
 		ShipID:          agent.ID,
-		StartPositionX:  *agent.StartPositionX,
-		StartPositionY:  *agent.StartPositionY,
-		StartPositionZ:  *agent.StartPositionZ,
+		StartPositionX:  agent.PositionX,
+		StartPositionY:  agent.PositionY,
+		StartPositionZ:  agent.PositionZ,
 		TargetPositionX: space.PositionX,
 		TargetPositionY: space.PositionY,
 		TargetPositionZ: space.PositionZ,
@@ -111,8 +102,8 @@ func broadcastTravelStarted(hub *wshub.Hub, agent *models.Agent, space *models.S
 	})
 }
 
-// convertAgentToDTO converts a models.Agent to ShipDTO
-func convertAgentToDTO(agent models.Agent) dto.ShipDTO {
+// ConvertGenAgentToShipDTO converts a generated.Agent to ShipDTO
+func ConvertGenAgentToShipDTO(agent generated.Agent) dto.ShipDTO {
 	// Default to "neuron" if ShipType is empty (backwards compatibility)
 	shipType := agent.ShipType
 	if shipType == "" {
@@ -129,35 +120,55 @@ func convertAgentToDTO(agent models.Agent) dto.ShipDTO {
 	}
 
 	return dto.ShipDTO{
-		ID:                 agent.ID,
-		OwnerID:            agent.OwnerID,
-		Name:               agent.Name,
-		State:              dto.MapAgentStateToShipState(dto.AgentState(agent.State)),
-		ShipType:           shipType,
-		PositionX:          agent.PositionX,
-		PositionY:          agent.PositionY,
-		PositionZ:          agent.PositionZ,
-		StartPositionX:     agent.StartPositionX,
-		StartPositionY:     agent.StartPositionY,
-		StartPositionZ:     agent.StartPositionZ,
-		TargetPositionX:    agent.TargetX,
-		TargetPositionY:    agent.TargetY,
-		TargetPositionZ:    agent.TargetZ,
-		CurrentSynapseID:   agent.CurrentSpaceID,
-		TravelStartTime:    agent.TravelStartTime,
-		TravelDuration:     agent.TravelDuration,
-		RotationY:          rotationY, // Include calculated rotation
-		AutopilotEnabled:   agent.AutopilotEnabled,
-		EquippedItems:      []dto.EquippedItem{},
+		ID:                  agent.ID,
+		OwnerID:             agent.OwnerID,
+		Name:                agent.Name,
+		State:               dto.MapAgentStateToShipState(dto.AgentState(agent.State)),
+		ShipType:            shipType,
+		PositionX:           agent.PositionX,
+		PositionY:           agent.PositionY,
+		PositionZ:           agent.PositionZ,
+		StartPositionX:      agent.StartPositionX,
+		StartPositionY:      agent.StartPositionY,
+		StartPositionZ:      agent.StartPositionZ,
+		TargetPositionX:     agent.TargetX,
+		TargetPositionY:     agent.TargetY,
+		TargetPositionZ:     agent.TargetZ,
+		CurrentSynapseID:    PgUUIDToStringPtr(agent.CurrentSpaceID),
+		TravelStartTime:     agent.TravelStartTime,
+		TravelDuration:      agent.TravelDuration,
+		RotationY:           rotationY,
+		AutopilotEnabled:    agent.AutopilotEnabled,
+		EquippedItems:       []dto.EquippedItem{},
 		CurrentPointsPerMin: float64(agent.CurrentPointsPerMin),
-		SpacesDiscovered:   agent.SpacesDiscovered,
-		TotalAgiEarned:     float64(agent.TotalAgiEarned),
-		CreatedAt:          agent.CreatedAt,
+		SpacesDiscovered:    int(agent.SpacesDiscovered),
+		TotalAgiEarned:      float64(agent.TotalAgiEarned),
+		CreatedAt:           agent.CreatedAt,
 	}
 }
 
+// PgUUIDToStringPtr converts a pgtype.UUID to a *string (nil if not valid)
+func PgUUIDToStringPtr(u pgtype.UUID) *string {
+	if !u.Valid {
+		return nil
+	}
+	s := fmt.Sprintf("%x-%x-%x-%x-%x", u.Bytes[0:4], u.Bytes[4:6], u.Bytes[6:8], u.Bytes[8:10], u.Bytes[10:16])
+	return &s
+}
+
+// StringToPgUUID converts a string UUID to pgtype.UUID
+func StringToPgUUID(s string) pgtype.UUID {
+	parsed, err := uuid.Parse(s)
+	if err != nil {
+		return pgtype.UUID{Valid: false}
+	}
+	return pgtype.UUID{Bytes: parsed, Valid: true}
+}
+
 // CreateShip creates a new ship for a user
-func CreateShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
+func CreateShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
+	ctx := c.Context()
+
 	var req struct {
 		UserID string `json:"userId"`
 		Name   string `json:"name"`
@@ -172,9 +183,12 @@ func CreateShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 	}
 
 	// Check if user exists
-	user, err := db.GetUser(database, req.UserID)
+	user, err := store.Queries.GetUser(ctx, req.UserID)
 	if err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to look up user"})
 	}
 
 	// Check ship limit based on user level
@@ -190,7 +204,7 @@ func CreateShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 		maxShips = 2
 	}
 
-	existingShips, _ := db.GetAgentsByOwner(database, req.UserID)
+	existingShips, _ := store.Queries.GetAgentsByOwner(ctx, req.UserID)
 	if len(existingShips) >= maxShips {
 		return c.Status(400).JSON(fiber.Map{
 			"error": fmt.Sprintf("Ship limit reached (%d ships at user level %d)", maxShips, userLevel),
@@ -198,45 +212,51 @@ func CreateShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 	}
 
 	// Create ship with random ship type
-	agent := &models.Agent{
-		ID:                 uuid.New().String(),
-		OwnerID:            req.UserID,
-		Name:               req.Name,
-		State:              string(dto.AgentIdle),
-		ShipType:           string(config.RandomShipType()),
-		PositionX:          0,
-		PositionY:          0,
-		PositionZ:          0,
-		HomeX:              0,
-		HomeY:              0,
-		HomeZ:              0,
-		WanderDirX:         rand.Float64()*2 - 1,
-		WanderDirY:         rand.Float64()*2 - 1,
-		WanderDirZ:         rand.Float64()*2 - 1,
-		WanderPhase:        rand.Float64() * 1000,
-		SpacesDiscovered:   0,
-		DistanceTraveled:   0,
-		CreatedAt:          time.Now().UnixMilli(),
-		CreationCost:       0,
-		NeedsRepair:        false,
-		TranceActive:       false,
-		TranceLevel:        0,
-		CurrentPointsPerMin: 100,
-		TotalAgiEarned:     0,
-		AutopilotEnabled:   false,
-	}
-
-	if err := db.CreateAgent(database, agent); err != nil {
+	newAgent, err := store.Queries.CreateAgent(ctx, generated.CreateAgentParams{
+		ID:                    uuid.New().String(),
+		OwnerID:               req.UserID,
+		Name:                  req.Name,
+		State:                 string(dto.AgentIdle),
+		ShipType:              string(config.RandomShipType()),
+		PositionX:             0,
+		PositionY:             0,
+		PositionZ:             0,
+		HomeX:                 0,
+		HomeY:                 0,
+		HomeZ:                 0,
+		WanderDirX:            rand.Float64()*2 - 1,
+		WanderDirY:            rand.Float64()*2 - 1,
+		WanderDirZ:            rand.Float64()*2 - 1,
+		WanderPhase:           rand.Float64() * 1000,
+		SpacesDiscovered:      0,
+		DistanceTraveled:      0,
+		CreatedAt:             time.Now().UnixMilli(),
+		CreationCost:          0,
+		NeedsRepair:           false,
+		TranceActive:          false,
+		TranceLevel:           0,
+		CurrentPointsPerMin:   100,
+		TotalAgiEarned:        0,
+		TotalBrainXpEarned:    0,
+		AutopilotEnabled:      false,
+		Traits:                json.RawMessage("[]"),
+		EquippedItems:         json.RawMessage("[]"),
+		AutopilotTargetTypes:  json.RawMessage("[]"),
+		AutopilotMaxPointsCap: 0,
+		AutopilotAvoidCrowded: false,
+	})
+	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create ship"})
 	}
 
+	shipDTO := ConvertGenAgentToShipDTO(newAgent)
+
 	// Trigger WebSocket update
 	hub.SendToUser(req.UserID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{convertAgentToDTO(*agent)},
+		"ships":     []dto.ShipDTO{shipDTO},
 		"timestamp": time.Now().UnixMilli(),
 	})
 
-	shipDTO := convertAgentToDTO(*agent)
 	return c.Status(201).JSON(fiber.Map{
 		"success": true,
 		"ship":    shipDTO,
@@ -244,17 +264,18 @@ func CreateShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 }
 
 // GetUserShips retrieves all ships for a user
-func GetUserShips(c *fiber.Ctx, database *gorm.DB) error {
+func GetUserShips(c *fiber.Ctx, store *database.Store) error {
+	ctx := c.Context()
 	userID := c.Params("userId")
 
-	agents, err := db.GetAgentsByOwner(database, userID)
+	agents, err := store.Queries.GetAgentsByOwner(ctx, userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to retrieve ships"})
 	}
 
 	ships := make([]dto.ShipDTO, len(agents))
 	for i, agent := range agents {
-		ships[i] = convertAgentToDTO(agent)
+		ships[i] = ConvertGenAgentToShipDTO(agent)
 	}
 
 	return c.JSON(fiber.Map{
@@ -264,7 +285,8 @@ func GetUserShips(c *fiber.Ctx, database *gorm.DB) error {
 
 // DeployShip deploys a ship directly to a synapse (starts traveling immediately)
 // If no synapseId is provided, positions the ship at the given coordinates but keeps it idle
-func DeployShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *config.Config) error {
+func DeployShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *config.Config) error {
+	ctx := c.Context()
 	shipID := c.Params("id")
 
 	var req struct {
@@ -278,9 +300,12 @@ func DeployShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *config.Con
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	agent, err := db.GetAgent(database, shipID)
+	agent, err := store.Queries.GetAgent(ctx, shipID)
 	if err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Ship not found"})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Ship not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to look up ship"})
 	}
 
 	if agent.State != string(dto.AgentIdle) {
@@ -291,9 +316,12 @@ func DeployShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *config.Con
 
 	// If synapseId provided, start traveling directly to the synapse
 	if req.SynapseID != "" {
-		space, err := db.GetSpace(database, req.SynapseID)
+		space, err := store.Queries.GetSpace(ctx, req.SynapseID)
 		if err != nil {
-			return c.Status(404).JSON(fiber.Map{"error": "Synapse not found"})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return c.Status(404).JSON(fiber.Map{"error": "Synapse not found"})
+			}
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to look up synapse"})
 		}
 
 		if space.State == string(dto.SpaceDiscovered) {
@@ -301,7 +329,7 @@ func DeployShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *config.Con
 		}
 
 		// Check if synapse is already being explored
-		explorerCount, _ := db.GetSynapseExplorerCount(database, req.SynapseID)
+		explorerCount, _ := store.Queries.GetSynapseExplorerCount(ctx, req.SynapseID)
 		if explorerCount >= 1 {
 			return c.Status(400).JSON(fiber.Map{"error": "Synapse is already being explored"})
 		}
@@ -312,9 +340,12 @@ func DeployShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *config.Con
 		params := calculateTravelParams(distance, cfg)
 
 		// Get user and check points balance
-		user, err := db.GetUser(database, agent.OwnerID)
+		user, err := store.Queries.GetUser(ctx, agent.OwnerID)
 		if err != nil {
-			return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+			}
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to look up user"})
 		}
 
 		if user.Points < params.TravelCost {
@@ -326,23 +357,28 @@ func DeployShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *config.Con
 		}
 
 		// Deduct travel cost from user's points
-		if err := db.DecrementUserPoints(database, agent.OwnerID, params.TravelCost); err != nil {
+		if err := store.Queries.DecrementUserPoints(ctx, generated.DecrementUserPointsParams{
+			ID:     agent.OwnerID,
+			Points: params.TravelCost,
+		}); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct travel cost"})
 		}
 
-		// Update agent to traveling state using helper
-		setAgentTravelState(agent, req.SynapseID, space.PositionX, space.PositionY, space.PositionZ, params)
-
-		if err := db.UpdateAgent(database, agent); err != nil {
+		// Update agent to traveling state
+		updateParams := buildTravelUpdateParams(agent, req.SynapseID, space.PositionX, space.PositionY, space.PositionZ, params)
+		if err := store.Queries.UpdateAgent(ctx, updateParams); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to deploy ship"})
 		}
 
+		// Re-read agent for accurate DTO (positions set by buildTravelUpdateParams)
+		updatedAgent, _ := store.Queries.GetAgent(ctx, shipID)
+
 		// Broadcast travel:started event
-		broadcastTravelStarted(hub, agent, space, params)
+		broadcastTravelStarted(hub, updatedAgent, space, params)
 
 		return c.JSON(fiber.Map{
 			"success":          true,
-			"ship":             convertAgentToDTO(*agent),
+			"ship":             ConvertGenAgentToShipDTO(updatedAgent),
 			"travelDuration":   params.TravelDuration,
 			"travelCost":       params.TravelCost,
 			"estimatedArrival": params.StartTime + params.TravelDuration,
@@ -350,72 +386,102 @@ func DeployShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *config.Con
 	}
 
 	// No synapse - just position the ship at coordinates (stays idle)
-	agent.PositionX = req.PositionX
-	agent.PositionY = req.PositionY
-	agent.PositionZ = req.PositionZ
-
-	if err := db.UpdateAgent(database, agent); err != nil {
+	if err := store.Queries.UpdateAgent(ctx, generated.UpdateAgentParams{
+		ID:                  agent.ID,
+		Name:                agent.Name,
+		State:               agent.State,
+		PositionX:           req.PositionX,
+		PositionY:           req.PositionY,
+		PositionZ:           req.PositionZ,
+		StartPositionX:      agent.StartPositionX,
+		StartPositionY:      agent.StartPositionY,
+		StartPositionZ:      agent.StartPositionZ,
+		TargetSpaceID:       agent.TargetSpaceID,
+		TravelStartTime:     agent.TravelStartTime,
+		TravelDuration:      agent.TravelDuration,
+		TargetX:             agent.TargetX,
+		TargetY:             agent.TargetY,
+		TargetZ:             agent.TargetZ,
+		CurrentSpaceID:      agent.CurrentSpaceID,
+		CurrentPointsPerMin: agent.CurrentPointsPerMin,
+		AutopilotEnabled:    agent.AutopilotEnabled,
+		HomeX:               agent.HomeX,
+		HomeY:               agent.HomeY,
+		HomeZ:               agent.HomeZ,
+	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to deploy ship"})
 	}
 
+	updatedAgent, _ := store.Queries.GetAgent(ctx, shipID)
+	shipDTO := ConvertGenAgentToShipDTO(updatedAgent)
+
 	// Trigger WebSocket update
-	hub.SendToUser(agent.OwnerID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{convertAgentToDTO(*agent)},
+	hub.SendToUser(updatedAgent.OwnerID, "ships:sync", map[string]interface{}{
+		"ships":     []dto.ShipDTO{shipDTO},
 		"timestamp": time.Now().UnixMilli(),
 	})
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"ship":    convertAgentToDTO(*agent),
+		"ship":    shipDTO,
 	})
 }
 
 // RecallShip recalls a ship from exploration back to idle state
-func RecallShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
+func RecallShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
+	ctx := c.Context()
 	shipID := c.Params("id")
 
-	agent, err := db.GetAgent(database, shipID)
+	agent, err := store.Queries.GetAgent(ctx, shipID)
 	if err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Ship not found"})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Ship not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to look up ship"})
 	}
 
 	if agent.State == string(dto.AgentIdle) {
 		return c.Status(400).JSON(fiber.Map{"error": "Ship is already idle"})
 	}
 
-	// Remove from synapse exploration if exploring
-	if agent.State == string(dto.AgentSolving) && agent.TargetSpaceID != nil {
-		db.RemoveSynapseExplorer(database, shipID)
+	// Remove from synapse exploration if solving
+	if agent.State == string(dto.AgentSolving) && agent.TargetSpaceID.Valid {
+		_ = store.Queries.RemoveSynapseExplorer(ctx, shipID)
 	}
 
-	// Update agent to idle state at home
-	agent.State = string(dto.AgentIdle)
-	agent.PositionX = agent.HomeX
-	agent.PositionY = agent.HomeY
-	agent.PositionZ = agent.HomeZ
-	agent.TargetSpaceID = nil
-	agent.CurrentSpaceID = nil
-	agent.TravelStartTime = nil
-	agent.TravelDuration = nil
-
-	if err := db.UpdateAgent(database, agent); err != nil {
+	// Update agent to idle state at home position
+	if err := store.Queries.UpdateAgentToIdle(ctx, shipID); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to recall ship"})
 	}
+	// Also move position back to home
+	if err := store.Queries.UpdateAgentPosition(ctx, generated.UpdateAgentPositionParams{
+		ID:        shipID,
+		PositionX: agent.HomeX,
+		PositionY: agent.HomeY,
+		PositionZ: agent.HomeZ,
+	}); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to update ship position"})
+	}
+
+	// Re-read the agent for accurate DTO
+	updatedAgent, _ := store.Queries.GetAgent(ctx, shipID)
+	shipDTO := ConvertGenAgentToShipDTO(updatedAgent)
 
 	// Trigger WebSocket update
 	hub.SendToUser(agent.OwnerID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{convertAgentToDTO(*agent)},
+		"ships":     []dto.ShipDTO{shipDTO},
 		"timestamp": time.Now().UnixMilli(),
 	})
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"ship":    convertAgentToDTO(*agent),
+		"ship":    shipDTO,
 	})
 }
 
 // TravelToSynapse starts traveling to a specific synapse
-func TravelToSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *config.Config) error {
+func TravelToSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *config.Config) error {
+	ctx := c.Context()
 	shipID := c.Params("id")
 
 	var req struct {
@@ -431,9 +497,12 @@ func TravelToSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *confi
 		return c.Status(400).JSON(fiber.Map{"error": "synapseId is required"})
 	}
 
-	agent, err := db.GetAgent(database, shipID)
+	agent, err := store.Queries.GetAgent(ctx, shipID)
 	if err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Ship not found"})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Ship not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to look up ship"})
 	}
 
 	// Allow idle or searching (for backward compatibility with existing ships in searching state)
@@ -444,9 +513,12 @@ func TravelToSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *confi
 	}
 
 	// Get synapse
-	space, err := db.GetSpace(database, req.SynapseID)
+	space, err := store.Queries.GetSpace(ctx, req.SynapseID)
 	if err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Synapse not found"})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Synapse not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to look up synapse"})
 	}
 
 	if space.State == string(dto.SpaceDiscovered) {
@@ -454,7 +526,7 @@ func TravelToSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *confi
 	}
 
 	// Check if synapse is already being explored
-	explorerCount, _ := db.GetSynapseExplorerCount(database, req.SynapseID)
+	explorerCount, _ := store.Queries.GetSynapseExplorerCount(ctx, req.SynapseID)
 	if explorerCount >= 1 {
 		return c.Status(400).JSON(fiber.Map{"error": "Synapse is already being explored"})
 	}
@@ -465,9 +537,12 @@ func TravelToSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *confi
 	params := calculateTravelParams(distance, cfg)
 
 	// Get user and check points balance
-	user, err := db.GetUser(database, agent.OwnerID)
+	user, err := store.Queries.GetUser(ctx, agent.OwnerID)
 	if err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to look up user"})
 	}
 
 	if user.Points < params.TravelCost {
@@ -479,30 +554,36 @@ func TravelToSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *confi
 	}
 
 	// Deduct travel cost from user's points
-	if err := db.DecrementUserPoints(database, agent.OwnerID, params.TravelCost); err != nil {
+	if err := store.Queries.DecrementUserPoints(ctx, generated.DecrementUserPointsParams{
+		ID:     agent.OwnerID,
+		Points: params.TravelCost,
+	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct travel cost"})
 	}
 
-	// Update agent to traveling state using helper
-	setAgentTravelState(agent, req.SynapseID, space.PositionX, space.PositionY, space.PositionZ, params)
+	// Update agent to traveling state
+	updateParams := buildTravelUpdateParams(agent, req.SynapseID, space.PositionX, space.PositionY, space.PositionZ, params)
 
 	// Set points per minute if provided
 	if req.PointsPerMin > 0 {
-		agent.CurrentPointsPerMin = int(req.PointsPerMin)
+		updateParams.CurrentPointsPerMin = int32(req.PointsPerMin)
 	} else if agent.CurrentPointsPerMin == 0 {
-		agent.CurrentPointsPerMin = 100
+		updateParams.CurrentPointsPerMin = 100
 	}
 
-	if err := db.UpdateAgent(database, agent); err != nil {
+	if err := store.Queries.UpdateAgent(ctx, updateParams); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to start travel"})
 	}
 
+	// Re-read agent for accurate DTO
+	updatedAgent, _ := store.Queries.GetAgent(ctx, shipID)
+
 	// Broadcast travel:started event
-	broadcastTravelStarted(hub, agent, space, params)
+	broadcastTravelStarted(hub, updatedAgent, space, params)
 
 	return c.JSON(fiber.Map{
 		"success":          true,
-		"ship":             convertAgentToDTO(*agent),
+		"ship":             ConvertGenAgentToShipDTO(updatedAgent),
 		"travelDuration":   params.TravelDuration,
 		"travelCost":       params.TravelCost,
 		"estimatedArrival": params.StartTime + params.TravelDuration,
@@ -510,38 +591,47 @@ func TravelToSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *confi
 }
 
 // ToggleAutopilot toggles autopilot settings for a ship
-func ToggleAutopilot(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
+func ToggleAutopilot(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
+	ctx := c.Context()
 	shipID := c.Params("id")
 
 	var req struct {
-		Enabled             bool     `json:"enabled"`
-		TargetSynapseTypes  []string `json:"targetSynapseTypes,omitempty"`
+		Enabled            bool     `json:"enabled"`
+		TargetSynapseTypes []string `json:"targetSynapseTypes,omitempty"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	agent, err := db.GetAgent(database, shipID)
+	agent, err := store.Queries.GetAgent(ctx, shipID)
 	if err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Ship not found"})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Ship not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to look up ship"})
 	}
 
-	agent.AutopilotEnabled = req.Enabled
-
-	if err := db.UpdateAgent(database, agent); err != nil {
+	if err := store.Queries.UpdateAgentAutopilot(ctx, generated.UpdateAgentAutopilotParams{
+		ID:               shipID,
+		AutopilotEnabled: req.Enabled,
+	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update autopilot"})
 	}
 
+	// Re-read agent for accurate DTO
+	agent.AutopilotEnabled = req.Enabled
+	shipDTO := ConvertGenAgentToShipDTO(agent)
+
 	// Trigger WebSocket update
 	hub.SendToUser(agent.OwnerID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{convertAgentToDTO(*agent)},
+		"ships":     []dto.ShipDTO{shipDTO},
 		"timestamp": time.Now().UnixMilli(),
 	})
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"ship":    convertAgentToDTO(*agent),
+		"ship":    shipDTO,
 		"message": getAutopilotMessage(req.Enabled),
 	})
 }

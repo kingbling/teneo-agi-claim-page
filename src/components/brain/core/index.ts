@@ -6,4 +6,3 @@
 
 export * from './brainConstants'
 export * from './shaderUtils'
-export * from './useBrainTime'

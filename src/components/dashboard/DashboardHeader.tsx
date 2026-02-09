@@ -34,7 +34,7 @@ export const DashboardHeader: Component<DashboardHeaderProps> = (props) => {
           <span class="text-sm font-semibold text-[var(--text-primary)]">TENEO</span>
         </div>
 
-        {/* Center section - User Level + Brain Level */}
+        {/* Center section - User Level */}
         <div class="flex items-center gap-4">
           {/* User Level Badge - simplified for now */}
           <div class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-gradient-to-r from-teal-500/20 to-blue-500/20 border border-teal-500/30">
@@ -43,12 +43,6 @@ export const DashboardHeader: Component<DashboardHeaderProps> = (props) => {
             </span>
           </div>
 
-          {/* Brain Level Progress - simplified */}
-          <div class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-purple-500/20 border border-purple-500/30">
-            <span class="text-xs font-medium text-purple-300">
-              Brain Lv. {userStore.brainLevel}
-            </span>
-          </div>
         </div>
 
         {/* Right side */}
@@ -85,15 +79,15 @@ export const DashboardHeader: Component<DashboardHeaderProps> = (props) => {
           </div>
 
           {/* Active Event Indicator */}
-          <Show when={eventStore.hasActiveEvents}>
+          <Show when={eventStore.actions.hasActiveEvents()}>
             <A
               href="/events"
               class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-purple-500/20 border border-purple-500/40 hover:bg-purple-500/30 transition-colors"
-              title={`${eventStore.activeEvents.length} active event${eventStore.activeEvents.length > 1 ? 's' : ''}`}
+              title={`${eventStore.state.activeEvents.length} active event${eventStore.state.activeEvents.length > 1 ? 's' : ''}`}
             >
               <Calendar class="w-3.5 h-3.5 text-purple-400" />
               <span class="text-xs font-medium text-purple-300">
-                {eventStore.activeEvents.length}
+                {eventStore.state.activeEvents.length}
               </span>
               <span class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
             </A>

@@ -24,6 +24,9 @@ const SYNAPSE_TYPE_COLORS: Record<SynapseType, [number, number, number]> = {
   minor: [0.3, 0.8, 0.9],      // Cyan
   complex: [0.9, 0.6, 0.2],    // Orange/gold
   deep: [0.8, 0.3, 0.9],       // Purple
+  core: [1.0, 0.85, 0.3],      // Gold
+  rare: [1.0, 0.4, 0.6],       // Red-pink
+  legendary: [1.0, 0.5, 1.0],  // Bright magenta
   unique: [1.0, 0.9, 0.3],     // Gold/yellow
 }
 

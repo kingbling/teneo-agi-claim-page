@@ -1,20 +1,21 @@
 package handlers
 
 import (
+	"errors"
 	"log"
 	"time"
 
-	"teneo/server-go/internal/db"
+	"teneo/server-go/internal/database"
+	"teneo/server-go/internal/database/generated"
 	"teneo/server-go/internal/dto"
-	"teneo/server-go/internal/models"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
+	"github.com/jackc/pgx/v5"
 )
 
 // LoginOrCreateUser logs in or creates a user by wallet address
-func LoginOrCreateUser(c *fiber.Ctx, database *gorm.DB) error {
+func LoginOrCreateUser(c *fiber.Ctx, store *database.Store) error {
 	var req struct {
 		Wallet string `json:"wallet"`
 	}
@@ -27,23 +28,29 @@ func LoginOrCreateUser(c *fiber.Ctx, database *gorm.DB) error {
 		return c.Status(400).JSON(fiber.Map{"error": "wallet is required"})
 	}
 
+	ctx := c.Context()
+
 	// Try to get existing user
-	user, err := db.GetUserByWallet(database, req.Wallet)
+	user, err := store.Queries.GetUserByWallet(ctx, req.Wallet)
 	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("[USERS] ERROR looking up user for wallet %s: %v", req.Wallet, err)
+			return c.Status(500).JSON(fiber.Map{"error": "Database error"})
+		}
+
 		// User doesn't exist, create new user
 		log.Printf("[USERS] Creating new user for wallet: %s", req.Wallet)
-		user = &models.User{
+		user, err = store.Queries.CreateUser(ctx, generated.CreateUserParams{
 			ID:        uuid.New().String(),
 			Wallet:    req.Wallet,
 			Tier:      "free",
 			UserLevel: 1,
-			UsdcSpent:  0,
+			UsdcSpent: 0,
 			Points:    0,
 			MaxShips:  1,
 			CreatedAt: time.Now().UnixMilli(),
-		}
-
-		if err := db.CreateUser(database, user); err != nil {
+		})
+		if err != nil {
 			log.Printf("[USERS] ERROR creating user for wallet %s: %v", req.Wallet, err)
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to create user", "details": err.Error()})
 		}
@@ -75,25 +82,25 @@ func LoginOrCreateUser(c *fiber.Ctx, database *gorm.DB) error {
 	return c.JSON(response)
 }
 
-// GetUserShips retrieves all ships for a user (re-export from ships.go for route registration)
-func GetUserShipsByUserID(c *fiber.Ctx, database *gorm.DB) error {
+// GetUserShipsByUserID retrieves all ships for a user by user ID
+func GetUserShipsByUserID(c *fiber.Ctx, store *database.Store) error {
 	userID := c.Params("userId")
 
-	agents, err := db.GetAgentsByOwner(database, userID)
+	agents, err := store.Queries.GetAgentsByOwner(c.Context(), userID)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to retrieve ships"})
 	}
 
 	ships := make([]dto.ShipDTO, len(agents))
 	for i, agent := range agents {
-		ships[i] = convertAgentToDTO(agent)
+		ships[i] = ConvertGenAgentToShipDTO(agent)
 	}
 
 	return c.JSON(ships)
 }
 
 // RecordUSDCSpent records USDC spending for a user and updates their level
-func RecordUSDCSpent(c *fiber.Ctx, database *gorm.DB) error {
+func RecordUSDCSpent(c *fiber.Ctx, store *database.Store) error {
 	userID := c.Params("userId")
 
 	var req struct {
@@ -108,28 +115,36 @@ func RecordUSDCSpent(c *fiber.Ctx, database *gorm.DB) error {
 		return c.Status(400).JSON(fiber.Map{"error": "amount must be positive"})
 	}
 
-	user, err := db.GetUser(database, userID)
+	ctx := c.Context()
+
+	user, err := store.Queries.GetUser(ctx, userID)
 	if err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Database error"})
 	}
 
 	// Update USDC spent
-	user.UsdcSpent += req.Amount
+	newUsdcSpent := user.UsdcSpent + req.Amount
 
 	// Recalculate user level
-	newLevel := dto.CalculateUserLevel(user.UsdcSpent)
-	user.UserLevel = int(newLevel)
+	newLevel := dto.CalculateUserLevel(newUsdcSpent)
 
-	if err := db.UpdateUser(database, user); err != nil {
+	if err := store.Queries.UpdateUserUsdcAndLevel(ctx, generated.UpdateUserUsdcAndLevelParams{
+		ID:        userID,
+		UsdcSpent: newUsdcSpent,
+		UserLevel: int32(newLevel),
+	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update user"})
 	}
 
 	levelConfig := dto.GetDefaultUserLevelConfig()[newLevel]
 
 	return c.JSON(fiber.Map{
-		"success": true,
+		"success":    true,
 		"user_level": newLevel,
-		"usdc_spent": user.UsdcSpent,
+		"usdc_spent": newUsdcSpent,
 		"multiplier": levelConfig.Multiplier,
 	})
 }

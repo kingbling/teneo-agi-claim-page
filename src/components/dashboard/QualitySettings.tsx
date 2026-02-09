@@ -10,9 +10,6 @@ interface QualitySettingsProps {
   // Current quality preset
   preset: QualityPreset
   onPresetChange: (preset: QualityPreset) => void
-  // Post-processing toggle
-  postProcessingEnabled: boolean
-  onPostProcessingChange: (enabled: boolean) => void
   // Current FPS (if available)
   currentFps?: number
   // Show/hide toggle
@@ -77,22 +74,6 @@ export const QualitySettings: Component<QualitySettingsProps> = (props) => {
                 </div>
               </button>
             ))}
-          </div>
-
-          {/* Post-processing toggle */}
-          <div class="border-t border-gray-700 pt-3">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={props.postProcessingEnabled}
-                onChange={(e) => props.onPostProcessingChange(e.currentTarget.checked)}
-                class="w-4 h-4 rounded border-gray-600 bg-gray-800 text-teal-500 focus:ring-teal-500 focus:ring-offset-0"
-              />
-              <div>
-                <span class="text-xs text-gray-300">Post-processing</span>
-                <p class="text-[10px] text-gray-500">Bloom & vignette effects</p>
-              </div>
-            </label>
           </div>
 
           {/* FPS display */}

@@ -11,15 +11,15 @@ import (
 	"sync"
 	"time"
 
-	"teneo/server-go/internal/db"
-	"teneo/server-go/internal/models"
+	"teneo/server-go/internal/database"
+	"teneo/server-go/internal/database/generated"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
+	"github.com/jackc/pgx/v5"
 )
 
 var (
@@ -140,7 +140,7 @@ func verifyEthSignature(message string, signatureHex string) (common.Address, er
 }
 
 // VerifySignature verifies a wallet signature and returns a JWT
-func VerifySignature(c *fiber.Ctx, database *gorm.DB) error {
+func VerifySignature(c *fiber.Ctx, store *database.Store) error {
 	var req struct {
 		Wallet    string `json:"wallet"`
 		Signature string `json:"signature"`
@@ -199,23 +199,30 @@ func VerifySignature(c *fiber.Ctx, database *gorm.DB) error {
 		log.Printf("[AUTH] Signature verified for wallet: %s", req.Wallet)
 	}
 
+	ctx := c.Context()
+
 	// Try to get existing user
-	user, err := db.GetUserByWallet(database, req.Wallet)
+	user, err := store.Queries.GetUserByWallet(ctx, req.Wallet)
 	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("[AUTH] ERROR looking up user for wallet %s: %v", req.Wallet, err)
+			return c.Status(500).JSON(fiber.Map{"error": "Database error"})
+		}
+
 		// User doesn't exist, create new user
 		log.Printf("[AUTH] Creating new user for wallet: %s", req.Wallet)
-		user = &models.User{
-			ID:        uuid.New().String(),
+		newID := uuid.New().String()
+		user, err = store.Queries.CreateUser(ctx, generated.CreateUserParams{
+			ID:        newID,
 			Wallet:    req.Wallet,
 			Tier:      "free",
 			UserLevel: 1,
-			UsdcSpent:  0,
+			UsdcSpent: 0,
 			Points:    1000, // Starting points
 			MaxShips:  1,
 			CreatedAt: time.Now().UnixMilli(),
-		}
-
-		if err := db.CreateUser(database, user); err != nil {
+		})
+		if err != nil {
 			log.Printf("[AUTH] ERROR creating user for wallet %s: %v", req.Wallet, err)
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to create user", "details": err.Error()})
 		}
@@ -233,16 +240,16 @@ func VerifySignature(c *fiber.Ctx, database *gorm.DB) error {
 	return c.JSON(fiber.Map{
 		"token": token,
 		"user": fiber.Map{
-			"id":       user.ID,
-			"wallet":   user.Wallet,
-			"tier":     user.Tier,
+			"id":        user.ID,
+			"wallet":    user.Wallet,
+			"tier":      user.Tier,
 			"userLevel": user.UserLevel,
 		},
 	})
 }
 
 // VerifyToken verifies a JWT token and returns user info
-func VerifyToken(c *fiber.Ctx, database *gorm.DB) error {
+func VerifyToken(c *fiber.Ctx, store *database.Store) error {
 	authHeader := c.Get("Authorization")
 	if authHeader == "" {
 		return c.Status(401).JSON(fiber.Map{"error": "No authorization header"})
@@ -262,15 +269,18 @@ func VerifyToken(c *fiber.Ctx, database *gorm.DB) error {
 	}
 
 	// Get user
-	user, err := db.GetUser(database, userID)
+	user, err := store.Queries.GetUser(c.Context(), userID)
 	if err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Database error"})
 	}
 
 	return c.JSON(fiber.Map{
-		"id":       user.ID,
-		"wallet":   user.Wallet,
-		"tier":     user.Tier,
+		"id":        user.ID,
+		"wallet":    user.Wallet,
+		"tier":      user.Tier,
 		"userLevel": user.UserLevel,
 	})
 }

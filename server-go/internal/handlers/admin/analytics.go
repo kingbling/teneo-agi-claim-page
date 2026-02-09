@@ -3,52 +3,49 @@ package admin
 import (
 	"time"
 
-	"teneo/server-go/internal/db"
-	"teneo/server-go/internal/models"
+	"teneo/server-go/internal/database"
 
 	"github.com/gofiber/fiber/v2"
 )
 
 // GetOverview returns high-level system metrics
 func GetOverview(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
-	var totalUsers, activeUsers, bannedUsers int64
-	var totalShips, idleShips, searchingShips, travelingShips, solvingShips int64
-	var totalSpaces, discoveredSpaces, beingExploredSpaces int64
+	userCounts, err := store.Queries.GetOverviewUserCounts(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get user counts"})
+	}
 
-	database.Model(&models.User{}).Count(&totalUsers)
-	database.Model(&models.User{}).Where("is_banned = ?", false).Count(&activeUsers)
-	database.Model(&models.User{}).Where("is_banned = ?", true).Count(&bannedUsers)
+	agentCounts, err := store.Queries.GetOverviewAgentCounts(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get agent counts"})
+	}
 
-	database.Model(&models.Agent{}).Count(&totalShips)
-	database.Model(&models.Agent{}).Where("state = ?", "idle").Count(&idleShips)
-	database.Model(&models.Agent{}).Where("state = ?", "searching").Count(&searchingShips)
-	database.Model(&models.Agent{}).Where("state = ?", "traveling").Count(&travelingShips)
-	database.Model(&models.Agent{}).Where("state = ?", "solving").Count(&solvingShips)
-
-	database.Model(&models.Space{}).Count(&totalSpaces)
-	database.Model(&models.Space{}).Where("state = ?", "discovered").Count(&discoveredSpaces)
-	database.Model(&models.Space{}).Where("state = ?", "being_solved").Count(&beingExploredSpaces)
+	spaceCounts, err := store.Queries.GetOverviewSpaceCounts(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get space counts"})
+	}
 
 	return c.JSON(fiber.Map{
 		"users": fiber.Map{
-			"total":  totalUsers,
-			"active": activeUsers,
-			"banned": bannedUsers,
+			"total":  userCounts.TotalUsers,
+			"active": userCounts.ActiveUsers,
+			"banned": userCounts.BannedUsers,
 		},
 		"ships": fiber.Map{
-			"total":     totalShips,
-			"idle":      idleShips,
-			"searching": searchingShips,
-			"traveling": travelingShips,
-			"solving":   solvingShips,
+			"total":     agentCounts.Total,
+			"idle":      agentCounts.Idle,
+			"searching": agentCounts.Searching,
+			"traveling": agentCounts.Traveling,
+			"solving":   agentCounts.Solving,
 		},
 		"spaces": fiber.Map{
-			"total":         totalSpaces,
-			"discovered":    discoveredSpaces,
-			"beingExplored": beingExploredSpaces,
-			"undiscovered":  totalSpaces - discoveredSpaces - beingExploredSpaces,
+			"total":         spaceCounts.Total,
+			"discovered":    spaceCounts.Discovered,
+			"beingExplored": spaceCounts.BeingExplored,
+			"undiscovered":  spaceCounts.Total - spaceCounts.Discovered - spaceCounts.BeingExplored,
 		},
 		"timestamp": time.Now().UnixMilli(),
 	})
@@ -56,36 +53,32 @@ func GetOverview(c *fiber.Ctx) error {
 
 // GetEconomy returns token economy metrics
 func GetEconomy(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
-	var totalAgi, totalTeneo, totalAgentic, totalUsdc, totalPoints float64
-
-	database.Model(&models.User{}).Select("COALESCE(SUM(total_agi_earned), 0)").Scan(&totalAgi)
-	database.Model(&models.User{}).Select("COALESCE(SUM(total_teneo_earned), 0)").Scan(&totalTeneo)
-	database.Model(&models.User{}).Select("COALESCE(SUM(agentic_balance), 0)").Scan(&totalAgentic)
-	database.Model(&models.User{}).Select("COALESCE(SUM(usdc_spent), 0)").Scan(&totalUsdc)
-	database.Model(&models.User{}).Select("COALESCE(SUM(points), 0)").Scan(&totalPoints)
+	totals, err := store.Queries.GetUserEconomyTotals(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get economy totals"})
+	}
 
 	// Level distribution
-	type LevelCount struct {
-		UserLevel int
-		Count     int64
+	levelRows, err := store.Queries.GetUserLevelDistribution(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get level distribution"})
 	}
-	var levelCounts []LevelCount
-	database.Model(&models.User{}).Select("user_level, COUNT(*) as count").Group("user_level").Find(&levelCounts)
 
-	levelDist := make(map[int]int64)
-	for _, lc := range levelCounts {
+	levelDist := make(map[int32]int64)
+	for _, lc := range levelRows {
 		levelDist[lc.UserLevel] = lc.Count
 	}
 
 	return c.JSON(fiber.Map{
 		"circulation": fiber.Map{
-			"agi":     totalAgi,
-			"teneo":   totalTeneo,
-			"agentic": totalAgentic,
-			"usdc":    totalUsdc,
-			"points":  totalPoints,
+			"agi":     totals.TotalAgi,
+			"teneo":   totals.TotalTeneo,
+			"agentic": totals.TotalAgentic,
+			"usdc":    totals.TotalUsdc,
+			"points":  totals.TotalPoints,
 		},
 		"levelDistribution": levelDist,
 		"timestamp":         time.Now().UnixMilli(),
@@ -94,23 +87,13 @@ func GetEconomy(c *fiber.Ctx) error {
 
 // GetSynapseTypes returns synapse type distribution
 func GetSynapseTypes(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
-	type TypeStats struct {
-		SynapseType   string
-		Total         int64
-		Discovered    int64
-		BeingExplored int64
+	stats, err := store.Queries.GetSynapseTypeDistribution(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get synapse types"})
 	}
-
-	var stats []TypeStats
-	database.Model(&models.Space{}).
-		Select(`synapse_type,
-		        COUNT(*) as total,
-		        SUM(CASE WHEN state = 'discovered' THEN 1 ELSE 0 END) as discovered,
-		        SUM(CASE WHEN state = 'being_solved' THEN 1 ELSE 0 END) as being_explored`).
-		Group("synapse_type").
-		Find(&stats)
 
 	types := make([]fiber.Map, len(stats))
 	for i, s := range stats {
@@ -131,24 +114,17 @@ func GetSynapseTypes(c *fiber.Ctx) error {
 
 // GetDiscoveryRate returns discovery rate over time
 func GetDiscoveryRate(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
 	days := c.QueryInt("days", 7)
 	now := time.Now()
 	startTime := now.AddDate(0, 0, -days).UnixMilli()
 
-	type DayCount struct {
-		Day   string
-		Count int64
+	dayCounts, err := store.Queries.GetDiscoveryRateByDay(ctx, &startTime)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get discovery rate"})
 	}
-
-	var dayCounts []DayCount
-	database.Model(&models.Space{}).
-		Select("DATE(discovered_at/1000, 'unixepoch') as day, COUNT(*) as count").
-		Where("state = ? AND discovered_at >= ?", "discovered", startTime).
-		Group("day").
-		Order("day").
-		Find(&dayCounts)
 
 	data := make([]fiber.Map, len(dayCounts))
 	for i, dc := range dayCounts {
@@ -164,24 +140,17 @@ func GetDiscoveryRate(c *fiber.Ctx) error {
 
 // GetUserGrowth returns user registration trends
 func GetUserGrowth(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
 	days := c.QueryInt("days", 30)
 	now := time.Now()
 	startTime := now.AddDate(0, 0, -days).UnixMilli()
 
-	type DayCount struct {
-		Day   string
-		Count int64
+	dayCounts, err := store.Queries.GetUserGrowthByDay(ctx, startTime)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get user growth"})
 	}
-
-	var dayCounts []DayCount
-	database.Model(&models.User{}).
-		Select("DATE(created_at/1000, 'unixepoch') as day, COUNT(*) as count").
-		Where("created_at >= ?", startTime).
-		Group("day").
-		Order("day").
-		Find(&dayCounts)
 
 	data := make([]fiber.Map, len(dayCounts))
 	cumulative := int64(0)
@@ -199,30 +168,57 @@ func GetUserGrowth(c *fiber.Ctx) error {
 
 // GetTopUsers returns top users by metric
 func GetTopUsers(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
 	metric := c.Query("metric", "agi")
-	limit := c.QueryInt("limit", 10)
+	limit := int32(c.QueryInt("limit", 10))
 
-	var column string
-	switch metric {
-	case "agi":
-		column = "total_agi_earned"
-	case "points":
-		column = "points"
-	case "usdc":
-		column = "usdc_spent"
-	case "agentic":
-		column = "agentic_balance"
-	default:
-		column = "total_agi_earned"
+	type topUser struct {
+		ID             string
+		Wallet         string
+		TotalAgiEarned int32
+		Points         float64
+		UsdcSpent      float64
+		AgenticBalance int32
 	}
 
-	var users []models.User
-	database.Select("id, wallet, username, "+column+" as total_agi_earned").
-		Order(column + " DESC").
-		Limit(limit).
-		Find(&users)
+	var users []topUser
+
+	switch metric {
+	case "points":
+		rows, err := store.Queries.GetTopUsersByPoints(ctx, limit)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to get top users"})
+		}
+		for _, r := range rows {
+			users = append(users, topUser{ID: r.ID, Wallet: r.Wallet, TotalAgiEarned: r.TotalAgiEarned, Points: r.Points, UsdcSpent: r.UsdcSpent, AgenticBalance: r.AgenticBalance})
+		}
+	case "usdc":
+		rows, err := store.Queries.GetTopUsersByUSDC(ctx, limit)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to get top users"})
+		}
+		for _, r := range rows {
+			users = append(users, topUser{ID: r.ID, Wallet: r.Wallet, TotalAgiEarned: r.TotalAgiEarned, Points: r.Points, UsdcSpent: r.UsdcSpent, AgenticBalance: r.AgenticBalance})
+		}
+	case "agentic":
+		rows, err := store.Queries.GetTopUsersByAgentic(ctx, limit)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to get top users"})
+		}
+		for _, r := range rows {
+			users = append(users, topUser{ID: r.ID, Wallet: r.Wallet, TotalAgiEarned: r.TotalAgiEarned, Points: r.Points, UsdcSpent: r.UsdcSpent, AgenticBalance: r.AgenticBalance})
+		}
+	default: // "agi"
+		rows, err := store.Queries.GetTopUsersByAGI(ctx, limit)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to get top users"})
+		}
+		for _, r := range rows {
+			users = append(users, topUser{ID: r.ID, Wallet: r.Wallet, TotalAgiEarned: r.TotalAgiEarned, Points: r.Points, UsdcSpent: r.UsdcSpent, AgenticBalance: r.AgenticBalance})
+		}
+	}
 
 	result := make([]fiber.Map, len(users))
 	for i, user := range users {

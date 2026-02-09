@@ -1,7 +1,7 @@
 /**
  * Shared Ship Model Loading
  *
- * Cached GLB model loading shared between ShipModel3D and ShipPreview3D
+ * Cached GLB model loading shared between components
  */
 
 import * as THREE from 'three'
@@ -12,7 +12,7 @@ import { log } from '@/utils/logger'
 // Engine glow colors by ship state
 export const ENGINE_COLORS: Record<ShipStatus, number> = {
   idle: 0xffaa22,
-  exploring: 0x00ffff,
+  solving: 0x00ffff,
   deploying: 0xff4400,
   returning: 0x44ff44,
 }

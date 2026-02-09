@@ -1,7 +1,5 @@
 import { createRoot } from 'solid-js'
-import { createStore, produce } from 'solid-js/store'
-import { API_URL } from '@/constants/api'
-import { log } from '@/utils/logger'
+import { createStore } from 'solid-js/store'
 
 // ============================================================================
 // MASTERPLAN 2026: EVENT STORE
@@ -16,18 +14,6 @@ export interface EventMultiplier {
   type: 'xp' | 'agi' | 'teneo' | 'lottery_odds' | 'discovery_rate' | 'points_rate'
   value: number
   label: string
-}
-
-export interface EventMilestone {
-  id: string
-  target: number
-  current: number
-  reward: {
-    type: string
-    amount: number
-    label: string
-  }
-  completed: boolean
 }
 
 export interface LiveEvent {
@@ -56,9 +42,6 @@ export interface LiveEvent {
     }
   }
 
-  // Milestones (optional)
-  milestones?: EventMilestone[]
-
   // Visual
   iconUrl: string | null
   bannerUrl: string | null
@@ -71,291 +54,24 @@ export interface LiveEvent {
 }
 
 export interface EventState {
-  // Events
   activeEvents: LiveEvent[]
-  upcomingEvents: LiveEvent[]
-  pastEvents: LiveEvent[]
-
-  // UI State
-  dismissedEventIds: string[]
-  expandedEventId: string | null
-
-  // Loading
   isLoading: boolean
   error: string | null
-
-  // Polling
-  lastFetchTime: number | null
 }
-
-export interface EventActions {
-  // Fetch
-  fetchActiveEvents: () => Promise<void>
-  fetchUpcomingEvents: () => Promise<void>
-  checkEventStatus: () => Promise<void>
-
-  // UI
-  dismissEvent: (eventId: string) => void
-  restoreDismissedEvent: (eventId: string) => void
-  setExpandedEvent: (eventId: string | null) => void
-
-  // Helpers
-  getEventById: (eventId: string) => LiveEvent | undefined
-  getActiveMultiplier: (type: EventMultiplier['type']) => number
-  getTotalMultiplier: (type: EventMultiplier['type']) => number
-  getTimeRemaining: (eventId: string) => number | null
-  isEventDismissed: (eventId: string) => boolean
-  hasActiveEvents: () => boolean
-}
-
-export type EventStore = EventState & EventActions
 
 const initialState: EventState = {
   activeEvents: [],
-  upcomingEvents: [],
-  pastEvents: [],
-  dismissedEventIds: [],
-  expandedEventId: null,
   isLoading: false,
   error: null,
-  lastFetchTime: null,
-}
-
-// API response types
-interface ApiEventResponse {
-  id: string
-  type: string
-  name: string
-  description: string
-  state: 'upcoming' | 'active' | 'completed'
-  startTime: number
-  endTime: number
-  multiplier: number
-  isActive: boolean
-  createdAt: number
-}
-
-// Event type mappings
-const EVENT_TYPE_MAP: Record<string, EventType> = {
-  double_xp: 'xp_boost',
-  bonus_agi: 'reward_boost',
-  special_synapse: 'discovery_rush',
-  community_challenge: 'community_challenge',
-  sector_rush: 'discovery_rush',
-  lucky_hour: 'lottery_frenzy',
-}
-
-const EVENT_COLORS: Record<string, { color: string; accentColor: string }> = {
-  xp_boost: { color: '#8B5CF6', accentColor: '#A78BFA' },
-  reward_boost: { color: '#10B981', accentColor: '#34D399' },
-  discovery_rush: { color: '#3B82F6', accentColor: '#60A5FA' },
-  lottery_frenzy: { color: '#F59E0B', accentColor: '#FBBF24' },
-  community_challenge: { color: '#EC4899', accentColor: '#F472B6' },
-  special: { color: '#6366F1', accentColor: '#818CF8' },
-}
-
-// Transform API event to frontend LiveEvent
-function transformApiEvent(apiEvent: ApiEventResponse): LiveEvent {
-  const eventType = EVENT_TYPE_MAP[apiEvent.type] || 'special'
-  const colors = EVENT_COLORS[eventType] || EVENT_COLORS.special
-  const durationMs = apiEvent.endTime - apiEvent.startTime
-  const durationMinutes = Math.round(durationMs / (60 * 1000))
-
-  // Create multiplier based on event type
-  const multipliers: EventMultiplier[] = []
-  if (apiEvent.multiplier !== 1) {
-    if (apiEvent.type === 'double_xp') {
-      multipliers.push({ type: 'xp', value: apiEvent.multiplier, label: `${apiEvent.multiplier}x Brain XP` })
-    } else if (apiEvent.type === 'bonus_agi') {
-      multipliers.push({ type: 'agi', value: apiEvent.multiplier, label: `${apiEvent.multiplier}x $AGI` })
-    } else if (apiEvent.type === 'lucky_hour') {
-      multipliers.push({ type: 'lottery_odds', value: apiEvent.multiplier, label: `${apiEvent.multiplier}x Lottery Odds` })
-    } else {
-      multipliers.push({ type: 'discovery_rate', value: apiEvent.multiplier, label: `${apiEvent.multiplier}x Discovery` })
-    }
-  }
-
-  return {
-    id: apiEvent.id,
-    name: apiEvent.name,
-    description: apiEvent.description,
-    type: eventType,
-    status: apiEvent.state === 'completed' ? 'ended' : apiEvent.state,
-    startTime: new Date(apiEvent.startTime),
-    endTime: new Date(apiEvent.endTime),
-    durationMinutes,
-    multipliers,
-    iconUrl: null,
-    bannerUrl: null,
-    color: colors.color,
-    accentColor: colors.accentColor,
-    participantCount: 0,
-    isParticipating: false,
-  }
 }
 
 // Create the SolidJS store
 function createEventStore() {
   const [state, setState] = createStore<EventState>(initialState)
 
-  const actions: EventActions = {
-    // ============ FETCH ============
-
-    fetchActiveEvents: async () => {
-      setState({ isLoading: true, error: null })
-
-      try {
-        const response = await fetch(`${API_URL}/api/events/active`)
-        if (!response.ok) throw new Error('Failed to fetch active events')
-        const data = await response.json()
-
-        // Transform API events to frontend format
-        const activeEvents = (data.active || []).map(transformApiEvent)
-        const upcomingEvents = (data.upcoming || []).map(transformApiEvent)
-
-        setState({
-          activeEvents,
-          upcomingEvents,
-          isLoading: false,
-          lastFetchTime: Date.now(),
-        })
-      } catch (error) {
-        log.event.error('Failed to fetch active events:', error)
-        setState({
-          isLoading: false,
-          error: 'Failed to load events',
-          activeEvents: [],
-          upcomingEvents: [],
-        })
-      }
-    },
-
-    fetchUpcomingEvents: async () => {
-      try {
-        const response = await fetch(`${API_URL}/api/events?state=upcoming&limit=10`)
-        if (!response.ok) throw new Error('Failed to fetch upcoming events')
-        const data = await response.json()
-
-        // Transform API events to frontend format
-        const upcomingEvents = (data.events || []).map(transformApiEvent)
-
-        setState({ upcomingEvents })
-      } catch (error) {
-        log.event.error('Failed to fetch upcoming events:', error)
-      }
-    },
-
-    checkEventStatus: async () => {
-      const { activeEvents, upcomingEvents, pastEvents } = state
-      const now = Date.now()
-
-      // Check if any active events have ended
-      const stillActive = activeEvents.filter(event => {
-        return new Date(event.endTime).getTime() > now
-      })
-
-      const nowEnded = activeEvents.filter(event => {
-        return new Date(event.endTime).getTime() <= now
-      })
-
-      // Check if any upcoming events have started
-      const nowActive = upcomingEvents.filter(event => {
-        const startTime = new Date(event.startTime).getTime()
-        const endTime = new Date(event.endTime).getTime()
-        return startTime <= now && endTime > now
-      })
-
-      const stillUpcoming = upcomingEvents.filter(event => {
-        return new Date(event.startTime).getTime() > now
-      })
-
-      // Update state if there are changes
-      if (nowEnded.length > 0 || nowActive.length > 0) {
-        setState({
-          activeEvents: [...stillActive, ...nowActive.map(e => ({ ...e, status: 'active' as EventStatus }))],
-          upcomingEvents: stillUpcoming,
-          pastEvents: [...pastEvents, ...nowEnded.map(e => ({ ...e, status: 'ended' as EventStatus }))],
-        })
-      }
-    },
-
-    // ============ UI ============
-
-    dismissEvent: (eventId: string) => {
-      setState(produce((s) => {
-        s.dismissedEventIds.push(eventId)
-      }))
-    },
-
-    restoreDismissedEvent: (eventId: string) => {
-      setState(produce((s) => {
-        s.dismissedEventIds = s.dismissedEventIds.filter(id => id !== eventId)
-      }))
-    },
-
-    setExpandedEvent: (eventId: string | null) => {
-      setState({ expandedEventId: eventId })
-    },
-
-    // ============ HELPERS ============
-
-    getEventById: (eventId: string) => {
-      const { activeEvents, upcomingEvents, pastEvents } = state
-      return [...activeEvents, ...upcomingEvents, ...pastEvents].find(e => e.id === eventId)
-    },
-
-    getActiveMultiplier: (type: EventMultiplier['type']): number => {
-      const { activeEvents } = state
-      for (const event of activeEvents) {
-        const multiplier = event.multipliers.find(m => m.type === type)
-        if (multiplier) {
-          return multiplier.value
-        }
-      }
-      return 1.0
-    },
-
-    getTotalMultiplier: (type: EventMultiplier['type']): number => {
-      const { activeEvents } = state
-      let total = 1.0
-
-      for (const event of activeEvents) {
-        const multiplier = event.multipliers.find(m => m.type === type)
-        if (multiplier) {
-          // Multiplicative stacking
-          total *= multiplier.value
-        }
-      }
-
-      return total
-    },
-
-    getTimeRemaining: (eventId: string): number | null => {
-      const event = actions.getEventById(eventId)
-      if (!event) return null
-
-      const now = Date.now()
-
-      if (event.status === 'upcoming') {
-        // Time until start
-        return Math.max(0, new Date(event.startTime).getTime() - now)
-      }
-
-      if (event.status === 'active') {
-        // Time until end
-        return Math.max(0, new Date(event.endTime).getTime() - now)
-      }
-
-      return 0 // Ended
-    },
-
-    isEventDismissed: (eventId: string): boolean => {
-      return state.dismissedEventIds.includes(eventId)
-    },
-
+  const actions = {
     hasActiveEvents: (): boolean => {
-      const { activeEvents, dismissedEventIds } = state
-      return activeEvents.some(event => !dismissedEventIds.includes(event.id))
+      return state.activeEvents.length > 0
     },
   }
 

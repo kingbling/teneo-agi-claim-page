@@ -8,11 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "npm run test:e2e",
-    "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui",
-    "test:e2e:debug": "playwright test --debug",
-    "test:unit": "tsx --tsconfig tsconfig.app.json src/utils/synapseUtils.test.ts"
+    "generate:types": "cd server-go && $(go env GOPATH)/bin/tygo generate"
   },
   "dependencies": {
     "@kobalte/core": "^0.13.9",
@@ -22,7 +18,6 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-solid": "^0.511.0",
-    "playwright": "^1.57.0",
     "solid-js": "^1.9.5",
     "tailwind-merge": "^3.4.0",
     "three": "^0.182.0",
@@ -30,14 +25,12 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
-    "@playwright/test": "^1.57.0",
     "@tailwindcss/vite": "^4.1.18",
     "@types/node": "^24.10.1",
     "@types/three": "^0.182.0",
     "eslint": "^9.39.1",
     "globals": "^16.5.0",
     "tailwindcss": "^4.1.18",
-    "tsx": "^4.21.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",

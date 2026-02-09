@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,12 +11,11 @@ import (
 	"time"
 
 	"teneo/server-go/internal/config"
-	"teneo/server-go/internal/db"
+	"teneo/server-go/internal/database"
 	"teneo/server-go/internal/dto"
 	"teneo/server-go/internal/handlers"
 	"teneo/server-go/internal/handlers/admin"
 	"teneo/server-go/internal/middleware"
-	"teneo/server-go/internal/models"
 	"teneo/server-go/internal/simulation"
 	wshub "teneo/server-go/internal/websocket"
 
@@ -30,16 +30,19 @@ func main() {
 	cfg := config.Load()
 
 	// Connect to database
-	database := db.Get()
-	sqlDB, _ := database.DB()
-	defer sqlDB.Close()
+	ctx := context.Background()
+	store, err := database.NewStore(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer store.Close()
 
 	// Create WebSocket hub
 	hub := wshub.NewHub()
 	go hub.Run()
 
 	// Create and start simulation engine
-	engine := simulation.New(database, hub, cfg)
+	engine := simulation.New(store, hub, cfg)
 
 	// Wire engine callbacks to WebSocket broadcasts
 	engine.OnAgentsUpdated = func(agents []dto.AgentUpdate) {
@@ -56,14 +59,13 @@ func main() {
 	}
 	engine.OnUserShipUpdated = func(shipID, userID string) {
 		// Fetch the updated ship from database and send ships:sync to the specific user
-		sqlDB := db.Get()
-		agent, err := db.GetAgent(sqlDB, shipID)
-		if err != nil || agent == nil {
+		agent, err := store.Queries.GetAgent(context.Background(), shipID)
+		if err != nil {
 			log.Printf("[Engine] Failed to fetch ship %s for user sync: %v", shipID[:8], err)
 			return
 		}
 		hub.SendToUser(userID, "ships:sync", map[string]interface{}{
-			"ships":     []dto.ShipDTO{convertAgentToShipDTO(*agent)},
+			"ships":     []dto.ShipDTO{handlers.ConvertGenAgentToShipDTO(agent)},
 			"timestamp": time.Now().UnixMilli(),
 		})
 		log.Printf("[Engine] Sent ships:sync for ship %s to user %s (state: %s)", shipID[:8], userID[:8], agent.State)
@@ -87,12 +89,22 @@ func main() {
 
 	// Middleware
 	app.Use(logger.New())
+	corsOrigins := "http://localhost:5176, http://localhost:5177, http://localhost:4444, http://localhost:3000"
+	if extra := os.Getenv("CORS_ORIGINS"); extra != "" {
+		corsOrigins = extra
+	}
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:5176, http://localhost:5177, http://localhost:4444, http://localhost:3000",
+		AllowOrigins:     corsOrigins,
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
 		AllowMethods:     "GET, POST, PUT, DELETE, OPTIONS",
 		AllowCredentials: true,
 	}))
+
+	// Set store in Fiber locals for admin handlers + middleware
+	app.Use(func(c *fiber.Ctx) error {
+		c.Locals("store", store)
+		return c.Next()
+	})
 
 	// Health check
 	app.Get("/health", func(c *fiber.Ctx) error {
@@ -118,10 +130,10 @@ func main() {
 
 	app.Get("/ws", websocket.New(func(c *websocket.Conn) {
 		client := &wshub.Client{
-			ID:     generateClientID(),
-			Conn:   c,
-			Send:   make(chan []byte, 256),
-			Hub:    hub,
+			ID:   generateClientID(),
+			Conn: c,
+			Send: make(chan []byte, 256),
+			Hub:  hub,
 		}
 
 		// Register client
@@ -132,41 +144,41 @@ func main() {
 
 		// Read pump with message handler
 		client.ReadPump(func(message []byte) {
-			handleWebSocketMessage(client, message, hub, database)
+			handleWebSocketMessage(client, message, hub, store)
 		})
 	}))
 
 	// Ships routes
 	ships := app.Group("/api/ships")
-	ships.Post("/", func(c *fiber.Ctx) error { return handlers.CreateShip(c, database, hub) })
-	ships.Post("/:id/deploy", func(c *fiber.Ctx) error { return handlers.DeployShip(c, database, hub, cfg) })
-	ships.Post("/:id/recall", func(c *fiber.Ctx) error { return handlers.RecallShip(c, database, hub) })
-	ships.Post("/:id/travel-to-synapse", func(c *fiber.Ctx) error { return handlers.TravelToSynapse(c, database, hub, cfg) })
-	ships.Post("/:id/autopilot", func(c *fiber.Ctx) error { return handlers.ToggleAutopilot(c, database, hub) })
+	ships.Post("/", func(c *fiber.Ctx) error { return handlers.CreateShip(c, store, hub) })
+	ships.Post("/:id/deploy", func(c *fiber.Ctx) error { return handlers.DeployShip(c, store, hub, cfg) })
+	ships.Post("/:id/recall", func(c *fiber.Ctx) error { return handlers.RecallShip(c, store, hub) })
+	ships.Post("/:id/travel-to-synapse", func(c *fiber.Ctx) error { return handlers.TravelToSynapse(c, store, hub, cfg) })
+	ships.Post("/:id/autopilot", func(c *fiber.Ctx) error { return handlers.ToggleAutopilot(c, store, hub) })
 
 	// Users routes
 	users := app.Group("/api/users")
-	users.Post("/", func(c *fiber.Ctx) error { return handlers.LoginOrCreateUser(c, database) })
-	users.Get("/:userId/ships", func(c *fiber.Ctx) error { return handlers.GetUserShipsByUserID(c, database) })
-	users.Post("/:userId/usdc-spent", func(c *fiber.Ctx) error { return handlers.RecordUSDCSpent(c, database) })
+	users.Post("/", func(c *fiber.Ctx) error { return handlers.LoginOrCreateUser(c, store) })
+	users.Get("/:userId/ships", func(c *fiber.Ctx) error { return handlers.GetUserShipsByUserID(c, store) })
+	users.Post("/:userId/usdc-spent", func(c *fiber.Ctx) error { return handlers.RecordUSDCSpent(c, store) })
 
 	// Synapses routes
 	synapses := app.Group("/api/synapses")
-	synapses.Get("/bulk", func(c *fiber.Ctx) error { return handlers.GetBulkSynapses(c, database) })
-	synapses.Get("/near", func(c *fiber.Ctx) error { return handlers.GetNearestSynapse(c, database) })
-	synapses.Get("/:id", func(c *fiber.Ctx) error { return handlers.GetSynapse(c, database) })
-	synapses.Post("/:id/explore", func(c *fiber.Ctx) error { return handlers.ExploreSynapse(c, database, hub) })
-	synapses.Post("/:id/leave", func(c *fiber.Ctx) error { return handlers.LeaveSynapse(c, database, hub) })
-	synapses.Post("/:id/rate", func(c *fiber.Ctx) error { return handlers.UpdateExplorationRate(c, database, hub) })
+	synapses.Get("/bulk", func(c *fiber.Ctx) error { return handlers.GetBulkSynapses(c, store) })
+	synapses.Get("/near", func(c *fiber.Ctx) error { return handlers.GetNearestSynapse(c, store) })
+	synapses.Get("/:id", func(c *fiber.Ctx) error { return handlers.GetSynapse(c, store) })
+	synapses.Post("/:id/explore", func(c *fiber.Ctx) error { return handlers.ExploreSynapse(c, store, hub) })
+	synapses.Post("/:id/leave", func(c *fiber.Ctx) error { return handlers.LeaveSynapse(c, store, hub) })
+	synapses.Post("/:id/rate", func(c *fiber.Ctx) error { return handlers.UpdateExplorationRate(c, store, hub) })
 
 	// World state
-	app.Get("/api/world", func(c *fiber.Ctx) error { return handlers.GetWorldState(c, database) })
+	app.Get("/api/world", func(c *fiber.Ctx) error { return handlers.GetWorldState(c, store) })
 
 	// Auth routes
 	auth := app.Group("/api/auth")
 	auth.Get("/nonce", handlers.GetNonce)
-	auth.Post("/verify", func(c *fiber.Ctx) error { return handlers.VerifySignature(c, database) })
-	auth.Get("/me", func(c *fiber.Ctx) error { return handlers.VerifyToken(c, database) })
+	auth.Post("/verify", func(c *fiber.Ctx) error { return handlers.VerifySignature(c, store) })
+	auth.Get("/me", func(c *fiber.Ctx) error { return handlers.VerifyToken(c, store) })
 
 	// Admin routes (all require admin authentication)
 	adminGroup := app.Group("/api/admin", middleware.RequireAdmin)
@@ -225,6 +237,20 @@ func main() {
 	adminGroup.Get("/logs", admin.GetLogs)
 	adminGroup.Delete("/logs", admin.ClearLogs)
 
+	// Serve frontend static files in production
+	if _, err := os.Stat("./dist"); err == nil {
+		app.Static("/", "./dist", fiber.Static{
+			Compress: true,
+		})
+
+		// SPA fallback: serve index.html for non-API routes
+		app.Get("/*", func(c *fiber.Ctx) error {
+			return c.SendFile("./dist/index.html")
+		})
+
+		log.Println("Serving frontend from ./dist")
+	}
+
 	// Start server
 	go func() {
 		addr := fmt.Sprintf(":%s", cfg.Port)
@@ -251,7 +277,7 @@ func generateClientID() string {
 	return fmt.Sprintf("client-%d", time.Now().UnixNano())
 }
 
-func handleWebSocketMessage(client *wshub.Client, message []byte, hub *wshub.Hub, database interface{}) {
+func handleWebSocketMessage(client *wshub.Client, message []byte, hub *wshub.Hub, store *database.Store) {
 	var msg dto.ClientMessage
 	if err := json.Unmarshal(message, &msg); err != nil {
 		log.Printf("[WS] Invalid message format from client %s", client.ID)
@@ -285,7 +311,7 @@ func handleWebSocketMessage(client *wshub.Client, message []byte, hub *wshub.Hub
 		sendToClient(client, "auth:success", dto.AuthSuccessData{UserID: userID})
 
 		// Send user's ships
-		sendUserShips(client, database)
+		sendUserShips(client, store)
 
 		log.Printf("[WS] Client %s authenticated as user %s", client.ID[:12], userID[:8])
 
@@ -316,50 +342,23 @@ func sendToClient(client *wshub.Client, msgType string, data interface{}) {
 	}
 }
 
-func sendUserShips(client *wshub.Client, database interface{}) {
+func sendUserShips(client *wshub.Client, store *database.Store) {
 	if client.UserID == "" {
 		return
 	}
 
-	// Get the database singleton
-	sqlDB := db.Get()
-
-	agents, err := db.GetAgentsByOwner(sqlDB, client.UserID)
+	agents, err := store.Queries.GetAgentsByOwner(context.Background(), client.UserID)
 	if err != nil {
 		return
 	}
 
 	ships := make([]dto.ShipDTO, len(agents))
 	for i, agent := range agents {
-		ships[i] = convertAgentToShipDTO(agent)
+		ships[i] = handlers.ConvertGenAgentToShipDTO(agent)
 	}
 
 	sendToClient(client, "ships:sync", dto.ShipSyncData{
 		Ships:     ships,
 		Timestamp: time.Now().UnixMilli(),
 	})
-}
-
-func convertAgentToShipDTO(agent models.Agent) dto.ShipDTO {
-	return dto.ShipDTO{
-		ID:                  agent.ID,
-		OwnerID:             agent.OwnerID,
-		Name:                agent.Name,
-		State:               dto.MapAgentStateToShipState(dto.AgentState(agent.State)),
-		PositionX:           agent.PositionX,
-		PositionY:           agent.PositionY,
-		PositionZ:           agent.PositionZ,
-		TargetPositionX:     agent.TargetX,
-		TargetPositionY:     agent.TargetY,
-		TargetPositionZ:     agent.TargetZ,
-		CurrentSynapseID:    agent.CurrentSpaceID,
-		TravelStartTime:     agent.TravelStartTime,
-		TravelDuration:      agent.TravelDuration,
-		AutopilotEnabled:    agent.AutopilotEnabled,
-		EquippedItems:       []dto.EquippedItem{},
-		CurrentPointsPerMin: float64(agent.CurrentPointsPerMin),
-		SpacesDiscovered:    agent.SpacesDiscovered,
-		TotalAgiEarned:      float64(agent.TotalAgiEarned),
-		CreatedAt:           agent.CreatedAt,
-	}
 }

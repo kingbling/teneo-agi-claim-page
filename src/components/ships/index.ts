@@ -4,6 +4,3 @@
 export { ShipNavigator } from './ShipNavigator'
 export { CreateShipDialog, type CreateShipDialogProps } from './CreateShipDialog'
 export { ShipDetailPanel } from './ShipDetailPanel'
-export { ShipSwitcher } from './ShipSwitcher'
-export { ShipPreview3D } from './ShipPreview3D'
-export { DeploymentPanel } from './DeploymentPanel'

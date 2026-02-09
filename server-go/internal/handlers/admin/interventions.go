@@ -1,29 +1,29 @@
 package admin
 
 import (
+	"errors"
 	"time"
 
-	"teneo/server-go/internal/db"
-	"teneo/server-go/internal/models"
+	"teneo/server-go/internal/database"
+	"teneo/server-go/internal/database/generated"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 )
 
 // ResetShip resets a ship to idle state
 func ResetShip(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 	shipID := c.Params("id")
 
 	// Remove from any exploration
-	database.Where("ship_id = ?", shipID).Delete(&models.SynapseExplorer{})
+	if err := store.Queries.RemoveSynapseExplorer(ctx, shipID); err != nil {
+		// Ignore errors if no explorer exists
+	}
 
 	// Reset ship state
-	if err := database.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
-		"state":             "idle",
-		"target_space_id":   nil,
-		"travel_start_time": nil,
-		"travel_duration":   nil,
-	}).Error; err != nil {
+	if err := store.Queries.ResetAgentToIdle(ctx, shipID); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to reset ship"})
 	}
 
@@ -32,7 +32,8 @@ func ResetShip(c *fiber.Ctx) error {
 
 // CompleteSynapse forcefully completes a synapse
 func CompleteSynapse(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 	spaceID := c.Params("id")
 
 	var req struct {
@@ -41,9 +42,12 @@ func CompleteSynapse(c *fiber.Ctx) error {
 	c.BodyParser(&req)
 
 	// Get space info
-	var space models.Space
-	if err := database.Select("state, points_required").First(&space, "id = ?", spaceID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Space not found"})
+	space, err := store.Queries.GetSpace(ctx, spaceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Space not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get space"})
 	}
 
 	if space.State == "discovered" {
@@ -53,20 +57,21 @@ func CompleteSynapse(c *fiber.Ctx) error {
 	now := time.Now().UnixMilli()
 
 	// Mark space as discovered
-	if err := database.Model(&models.Space{}).Where("id = ?", spaceID).Updates(map[string]interface{}{
-		"state":              "discovered",
-		"points_accumulated": space.PointsRequired,
-		"discovered_at":      now,
-	}).Error; err != nil {
+	if err := store.Queries.CompleteSpace(ctx, generated.CompleteSpaceParams{
+		ID:           spaceID,
+		DiscoveredAt: &now,
+	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to complete space"})
 	}
 
 	// Get explorers
-	var explorersData []models.SynapseExplorer
-	database.Where("synapse_id = ?", spaceID).Find(&explorersData)
+	explorersList, err := store.Queries.GetSynapseExplorers(ctx, spaceID)
+	if err != nil {
+		explorersList = nil
+	}
 
-	explorers := make([]fiber.Map, len(explorersData))
-	for i, exp := range explorersData {
+	explorers := make([]fiber.Map, len(explorersList))
+	for i, exp := range explorersList {
 		explorers[i] = fiber.Map{
 			"shipId":            exp.ShipID,
 			"userId":            exp.UserID,
@@ -74,16 +79,11 @@ func CompleteSynapse(c *fiber.Ctx) error {
 		}
 
 		// Reset ship to idle
-		database.Model(&models.Agent{}).Where("id = ?", exp.ShipID).Updates(map[string]interface{}{
-			"state":             "idle",
-			"target_space_id":   nil,
-			"travel_start_time": nil,
-			"travel_duration":   nil,
-		})
+		store.Queries.ResetAgentToIdle(ctx, exp.ShipID)
 	}
 
 	// Delete all explorers for this synapse
-	database.Where("synapse_id = ?", spaceID).Delete(&models.SynapseExplorer{})
+	store.Queries.ClearSynapseExplorers(ctx, spaceID)
 
 	return c.JSON(fiber.Map{
 		"success":   true,
@@ -94,40 +94,45 @@ func CompleteSynapse(c *fiber.Ctx) error {
 
 // GetSimulationStatus returns current simulation engine status
 func GetSimulationStatus(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
 	// Get counts of agents by state
-	var idleCount, searchingCount, travelingCount, solvingCount int64
-	database.Model(&models.Agent{}).Where("state = ?", "idle").Count(&idleCount)
-	database.Model(&models.Agent{}).Where("state = ?", "searching").Count(&searchingCount)
-	database.Model(&models.Agent{}).Where("state = ?", "traveling").Count(&travelingCount)
-	database.Model(&models.Agent{}).Where("state = ?", "solving").Count(&solvingCount)
+	agentCounts, err := store.Queries.GetOverviewAgentCounts(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get agent counts"})
+	}
 
 	// Get active explorations
-	var activeExplorations int64
-	database.Model(&models.SynapseExplorer{}).Distinct("synapse_id").Count(&activeExplorations)
+	activeExplorations, err := store.Queries.GetActiveExplorationCount(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get active explorations"})
+	}
 
 	// Get spaces in progress
-	var spacesInProgress int64
-	database.Model(&models.Space{}).Where("state = ?", "being_solved").Count(&spacesInProgress)
+	spaceCounts, err := store.Queries.GetOverviewSpaceCounts(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get space counts"})
+	}
 
 	return c.JSON(fiber.Map{
 		"agentStates": fiber.Map{
-			"idle":      idleCount,
-			"searching": searchingCount,
-			"traveling": travelingCount,
-			"solving":   solvingCount,
-			"total":     idleCount + searchingCount + travelingCount + solvingCount,
+			"idle":      agentCounts.Idle,
+			"searching": agentCounts.Searching,
+			"traveling": agentCounts.Traveling,
+			"solving":   agentCounts.Solving,
+			"total":     agentCounts.Total,
 		},
 		"activeExplorations": activeExplorations,
-		"spacesInProgress":   spacesInProgress,
+		"spacesInProgress":   spaceCounts.BeingExplored,
 		"timestamp":          time.Now().UnixMilli(),
 	})
 }
 
 // BulkResetShips resets multiple ships to idle
 func BulkResetShips(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
 	var req struct {
 		ShipIDs []string `json:"shipIds"`
@@ -143,33 +148,22 @@ func BulkResetShips(c *fiber.Ctx) error {
 	if len(req.ShipIDs) > 0 {
 		// Reset specific ships
 		for _, shipID := range req.ShipIDs {
-			database.Where("ship_id = ?", shipID).Delete(&models.SynapseExplorer{})
+			store.Queries.RemoveSynapseExplorer(ctx, shipID)
 
-			result := database.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
-				"state":             "idle",
-				"target_space_id":   nil,
-				"travel_start_time": nil,
-				"travel_duration":   nil,
-			})
-
-			if result.RowsAffected > 0 {
+			if err := store.Queries.ResetAgentToIdle(ctx, shipID); err == nil {
 				resetCount++
 			}
 		}
 	} else if req.State != "" {
 		// Reset all ships in specific state
-		var agents []models.Agent
-		database.Select("id").Where("state = ?", req.State).Find(&agents)
+		agentIDs, err := store.Queries.GetAgentIDsByState(ctx, req.State)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to query agents"})
+		}
 
-		for _, agent := range agents {
-			database.Where("ship_id = ?", agent.ID).Delete(&models.SynapseExplorer{})
-
-			database.Model(&models.Agent{}).Where("id = ?", agent.ID).Updates(map[string]interface{}{
-				"state":             "idle",
-				"target_space_id":   nil,
-				"travel_start_time": nil,
-				"travel_duration":   nil,
-			})
+		for _, agentID := range agentIDs {
+			store.Queries.RemoveSynapseExplorer(ctx, agentID)
+			store.Queries.ResetAgentToIdle(ctx, agentID)
 			resetCount++
 		}
 	} else {
@@ -181,11 +175,12 @@ func BulkResetShips(c *fiber.Ctx) error {
 
 // RecalculateUserLevels recalculates all user levels based on USDC spent
 func RecalculateUserLevels(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
 	// Get user level thresholds
 	levelThresholds := []struct {
-		level   int
+		level   int32
 		minUSDC float64
 	}{
 		{5, 1000},
@@ -195,16 +190,16 @@ func RecalculateUserLevels(c *fiber.Ctx) error {
 		{1, 0},
 	}
 
-	updatedCount := 0
-
-	var users []models.User
-	if err := database.Select("id, usdc_spent, user_level").Find(&users).Error; err != nil {
+	users, err := store.Queries.GetAllUsersForLevelRecalc(ctx)
+	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to query users"})
 	}
 
+	updatedCount := 0
+
 	for _, user := range users {
 		// Calculate correct level
-		newLevel := 1
+		newLevel := int32(1)
 		for _, threshold := range levelThresholds {
 			if user.UsdcSpent >= threshold.minUSDC {
 				newLevel = threshold.level
@@ -213,8 +208,12 @@ func RecalculateUserLevels(c *fiber.Ctx) error {
 		}
 
 		if newLevel != user.UserLevel {
-			database.Model(&models.User{}).Where("id = ?", user.ID).Update("user_level", newLevel)
-			updatedCount++
+			if err := store.Queries.UpdateUserLevel(ctx, generated.UpdateUserLevelParams{
+				ID:        user.ID,
+				UserLevel: newLevel,
+			}); err == nil {
+				updatedCount++
+			}
 		}
 	}
 
@@ -223,4 +222,3 @@ func RecalculateUserLevels(c *fiber.Ctx) error {
 		"updatedCount": updatedCount,
 	})
 }
-

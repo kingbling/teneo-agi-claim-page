@@ -84,7 +84,6 @@ export const DiscoveryDashboard: Component = () => {
   // Quality settings state
   const [qualityExpanded, setQualityExpanded] = createSignal(false)
   const [qualityPreset, setQualityPreset] = createSignal<QualityPreset>('high')
-  const [postProcessingEnabled, setPostProcessingEnabled] = createSignal(true)
 
   // Ship navigator expanded state
   const [shipNavigatorExpanded, setShipNavigatorExpanded] = createSignal(true)
@@ -737,8 +736,6 @@ export const DiscoveryDashboard: Component = () => {
         <QualitySettings
           preset={qualityPreset()}
           onPresetChange={setQualityPreset}
-          postProcessingEnabled={postProcessingEnabled()}
-          onPostProcessingChange={setPostProcessingEnabled}
           isExpanded={qualityExpanded()}
           onToggle={() => setQualityExpanded(!qualityExpanded())}
         />

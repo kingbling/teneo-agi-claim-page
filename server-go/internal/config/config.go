@@ -12,7 +12,7 @@ type Config struct {
 	Env  string
 
 	// Database
-	DatabasePath string
+	DatabaseURL string
 
 	// JWT
 	JWTSecret string
@@ -48,7 +48,7 @@ func Load() *Config {
 	return &Config{
 		Port:               port,
 		Env:                getEnv("NODE_ENV", "development"),
-		DatabasePath:       getEnv("DATABASE_PATH", "./data/teneo.db"),
+		DatabaseURL:        getEnv("DATABASE_URL", "postgres://teneo:teneo@localhost:5432/teneo?sslmode=disable"),
 		JWTSecret:          getEnv("JWT_SECRET", "teneo-secret-key-change-in-production"),
 		WSSStateSyncInterval: getEnvInt("WS_STATE_SYNC_INTERVAL", 5000),
 		WSSShipSyncInterval:   getEnvInt("WS_SHIP_SYNC_INTERVAL", 5000),

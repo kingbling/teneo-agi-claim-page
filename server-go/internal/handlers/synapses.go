@@ -3,20 +3,21 @@ package handlers
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
 	"time"
 
 	"teneo/server-go/internal/config"
-	"teneo/server-go/internal/db"
+	"teneo/server-go/internal/database"
+	"teneo/server-go/internal/database/generated"
 	"teneo/server-go/internal/dto"
-	"teneo/server-go/internal/models"
 	wshub "teneo/server-go/internal/websocket"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Grid sizes for LOD cluster computation (must match engine.go recomputeClusters)
@@ -37,41 +38,40 @@ func getClusterIDForPosition(x, y, z float64, lodLevel int) string {
 
 // updateClusterBeingSolvedCount updates the beingSolvedCount for clusters containing a synapse
 // delta: +1 when exploration starts, -1 when exploration stops
-func updateClusterBeingSolvedCount(database *gorm.DB, posX, posY, posZ float64, delta int) {
+func updateClusterBeingSolvedCount(ctx context.Context, store *database.Store, posX, posY, posZ float64, delta int) {
 	now := time.Now().UnixMilli()
 
 	// Update cluster counts for all LOD levels
 	for lodLevel := 0; lodLevel <= 2; lodLevel++ {
 		clusterID := getClusterIDForPosition(posX, posY, posZ, lodLevel)
-		database.Model(&models.SpaceCluster{}).
-			Where("id = ?", clusterID).
-			Updates(map[string]interface{}{
-				"being_solved_count": gorm.Expr("MAX(0, being_solved_count + ?)", delta),
-				"updated_at":         now,
-			})
+		store.Queries.UpdateClusterBeingSolvedCount(ctx, generated.UpdateClusterBeingSolvedCountParams{
+			ID:               clusterID,
+			BeingSolvedCount: int32(delta),
+			UpdatedAt:        now,
+		})
 	}
 }
 
 // broadcastAffectedClusters fetches and broadcasts updated cluster data for a synapse position
 // This enables immediate dashboard updates when exploration starts/stops
-func broadcastAffectedClusters(database *gorm.DB, hub *wshub.Hub, posX, posY, posZ float64) {
+func broadcastAffectedClusters(ctx context.Context, store *database.Store, hub *wshub.Hub, posX, posY, posZ float64) {
 	var clusters []dto.SpaceCluster
 	now := time.Now().UnixMilli()
 
 	// Get updated cluster data for all LOD levels
 	for lodLevel := 0; lodLevel <= 2; lodLevel++ {
 		clusterID := getClusterIDForPosition(posX, posY, posZ, lodLevel)
-		var cluster models.SpaceCluster
-		if err := database.First(&cluster, "id = ?", clusterID).Error; err == nil {
+		cluster, err := store.Queries.GetSpaceCluster(ctx, clusterID)
+		if err == nil {
 			clusters = append(clusters, dto.SpaceCluster{
 				ID:               cluster.ID,
-				LODLevel:         cluster.LodLevel,
+				LODLevel:         int(cluster.LodLevel),
 				PositionX:        cluster.PositionX,
 				PositionY:        cluster.PositionY,
 				PositionZ:        cluster.PositionZ,
-				SpaceCount:       cluster.SpaceCount,
-				DiscoveredCount:  cluster.DiscoveredCount,
-				BeingSolvedCount: cluster.BeingSolvedCount,
+				SpaceCount:       int(cluster.SpaceCount),
+				DiscoveredCount:  int(cluster.DiscoveredCount),
+				BeingSolvedCount: int(cluster.BeingSolvedCount),
 				UpdatedAt:        cluster.UpdatedAt,
 			})
 		}
@@ -86,22 +86,34 @@ func broadcastAffectedClusters(database *gorm.DB, hub *wshub.Hub, posX, posY, po
 }
 
 // GetNearestSynapse finds the nearest synapse to given coordinates
-func GetNearestSynapse(c *fiber.Ctx, database *gorm.DB) error {
+func GetNearestSynapse(c *fiber.Ctx, store *database.Store) error {
+	ctx := context.Background()
+
 	x := c.QueryFloat("x", 0)
 	y := c.QueryFloat("y", 0)
 	z := c.QueryFloat("z", 0)
 	radius := c.QueryFloat("radius", 0.5)
 
-	space, err := db.GetNearestSpace(database, x, y, z, radius)
+	space, err := store.Queries.GetNearestSpace(ctx, generated.GetNearestSpaceParams{
+		PositionX:   x - radius,
+		PositionX_2: x + radius,
+		PositionY:   y - radius,
+		PositionY_2: y + radius,
+		PositionZ:   z - radius,
+		PositionZ_2: z + radius,
+		PositionX_3: x,
+		PositionY_3: y,
+		PositionZ_3: z,
+	})
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "No synapse found near coordinates"})
 	}
 
 	// Get explorers if any
-	explorers, _ := db.GetSynapseExplorers(database, space.ID)
+	explorers, _ := store.Queries.GetSynapseExplorers(ctx, space.ID)
 
 	// Convert to DTO
-	synapse := convertSpaceToSynapseDTO(space, explorers)
+	synapse := convertGenSpaceToSynapseDTO(space, explorers)
 
 	return c.JSON(fiber.Map{
 		"synapse": synapse,
@@ -109,24 +121,25 @@ func GetNearestSynapse(c *fiber.Ctx, database *gorm.DB) error {
 }
 
 // GetSynapse retrieves a synapse by ID
-func GetSynapse(c *fiber.Ctx, database *gorm.DB) error {
+func GetSynapse(c *fiber.Ctx, store *database.Store) error {
+	ctx := context.Background()
 	id := c.Params("id")
 
-	space, err := db.GetSpace(database, id)
+	space, err := store.Queries.GetSpace(ctx, id)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Synapse not found"})
 	}
 
 	// Get explorers
-	explorers, _ := db.GetSynapseExplorers(database, space.ID)
+	explorers, _ := store.Queries.GetSynapseExplorers(ctx, space.ID)
 
 	// Convert to DTO
-	synapse := convertSpaceToSynapseDTO(space, explorers)
+	synapse := convertGenSpaceToSynapseDTO(space, explorers)
 
 	// Build explorer info
 	explorerInfo := make([]dto.ExplorerInfo, len(explorers))
 	for i, exp := range explorers {
-		agent, _ := db.GetAgent(database, exp.ShipID)
+		agent, _ := store.Queries.GetAgent(ctx, exp.ShipID)
 		explorerInfo[i] = dto.ExplorerInfo{
 			ShipID:            exp.ShipID,
 			UserID:            exp.UserID,
@@ -144,12 +157,13 @@ func GetSynapse(c *fiber.Ctx, database *gorm.DB) error {
 }
 
 // ExploreSynapse starts exploring a synapse with a ship
-func ExploreSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
+func ExploreSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
+	ctx := context.Background()
 	synapseID := c.Params("id")
 
 	var req struct {
-		ShipID      string  `json:"shipId"`
-		UserID      string  `json:"userId"`
+		ShipID       string  `json:"shipId"`
+		UserID       string  `json:"userId"`
 		PointsPerMin float64 `json:"pointsPerMin,omitempty"`
 	}
 
@@ -162,7 +176,7 @@ func ExploreSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 	}
 
 	// Get synapse
-	space, err := db.GetSpace(database, synapseID)
+	space, err := store.Queries.GetSpace(ctx, synapseID)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Synapse not found"})
 	}
@@ -172,7 +186,7 @@ func ExploreSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 	}
 
 	// Get agent
-	agent, err := db.GetAgent(database, req.ShipID)
+	agent, err := store.Queries.GetAgent(ctx, req.ShipID)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Ship not found"})
 	}
@@ -192,7 +206,7 @@ func ExploreSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 	synapseConfig := dto.GetDefaultSynapseConfig()[synapseType]
 
 	// Check user level requirement
-	user, _ := db.GetUser(database, req.UserID)
+	user, _ := store.Queries.GetUser(ctx, req.UserID)
 	userLevel := dto.CalculateUserLevel(user.UsdcSpent)
 	requiredLevel := synapseConfig.UnlockUserLevel
 
@@ -205,7 +219,7 @@ func ExploreSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 	}
 
 	// Check if synapse is already being explored
-	explorerCount, _ := db.GetSynapseExplorerCount(database, synapseID)
+	explorerCount, _ := store.Queries.GetSynapseExplorerCount(ctx, synapseID)
 	if explorerCount >= 1 {
 		return c.Status(400).JSON(fiber.Map{
 			"error": "Synapse is already being explored. Try a different synapse or wait for it to complete.",
@@ -224,68 +238,85 @@ func ExploreSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 	now := time.Now().UnixMilli()
 
 	// Add explorer
-	explorer := &models.SynapseExplorer{
-		ID:                uuid.New().String(),
+	explorerID := uuid.New().String()
+	explorer, err := store.Queries.AddSynapseExplorer(ctx, generated.AddSynapseExplorerParams{
+		ID:                explorerID,
 		SynapseID:         synapseID,
 		ShipID:            req.ShipID,
 		UserID:            req.UserID,
 		PointsContributed: 0,
-		PointsPerMinute:   cappedRate,
+		PointsPerMinute:   int32(cappedRate),
 		JoinedAt:          now,
 		LastUpdatedAt:     now,
-	}
-
-	if err := db.AddSynapseExplorer(database, explorer); err != nil {
+	})
+	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to start exploration"})
 	}
 
-	// Update agent state
-	// Heap-allocate synapse ID to avoid dangling pointer issues
-	sidTarget := new(string)
-	sidCurrent := new(string)
-	*sidTarget = synapseID
-	*sidCurrent = synapseID
-	agent.State = string(dto.AgentSolving)
-	agent.TargetSpaceID = sidTarget
-	agent.CurrentSpaceID = sidCurrent
-	agent.PositionX = space.PositionX
-	agent.PositionY = space.PositionY
-	agent.PositionZ = space.PositionZ
-	agent.CurrentPointsPerMin = cappedRate
-
-	if err := db.UpdateAgent(database, agent); err != nil {
+	// Update agent state to solving
+	spaceUUID := StringToPgUUID(synapseID)
+	if err := store.Queries.UpdateAgent(ctx, generated.UpdateAgentParams{
+		ID:                  agent.ID,
+		Name:                agent.Name,
+		State:               string(dto.AgentSolving),
+		PositionX:           space.PositionX,
+		PositionY:           space.PositionY,
+		PositionZ:           space.PositionZ,
+		StartPositionX:      agent.StartPositionX,
+		StartPositionY:      agent.StartPositionY,
+		StartPositionZ:      agent.StartPositionZ,
+		TargetSpaceID:       spaceUUID,
+		TravelStartTime:     agent.TravelStartTime,
+		TravelDuration:      agent.TravelDuration,
+		TargetX:             agent.TargetX,
+		TargetY:             agent.TargetY,
+		TargetZ:             agent.TargetZ,
+		CurrentSpaceID:      spaceUUID,
+		CurrentPointsPerMin: int32(cappedRate),
+		AutopilotEnabled:    agent.AutopilotEnabled,
+		HomeX:               agent.HomeX,
+		HomeY:               agent.HomeY,
+		HomeZ:               agent.HomeZ,
+	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update ship"})
 	}
+
+	// Re-fetch agent after update for accurate DTO conversion
+	updatedAgent, _ := store.Queries.GetAgent(ctx, agent.ID)
 
 	// Update synapse state if needed
 	stateChanged := false
 	if space.State == string(dto.SpaceUndiscovered) {
-		space.State = string(dto.SpaceBeingSolved)
-		db.UpdateSpace(database, space)
-		stateChanged = true
+		if err := store.Queries.UpdateSpaceState(ctx, generated.UpdateSpaceStateParams{
+			ID:    synapseID,
+			State: string(dto.SpaceBeingSolved),
+		}); err == nil {
+			stateChanged = true
+		}
 	}
 
 	// Update cluster counts and broadcast immediately for dashboard sync
 	if stateChanged {
-		updateClusterBeingSolvedCount(database, space.PositionX, space.PositionY, space.PositionZ, 1)
-		broadcastAffectedClusters(database, hub, space.PositionX, space.PositionY, space.PositionZ)
+		updateClusterBeingSolvedCount(ctx, store, space.PositionX, space.PositionY, space.PositionZ, 1)
+		broadcastAffectedClusters(ctx, store, hub, space.PositionX, space.PositionY, space.PositionZ)
 	}
 
 	// Trigger WebSocket update
 	hub.SendToUser(req.UserID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{convertAgentToDTO(*agent)},
+		"ships":     []dto.ShipDTO{ConvertGenAgentToShipDTO(updatedAgent)},
 		"timestamp": time.Now().UnixMilli(),
 	})
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"ship":    convertAgentToDTO(*agent),
-		"synapse": convertSpaceToSynapseDTO(space, []models.SynapseExplorer{*explorer}),
+		"ship":    ConvertGenAgentToShipDTO(updatedAgent),
+		"synapse": convertGenSpaceToSynapseDTO(space, []generated.SynapseExplorer{explorer}),
 	})
 }
 
 // LeaveSynapse removes a ship from synapse exploration
-func LeaveSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
+func LeaveSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
+	ctx := context.Background()
 	synapseID := c.Params("id")
 
 	var req struct {
@@ -300,69 +331,94 @@ func LeaveSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 		return c.Status(400).JSON(fiber.Map{"error": "shipId is required"})
 	}
 
-	agent, err := db.GetAgent(database, req.ShipID)
+	agent, err := store.Queries.GetAgent(ctx, req.ShipID)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Ship not found"})
 	}
 
 	// Verify ship is exploring this synapse
-	if agent.TargetSpaceID == nil || *agent.TargetSpaceID != synapseID {
+	targetID := PgUUIDToStringPtr(agent.TargetSpaceID)
+	if targetID == nil || *targetID != synapseID {
 		return c.Status(400).JSON(fiber.Map{"error": "Ship is not exploring this synapse"})
 	}
 
 	// Remove explorer
-	if err := db.RemoveSynapseExplorer(database, req.ShipID); err != nil {
+	if err := store.Queries.RemoveSynapseExplorer(ctx, req.ShipID); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Failed to leave exploration"})
 	}
 
 	// Update agent state back to idle
-	agent.State = string(dto.AgentIdle)
-	agent.TargetSpaceID = nil
-	agent.CurrentSpaceID = nil
-	agent.CurrentPointsPerMin = 0
-
-	if err := db.UpdateAgent(database, agent); err != nil {
+	if err := store.Queries.UpdateAgent(ctx, generated.UpdateAgentParams{
+		ID:               agent.ID,
+		Name:             agent.Name,
+		State:            string(dto.AgentIdle),
+		PositionX:        agent.PositionX,
+		PositionY:        agent.PositionY,
+		PositionZ:        agent.PositionZ,
+		StartPositionX:   agent.StartPositionX,
+		StartPositionY:   agent.StartPositionY,
+		StartPositionZ:   agent.StartPositionZ,
+		TargetSpaceID:    pgtype.UUID{}, // NULL
+		TravelStartTime:  agent.TravelStartTime,
+		TravelDuration:   agent.TravelDuration,
+		TargetX:          agent.TargetX,
+		TargetY:          agent.TargetY,
+		TargetZ:          agent.TargetZ,
+		CurrentSpaceID:   pgtype.UUID{}, // NULL
+		CurrentPointsPerMin: 0,
+		AutopilotEnabled: agent.AutopilotEnabled,
+		HomeX:            agent.HomeX,
+		HomeY:            agent.HomeY,
+		HomeZ:            agent.HomeZ,
+	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update ship"})
 	}
 
+	// Re-fetch agent after update for accurate DTO conversion
+	updatedAgent, _ := store.Queries.GetAgent(ctx, agent.ID)
+
 	// Check if synapse has no more explorers
-	remaining, _ := db.GetSynapseExplorerCount(database, synapseID)
+	remaining, _ := store.Queries.GetSynapseExplorerCount(ctx, synapseID)
 	stateChanged := false
 	var spacePosition struct{ X, Y, Z float64 }
 
 	if remaining == 0 {
 		// Reset synapse state
-		space, _ := db.GetSpace(database, synapseID)
-		if space.State == string(dto.SpaceBeingSolved) {
-			space.State = string(dto.SpaceUndiscovered)
-			db.UpdateSpace(database, space)
-			stateChanged = true
-			spacePosition.X = space.PositionX
-			spacePosition.Y = space.PositionY
-			spacePosition.Z = space.PositionZ
+		space, err := store.Queries.GetSpace(ctx, synapseID)
+		if err == nil && space.State == string(dto.SpaceBeingSolved) {
+			if err := store.Queries.UpdateSpaceState(ctx, generated.UpdateSpaceStateParams{
+				ID:    synapseID,
+				State: string(dto.SpaceUndiscovered),
+			}); err == nil {
+				stateChanged = true
+				spacePosition.X = space.PositionX
+				spacePosition.Y = space.PositionY
+				spacePosition.Z = space.PositionZ
+			}
 		}
 	}
 
 	// Update cluster counts and broadcast immediately for dashboard sync
 	if stateChanged {
-		updateClusterBeingSolvedCount(database, spacePosition.X, spacePosition.Y, spacePosition.Z, -1)
-		broadcastAffectedClusters(database, hub, spacePosition.X, spacePosition.Y, spacePosition.Z)
+		updateClusterBeingSolvedCount(ctx, store, spacePosition.X, spacePosition.Y, spacePosition.Z, -1)
+		broadcastAffectedClusters(ctx, store, hub, spacePosition.X, spacePosition.Y, spacePosition.Z)
 	}
 
 	// Trigger WebSocket update
-	hub.SendToUser(agent.OwnerID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{convertAgentToDTO(*agent)},
+	hub.SendToUser(updatedAgent.OwnerID, "ships:sync", map[string]interface{}{
+		"ships":     []dto.ShipDTO{ConvertGenAgentToShipDTO(updatedAgent)},
 		"timestamp": time.Now().UnixMilli(),
 	})
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"ship":    convertAgentToDTO(*agent),
+		"ship":    ConvertGenAgentToShipDTO(updatedAgent),
 	})
 }
 
 // UpdateExplorationRate updates the spending rate for an active exploration
-func UpdateExplorationRate(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
+func UpdateExplorationRate(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
+	ctx := context.Background()
 	synapseID := c.Params("id")
 
 	var req struct {
@@ -378,43 +434,75 @@ func UpdateExplorationRate(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) erro
 		return c.Status(400).JSON(fiber.Map{"error": "shipId and pointsPerMin are required"})
 	}
 
-	agent, err := db.GetAgent(database, req.ShipID)
+	agent, err := store.Queries.GetAgent(ctx, req.ShipID)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Ship not found"})
 	}
 
 	// Verify ship is exploring this synapse
-	if agent.TargetSpaceID == nil || *agent.TargetSpaceID != synapseID {
+	targetID := PgUUIDToStringPtr(agent.TargetSpaceID)
+	if targetID == nil || *targetID != synapseID {
 		return c.Status(400).JSON(fiber.Map{"error": "Ship is not exploring this synapse"})
 	}
 
 	// Get synapse config to cap rate
-	space, _ := db.GetSpace(database, synapseID)
+	space, err := store.Queries.GetSpace(ctx, synapseID)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Synapse not found"})
+	}
 	synapseType := dto.SynapseType(space.SynapseType)
 	synapseConfig := dto.GetDefaultSynapseConfig()[synapseType]
 	cappedRate := int(math.Min(req.PointsPerMin, float64(synapseConfig.MaxPerMin)))
 
 	// Get explorer and update rate
-	explorer, _ := db.GetExplorerByShip(database, req.ShipID)
-	if explorer != nil {
-		db.UpdateExplorerRate(database, explorer.ID, cappedRate)
+	explorer, err := store.Queries.GetExplorerByShip(ctx, req.ShipID)
+	if err == nil {
+		store.Queries.UpdateExplorerRate(ctx, generated.UpdateExplorerRateParams{
+			ID:              explorer.ID,
+			PointsPerMinute: int32(cappedRate),
+			LastUpdatedAt:   time.Now().UnixMilli(),
+		})
 	}
 
 	// Update agent
-	agent.CurrentPointsPerMin = cappedRate
-	if err := db.UpdateAgent(database, agent); err != nil {
+	if err := store.Queries.UpdateAgent(ctx, generated.UpdateAgentParams{
+		ID:                  agent.ID,
+		Name:                agent.Name,
+		State:               agent.State,
+		PositionX:           agent.PositionX,
+		PositionY:           agent.PositionY,
+		PositionZ:           agent.PositionZ,
+		StartPositionX:      agent.StartPositionX,
+		StartPositionY:      agent.StartPositionY,
+		StartPositionZ:      agent.StartPositionZ,
+		TargetSpaceID:       agent.TargetSpaceID,
+		TravelStartTime:     agent.TravelStartTime,
+		TravelDuration:      agent.TravelDuration,
+		TargetX:             agent.TargetX,
+		TargetY:             agent.TargetY,
+		TargetZ:             agent.TargetZ,
+		CurrentSpaceID:      agent.CurrentSpaceID,
+		CurrentPointsPerMin: int32(cappedRate),
+		AutopilotEnabled:    agent.AutopilotEnabled,
+		HomeX:               agent.HomeX,
+		HomeY:               agent.HomeY,
+		HomeZ:               agent.HomeZ,
+	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update ship"})
 	}
 
+	// Re-fetch agent after update for accurate DTO conversion
+	updatedAgent, _ := store.Queries.GetAgent(ctx, agent.ID)
+
 	// Trigger WebSocket update
-	hub.SendToUser(agent.OwnerID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{convertAgentToDTO(*agent)},
+	hub.SendToUser(updatedAgent.OwnerID, "ships:sync", map[string]interface{}{
+		"ships":     []dto.ShipDTO{ConvertGenAgentToShipDTO(updatedAgent)},
 		"timestamp": time.Now().UnixMilli(),
 	})
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"ship":    convertAgentToDTO(*agent),
+		"ship":    ConvertGenAgentToShipDTO(updatedAgent),
 	})
 }
 
@@ -431,14 +519,12 @@ func GetGameConfig(c *fiber.Ctx, cfg *config.Config) error {
 	))
 }
 
-// convertSpaceToSynapseDTO converts a models.Space to a dto.Synapse
-func convertSpaceToSynapseDTO(space *models.Space, explorers []models.SynapseExplorer) dto.Synapse {
+// convertGenSpaceToSynapseDTO converts a generated.Space to a dto.Synapse
+func convertGenSpaceToSynapseDTO(space generated.Space, explorers []generated.SynapseExplorer) dto.Synapse {
 	var currentETAMinutes *float64
 	if space.CurrentEtaMinutes != nil {
-		// Heap-allocate to avoid dangling pointer to stack variable
-		val := new(float64)
-		*val = float64(*space.CurrentEtaMinutes)
-		currentETAMinutes = val
+		val := float64(*space.CurrentEtaMinutes)
+		currentETAMinutes = &val
 	}
 
 	synapseSpace := dto.Space{
@@ -448,15 +534,15 @@ func convertSpaceToSynapseDTO(space *models.Space, explorers []models.SynapseExp
 		PositionZ:         space.PositionZ,
 		Region:            dto.BrainRegion(space.Region),
 		Zone:              space.Zone,
-		SynapseCount:      space.SynapseCount,
+		SynapseCount:      int(space.SynapseCount),
 		State:             dto.SpaceState(space.State),
 		DiscoveredAt:      space.DiscoveredAt,
 		SynapseType:       dto.SynapseType(space.SynapseType),
-		PointsRequired:    space.PointsRequired,
-		PointsAccumulated: space.PointsAccumulated,
+		PointsRequired:    int(space.PointsRequired),
+		PointsAccumulated: int(space.PointsAccumulated),
 		CurrentETAMinutes: currentETAMinutes,
 		AGIReward:         float64(space.AgiReward),
-		SectorID:          space.SectorID,
+		SectorID:          PgUUIDToStringPtr(space.SectorID),
 	}
 
 	synapse := dto.SpaceToSynapse(synapseSpace)
@@ -475,22 +561,24 @@ func convertSpaceToSynapseDTO(space *models.Space, explorers []models.SynapseExp
 // - uint16  reserved (2 bytes)
 //
 // Response is gzipped. Header: version (1 byte) + count (4 bytes)
-func GetBulkSynapses(c *fiber.Ctx, database *gorm.DB) error {
+func GetBulkSynapses(c *fiber.Ctx, store *database.Store) error {
+	ctx := context.Background()
+
 	c.Set("Content-Type", "application/octet-stream")
 	c.Set("Content-Encoding", "gzip")
 	c.Set("Cache-Control", "no-cache")
 
 	// Fetch all spaces ordered by ID for consistent indexing
-	var spaces []models.Space
-	database.Select("position_x, position_y, position_z, state, synapse_type").
-		Order("id").
-		Find(&spaces)
+	spaces, err := store.Queries.GetBulkSpaces(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch spaces"})
+	}
 
 	buf := new(bytes.Buffer)
 	gzw := gzip.NewWriter(buf)
 
 	// Write header: version (1 byte) + count (4 bytes)
-	binary.Write(gzw, binary.LittleEndian, uint8(1))       // Version 1
+	binary.Write(gzw, binary.LittleEndian, uint8(1))          // Version 1
 	binary.Write(gzw, binary.LittleEndian, uint32(len(spaces)))
 
 	// Write packed records
@@ -535,47 +623,53 @@ func encodeSynapseType(t string) uint8 {
 }
 
 // GetWorldState returns the current world state including clusters
-func GetWorldState(c *fiber.Ctx, database *gorm.DB) error {
+func GetWorldState(c *fiber.Ctx, store *database.Store) error {
+	ctx := context.Background()
+
 	// Get synapse clusters
-	var spaceClusters []models.SpaceCluster
-	database.Find(&spaceClusters)
+	spaceClusters, err := store.Queries.GetAllSpaceClusters(ctx)
+	if err != nil {
+		spaceClusters = []generated.SpaceCluster{}
+	}
 
 	synapseClusters := make([]dto.SpaceCluster, len(spaceClusters))
-	for i, c := range spaceClusters {
+	for i, cl := range spaceClusters {
 		synapseClusters[i] = dto.SpaceCluster{
-			ID:               c.ID,
-			LODLevel:         c.LodLevel,
-			PositionX:        c.PositionX,
-			PositionY:        c.PositionY,
-			PositionZ:        c.PositionZ,
-			SpaceCount:       c.SpaceCount,
-			DiscoveredCount:  c.DiscoveredCount,
-			BeingSolvedCount: c.BeingSolvedCount,
-			UpdatedAt:        c.UpdatedAt,
+			ID:               cl.ID,
+			LODLevel:         int(cl.LodLevel),
+			PositionX:        cl.PositionX,
+			PositionY:        cl.PositionY,
+			PositionZ:        cl.PositionZ,
+			SpaceCount:       int(cl.SpaceCount),
+			DiscoveredCount:  int(cl.DiscoveredCount),
+			BeingSolvedCount: int(cl.BeingSolvedCount),
+			UpdatedAt:        cl.UpdatedAt,
 		}
 	}
 
 	// Get agent clusters
-	var agentClusters []models.AgentCluster
-	database.Find(&agentClusters)
+	agentClusters, err := store.Queries.GetAllAgentClusters(ctx)
+	if err != nil {
+		agentClusters = []generated.AgentCluster{}
+	}
 
 	agentClusterResult := make([]dto.AgentCluster, len(agentClusters))
-	for i, c := range agentClusters {
+	for i, cl := range agentClusters {
 		agentClusterResult[i] = dto.AgentCluster{
-			ID:            c.ID,
-			LODLevel:      c.LodLevel,
-			PositionX:     c.PositionX,
-			PositionY:     c.PositionY,
-			PositionZ:     c.PositionZ,
-			AgentCount:    c.AgentCount,
-			DominantState: dto.AgentState(c.DominantState),
-			AvgProgress:   c.AvgProgress,
-			UpdatedAt:     c.UpdatedAt,
+			ID:            cl.ID,
+			LODLevel:      int(cl.LodLevel),
+			PositionX:     cl.PositionX,
+			PositionY:     cl.PositionY,
+			PositionZ:     cl.PositionZ,
+			AgentCount:    int(cl.AgentCount),
+			DominantState: dto.AgentState(cl.DominantState),
+			AvgProgress:   cl.AvgProgress,
+			UpdatedAt:     cl.UpdatedAt,
 		}
 	}
 
 	// Get stats
-	spaceStats, _ := db.GetSpaceStats(database)
+	spaceStats, _ := store.Queries.GetSpaceStats(ctx)
 
 	return c.JSON(dto.WorldState{
 		SynapseClusters: synapseClusters,

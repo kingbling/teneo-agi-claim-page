@@ -1,24 +1,30 @@
-FROM node:20-alpine
+# Stage 1: Build frontend
+FROM node:22-alpine AS frontend
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci
+COPY index.html vite.config.ts tsconfig*.json ./
+COPY src/ src/
+COPY public/ public/
+RUN npm run build
 
+# Stage 2: Build Go backend
+FROM golang:1.25-alpine AS backend
+WORKDIR /app
+COPY server-go/go.mod server-go/go.sum ./
+RUN go mod download
+COPY server-go/ .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /server ./cmd/server
+
+# Stage 3: Production image
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+COPY --from=backend /server ./server
+COPY --from=frontend /app/dist ./dist
 
-# Install dependencies
-RUN npm ci
+ENV PORT=8080
+EXPOSE 8080
 
-# Copy source
-COPY . .
-
-# Build for production (skip type checking for faster Docker builds)
-RUN npx vite build
-
-# Install serve for production
-RUN npm install -g serve
-
-# Expose port
-EXPOSE 4444
-
-# Serve the built app
-CMD ["serve", "-s", "dist", "-l", "4444"]
+CMD ["./server"]

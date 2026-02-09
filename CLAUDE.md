@@ -22,6 +22,13 @@ npm run preview      # Preview production build
 cd server-go && go build -o bin/server ./cmd/server    # Build server
 cd server-go && ./bin/server                            # Run server (port 4000)
 
+# Code generation
+cd server-go && sqlc generate                          # Regenerate sqlc query code
+npm run generate:types                                  # Regenerate TypeScript types from Go DTOs (tygo)
+
+# Database
+cd server-go && go run cmd/seed/main.go                # Seed 500k synapses (idempotent)
+
 # Using start script
 ./start.sh dev         # Start both frontend and Go server in tmux
 ./start.sh watch       # Auto-redeploy on code changes
@@ -33,6 +40,7 @@ cd server-go && ./bin/server                            # Run server (port 4000)
 ```bash
 # Type check
 npx tsc --noEmit       # Frontend
+cd server-go && sqlc compile   # Verify SQL queries
 
 # Health check
 curl http://localhost:4000/health
@@ -48,10 +56,12 @@ This is a full-stack 3D exploration game with a brain-themed visualization. User
 | Layer | Technology |
 |-------|-----------|
 | Frontend | SolidJS, Vite, Tailwind CSS 4, Three.js |
-| State | SolidJS stores, @tanstack/solid-query |
+| State | SolidJS stores |
 | Auth | wagmi/viem (wallet), JWT tokens |
-| Backend | Go (net/http, gorilla/websocket), SQLite (modernc.org/sqlite) |
+| Backend | Go (net/http, gorilla/websocket) |
+| Database | PostgreSQL, pgx/v5 (driver), sqlc (queries), goose (migrations) |
 | UI Components | @kobalte/core, lucide-solid icons |
+| Type Sync | tygo (Go DTOs → TypeScript interfaces) |
 
 ### Project Structure
 
@@ -65,43 +75,59 @@ src/
 ├── stores/          # SolidJS reactive stores
 │   ├── authStore    # Wallet & JWT auth
 │   ├── userStore    # User progress, levels
-│   ├── shipStore    # Ships, synapses, clusters
+│   ├── shipStore    # Ships, synapses, clusters (split into 4 modules)
 │   └── configStore  # Server-provided game config
 ├── three/           # Custom Three.js integration for SolidJS
 ├── pages/           # DiscoveryDashboard, Landing
-└── types/game.ts    # Shared type definitions
+└── types/
+    ├── game.ts              # Game constants & helper functions
+    └── api.generated.ts     # Auto-generated from Go DTOs (DO NOT EDIT)
 
 server-go/
-├── cmd/server/main.go    # Server entry point
+├── cmd/
+│   ├── server/main.go       # Server entry point
+│   └── seed/main.go         # Synapse seeder (500k rows via COPY)
+├── sqlc.yaml                 # sqlc configuration
 ├── internal/
-│   ├── config/           # Game configuration
-│   ├── db/               # Database operations
-│   ├── dto/              # Data transfer objects
-│   ├── handlers/         # HTTP handlers
-│   ├── middleware/       # Auth middleware
-│   ├── models/           # Database models
-│   ├── simulation/       # Game tick simulation
-│   └── websocket/        # WebSocket hub
-└── data/                 # SQLite database (teneo.db)
+│   ├── config/               # Game configuration
+│   ├── database/             # Database layer
+│   │   ├── store.go          # pgxpool init, Store struct, transactions
+│   │   ├── migrations/       # goose versioned SQL (up/down)
+│   │   ├── queries/          # sqlc SQL query files
+│   │   └── generated/        # sqlc output (DO NOT EDIT)
+│   ├── dto/                  # Data transfer objects (source of truth for API types)
+│   ├── handlers/             # HTTP handlers
+│   │   └── admin/            # Admin-only handlers
+│   ├── middleware/            # Auth middleware
+│   ├── simulation/           # Game tick simulation
+│   └── websocket/            # WebSocket hub
+└── tygo.yaml                 # tygo config for TS type generation
 ```
 
 ### Key Architectural Patterns
 
 **Server-Authoritative**: All business logic lives on the server. Client fetches config from `/api/config` and acts as a presentation layer. Game constants (costs, rates, traits) are defined in `server-go/internal/config/`.
 
-**Real-time Updates**: WebSocket broadcasts `state:sync`, `space:discovered`, `agents:update` events. Client subscribes via `useWebSocketConnection` hook.
+**Real-time Updates**: WebSocket broadcasts `state:sync`, `ships:sync`, `agents:update`, `cluster:update` events. Client subscribes via `useWebSocketConnection` hook.
 
-**LOD (Level of Detail)**: Large datasets (200M+ synapses) use precomputed clusters at LOD 0/1/2. Camera distance determines which LOD to render.
+**LOD (Level of Detail)**: Large datasets (500k+ synapses) use precomputed clusters at LOD 0/1/2. Camera distance determines which LOD to render.
 
 **Custom Three.js Integration**: No React Three Fiber—uses vanilla Three.js with SolidJS via `src/three/` (ThreeCanvas, ThreeContext, useFrame hook).
 
+**Type Sync Pipeline**: Go DTOs (`internal/dto/`) → tygo → TypeScript (`src/types/api.generated.ts`). Never edit generated types manually.
+
 ### Database
 
-SQLite with WAL mode at `server-go/data/teneo.db`. Core tables:
+PostgreSQL via pgxpool connection pool. Migrations managed by goose (embedded SQL files, run on startup). Queries generated by sqlc from `internal/database/queries/`.
+
+Core tables:
 - `spaces` - Discoverable synapses with position, state, loot
 - `agents` - User ships with traits, fuel, position
 - `users` - Player accounts with wallet, points, tier
 - `space_clusters` / `agent_clusters` - Precomputed LOD data
+- `synapse_explorers` - Active ship-to-synapse assignments
+- `live_events` - Time-limited game events
+- `simulation_state` - Singleton tick counter
 
 ### Environment
 
@@ -109,17 +135,21 @@ SQLite with WAL mode at `server-go/data/teneo.db`. Core tables:
 # .env
 VITE_API_URL=http://localhost:4000
 VITE_WS_URL=ws://localhost:4000
-DATABASE_PATH=./server-go/data/teneo.db
-PORT=4000
+DATABASE_URL=postgres://teneo:teneo@localhost:5432/teneo?sslmode=disable
 ```
 
 ## Cross-Cutting Changes
 
 When modifying game mechanics, update:
 1. `server-go/internal/config/` - Server constants
-2. `server-go/internal/dto/` - Backend types
-3. `src/types/game.ts` - Frontend types
+2. `server-go/internal/dto/` - Backend types (then run `npm run generate:types`)
+3. `src/types/game.ts` - Frontend game constants
 4. `server-go/internal/simulation/` - Simulation logic
 5. `src/stores/` - Affected stores (shipStore, configStore)
 
-For new database fields, update models in `server-go/internal/models/`.
+For new database fields:
+1. Add a goose migration in `server-go/internal/database/migrations/`
+2. Update sqlc queries in `server-go/internal/database/queries/`
+3. Run `cd server-go && sqlc generate` to regenerate Go code
+4. Update DTOs in `server-go/internal/dto/` if the field is exposed to the frontend
+5. Run `npm run generate:types` to regenerate TypeScript types

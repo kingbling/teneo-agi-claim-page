@@ -43,7 +43,7 @@ export interface ThreeContextValue {
   size: Accessor<{ width: number; height: number }>
   registerFrameCallback: (cb: FrameCallback, priority?: number) => () => void
   invalidate: () => void
-  /** Set to true to skip the default renderer.render() call (used by PostProcessingEffects) */
+  /** Set to true to skip the default renderer.render() call (for custom post-processing) */
   setSkipDefaultRender: (skip: boolean) => void
 }
 
@@ -82,7 +82,7 @@ export const ThreeProvider: ParentComponent<ThreeProviderProps> = (props) => {
   // Frame callbacks with priority (lower = runs first)
   const frameCallbacks = new Map<FrameCallback, number>()
   let sortedCallbacks: FrameCallback[] = []
-  let skipDefaultRender = false  // Set by PostProcessingEffects to take over rendering
+  let skipDefaultRender = false  // Set by custom post-processing to take over rendering
 
   const updateSortedCallbacks = () => {
     sortedCallbacks = [...frameCallbacks.entries()]
@@ -161,7 +161,7 @@ export const ThreeProvider: ParentComponent<ThreeProviderProps> = (props) => {
         })
       }
 
-      // Only render directly if PostProcessingEffects hasn't taken over
+      // Only render directly if custom post-processing hasn't taken over
       if (!skipDefaultRender) {
         renderer.render(scene, camera)
       }

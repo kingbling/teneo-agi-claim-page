@@ -1,11 +1,10 @@
 node_modules
-server/node_modules
 dist
-server/dist
-data
-server/data
+server-go/bin
+server-go/data
+.git
+.env
+.env.local
 *.db
 *.db-wal
 *.db-shm
-.DS_Store
-.git

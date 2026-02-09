@@ -1,17 +1,20 @@
 package admin
 
 import (
+	"errors"
 	"strconv"
 
-	"teneo/server-go/internal/db"
-	"teneo/server-go/internal/models"
+	"teneo/server-go/internal/database"
+	"teneo/server-go/internal/database/generated"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 )
 
 // ListSpaces returns paginated list of spaces/synapses
 func ListSpaces(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "50"))
@@ -19,26 +22,78 @@ func ListSpaces(c *fiber.Ctx) error {
 	synapseType := c.Query("type", "")
 	offset := (page - 1) * limit
 
-	// Build query
-	query := database.Model(&models.Space{})
-	if state != "" {
-		query = query.Where("state = ?", state)
-	}
-	if synapseType != "" {
-		query = query.Where("synapse_type = ?", synapseType)
-	}
-
-	// Count total
+	var spaces []generated.Space
 	var total int64
-	query.Count(&total)
 
-	// Get spaces
-	var spaces []models.Space
-	query.Select("id, synapse_type, state, position_x, position_y, position_z, points_required, points_accumulated, discovered_at").
-		Order("id").
-		Limit(limit).
-		Offset(offset).
-		Find(&spaces)
+	if state != "" || synapseType != "" {
+		// Use raw SQL for dynamic filtering since sqlc doesn't support dynamic WHERE
+		countQuery := "SELECT COUNT(*) FROM spaces WHERE 1=1"
+		dataQuery := `SELECT id, position_x, position_y, position_z, region, zone, synapse_count,
+		                     state, discovered_at, synapse_type, points_required, points_accumulated,
+		                     current_eta_minutes, sector_id, agi_reward, brain_xp_reward
+		              FROM spaces WHERE 1=1`
+		var args []interface{}
+		argIdx := 1
+
+		if state != "" {
+			countQuery += " AND state = $" + strconv.Itoa(argIdx)
+			dataQuery += " AND state = $" + strconv.Itoa(argIdx)
+			args = append(args, state)
+			argIdx++
+		}
+		if synapseType != "" {
+			countQuery += " AND synapse_type = $" + strconv.Itoa(argIdx)
+			dataQuery += " AND synapse_type = $" + strconv.Itoa(argIdx)
+			args = append(args, synapseType)
+			argIdx++
+		}
+
+		// Count
+		countRow := store.Pool.QueryRow(ctx, countQuery, args...)
+		if err := countRow.Scan(&total); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to count spaces"})
+		}
+
+		// Data with pagination
+		dataQuery += " ORDER BY id LIMIT $" + strconv.Itoa(argIdx) + " OFFSET $" + strconv.Itoa(argIdx+1)
+		args = append(args, limit, offset)
+
+		rows, err := store.Pool.Query(ctx, dataQuery, args...)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to query spaces"})
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var s generated.Space
+			if err := rows.Scan(
+				&s.ID, &s.PositionX, &s.PositionY, &s.PositionZ, &s.Region, &s.Zone,
+				&s.SynapseCount, &s.State, &s.DiscoveredAt, &s.SynapseType,
+				&s.PointsRequired, &s.PointsAccumulated, &s.CurrentEtaMinutes,
+				&s.SectorID, &s.AgiReward, &s.BrainXpReward,
+			); err != nil {
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to scan space"})
+			}
+			spaces = append(spaces, s)
+		}
+		if err := rows.Err(); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to iterate spaces"})
+		}
+	} else {
+		var err error
+		total, err = store.Queries.GetSpaceCount(ctx)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to count spaces"})
+		}
+
+		spaces, err = store.Queries.ListSpaces(ctx, generated.ListSpacesParams{
+			Limit:  int32(limit),
+			Offset: int32(offset),
+		})
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to list spaces"})
+		}
+	}
 
 	result := make([]fiber.Map, len(spaces))
 	for i, space := range spaces {
@@ -75,18 +130,24 @@ func ListSpaces(c *fiber.Ctx) error {
 
 // GetInProgressSpaces returns spaces currently being explored
 func GetInProgressSpaces(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 
-	var spaces []models.Space
-	database.Where("state = ?", "being_solved").
-		Order("points_accumulated DESC").
-		Find(&spaces)
+	spaces, err := store.Queries.GetInProgressSpaces(ctx, generated.GetInProgressSpacesParams{
+		Limit:  1000,
+		Offset: 0,
+	})
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get in-progress spaces"})
+	}
 
 	result := make([]fiber.Map, len(spaces))
 	for i, space := range spaces {
 		// Count explorers for this space
-		var explorerCount int64
-		database.Model(&models.SynapseExplorer{}).Where("synapse_id = ?", space.ID).Count(&explorerCount)
+		explorerCount, err := store.Queries.GetSynapseExplorerCount(ctx, space.ID)
+		if err != nil {
+			explorerCount = 0
+		}
 
 		progress := float64(0)
 		if space.PointsRequired > 0 {
@@ -109,54 +170,63 @@ func GetInProgressSpaces(c *fiber.Ctx) error {
 
 // GetSpaceDetail returns detailed info about a specific space
 func GetSpaceDetail(c *fiber.Ctx) error {
-	database := db.Get()
+	store := c.Locals("store").(*database.Store)
+	ctx := c.Context()
 	spaceID := c.Params("id")
 
-	var space models.Space
-	if err := database.First(&space, "id = ?", spaceID).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Space not found"})
+	space, err := store.Queries.GetSpace(ctx, spaceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(404).JSON(fiber.Map{"error": "Space not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to get space"})
 	}
 
 	// Get current explorers (only for active synapses)
 	var explorers []fiber.Map
 	if space.State == "being_solved" {
-		var results []struct {
-			ID                string  `gorm:"column:id"`
-			ShipID            string  `gorm:"column:ship_id"`
-			UserID            string  `gorm:"column:user_id"`
-			PointsPerMinute   int     `gorm:"column:points_per_minute"`
-			PointsContributed int     `gorm:"column:points_contributed"`
-			JoinedAt          int64   `gorm:"column:joined_at"`
-			ShipName          *string `gorm:"column:name"`
-			Wallet            *string `gorm:"column:wallet"`
-		}
-
-		database.Table("synapse_explorers se").
-			Select("se.id, se.ship_id, se.user_id, se.points_per_minute, se.points_contributed, se.joined_at, a.name, u.wallet").
-			Joins("LEFT JOIN agents a ON se.ship_id = a.id").
-			Joins("LEFT JOIN users u ON se.user_id = u.id").
-			Where("se.synapse_id = ?", spaceID).
-			Find(&results)
-
-		explorers = make([]fiber.Map, len(results))
-		for i, r := range results {
-			shipName := ""
-			if r.ShipName != nil {
-				shipName = *r.ShipName
-			}
-			wallet := ""
-			if r.Wallet != nil {
-				wallet = *r.Wallet
-			}
-			explorers[i] = fiber.Map{
-				"id":                r.ID,
-				"shipId":            r.ShipID,
-				"shipName":          shipName,
-				"userId":            r.UserID,
-				"userWallet":        wallet,
-				"pointsPerMin":      r.PointsPerMinute,
-				"pointsContributed": r.PointsContributed,
-				"joinedAt":          r.JoinedAt,
+		// Use raw SQL for the join query
+		rows, err := store.Pool.Query(ctx,
+			`SELECT se.id, se.ship_id, se.user_id, se.points_per_minute, se.points_contributed, se.joined_at,
+			        a.name, u.wallet
+			 FROM synapse_explorers se
+			 LEFT JOIN agents a ON se.ship_id = a.id
+			 LEFT JOIN users u ON se.user_id = u.id
+			 WHERE se.synapse_id = $1`, spaceID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var (
+					id                string
+					shipID            string
+					userID            string
+					pointsPerMinute   int32
+					pointsContributed int32
+					joinedAt          int64
+					shipName          *string
+					wallet            *string
+				)
+				if err := rows.Scan(&id, &shipID, &userID, &pointsPerMinute, &pointsContributed, &joinedAt, &shipName, &wallet); err != nil {
+					continue
+				}
+				sn := ""
+				if shipName != nil {
+					sn = *shipName
+				}
+				w := ""
+				if wallet != nil {
+					w = *wallet
+				}
+				explorers = append(explorers, fiber.Map{
+					"id":                id,
+					"shipId":            shipID,
+					"shipName":          sn,
+					"userId":            userID,
+					"userWallet":        w,
+					"pointsPerMin":      pointsPerMinute,
+					"pointsContributed": pointsContributed,
+					"joinedAt":          joinedAt,
+				})
 			}
 		}
 	}
