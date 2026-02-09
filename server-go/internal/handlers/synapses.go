@@ -301,12 +301,6 @@ func ExploreSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
 		broadcastAffectedClusters(ctx, store, hub, space.PositionX, space.PositionY, space.PositionZ)
 	}
 
-	// Trigger WebSocket update
-	hub.SendToUser(req.UserID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{ConvertGenAgentToShipDTO(updatedAgent)},
-		"timestamp": time.Now().UnixMilli(),
-	})
-
 	return c.JSON(fiber.Map{
 		"success": true,
 		"ship":    ConvertGenAgentToShipDTO(updatedAgent),
@@ -404,12 +398,6 @@ func LeaveSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
 		broadcastAffectedClusters(ctx, store, hub, spacePosition.X, spacePosition.Y, spacePosition.Z)
 	}
 
-	// Trigger WebSocket update
-	hub.SendToUser(updatedAgent.OwnerID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{ConvertGenAgentToShipDTO(updatedAgent)},
-		"timestamp": time.Now().UnixMilli(),
-	})
-
 	return c.JSON(fiber.Map{
 		"success": true,
 		"ship":    ConvertGenAgentToShipDTO(updatedAgent),
@@ -493,12 +481,6 @@ func UpdateExplorationRate(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) 
 
 	// Re-fetch agent after update for accurate DTO conversion
 	updatedAgent, _ := store.Queries.GetAgent(ctx, agent.ID)
-
-	// Trigger WebSocket update
-	hub.SendToUser(updatedAgent.OwnerID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{ConvertGenAgentToShipDTO(updatedAgent)},
-		"timestamp": time.Now().UnixMilli(),
-	})
 
 	return c.JSON(fiber.Map{
 		"success": true,

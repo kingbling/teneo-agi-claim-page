@@ -251,12 +251,6 @@ func CreateShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
 
 	shipDTO := ConvertGenAgentToShipDTO(newAgent)
 
-	// Trigger WebSocket update
-	hub.SendToUser(req.UserID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{shipDTO},
-		"timestamp": time.Now().UnixMilli(),
-	})
-
 	return c.Status(201).JSON(fiber.Map{
 		"success": true,
 		"ship":    shipDTO,
@@ -415,12 +409,6 @@ func DeployShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *config
 	updatedAgent, _ := store.Queries.GetAgent(ctx, shipID)
 	shipDTO := ConvertGenAgentToShipDTO(updatedAgent)
 
-	// Trigger WebSocket update
-	hub.SendToUser(updatedAgent.OwnerID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{shipDTO},
-		"timestamp": time.Now().UnixMilli(),
-	})
-
 	return c.JSON(fiber.Map{
 		"success": true,
 		"ship":    shipDTO,
@@ -466,12 +454,6 @@ func RecallShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
 	// Re-read the agent for accurate DTO
 	updatedAgent, _ := store.Queries.GetAgent(ctx, shipID)
 	shipDTO := ConvertGenAgentToShipDTO(updatedAgent)
-
-	// Trigger WebSocket update
-	hub.SendToUser(agent.OwnerID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{shipDTO},
-		"timestamp": time.Now().UnixMilli(),
-	})
 
 	return c.JSON(fiber.Map{
 		"success": true,
@@ -622,12 +604,6 @@ func ToggleAutopilot(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error 
 	// Re-read agent for accurate DTO
 	agent.AutopilotEnabled = req.Enabled
 	shipDTO := ConvertGenAgentToShipDTO(agent)
-
-	// Trigger WebSocket update
-	hub.SendToUser(agent.OwnerID, "ships:sync", map[string]interface{}{
-		"ships":     []dto.ShipDTO{shipDTO},
-		"timestamp": time.Now().UnixMilli(),
-	})
 
 	return c.JSON(fiber.Map{
 		"success": true,

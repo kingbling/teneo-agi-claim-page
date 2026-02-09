@@ -158,7 +158,10 @@ function createShipStore() {
 
     setState(produce((s) => {
       const currentShips = Array.isArray(s.userShips) ? s.userShips : []
-      s.userShips = [...currentShips, ship]
+      // Check if WebSocket ships:sync already added this ship
+      if (!currentShips.some(existing => existing.id === ship.id)) {
+        s.userShips = [...currentShips, ship]
+      }
     }))
 
     // Update ship count in userStore
