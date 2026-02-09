@@ -995,44 +995,16 @@ func (e *Engine) applyBrainBounds(posX, posY, posZ, dirX, dirY, dirZ float64) (f
 	return dirX, dirY, dirZ
 }
 
+// getShipSpeedBoost returns the cumulative speed boost for a ship from purchased items.
+// Item shop has been removed — always returns 0 (no boost).
 func (e *Engine) getShipSpeedBoost(shipID string) float64 {
-	ctx := context.Background()
-	now := time.Now().UnixMilli()
-
-	results, err := e.store.Queries.GetShipSpeedBoost(ctx, generated.GetShipSpeedBoostParams{
-		ShipID:    stringToPgUUID(shipID),
-		ExpiresAt: &now,
-	})
-	if err != nil {
-		log.Printf("[Engine] Failed to get ship speed boost for %s: %v", shipID[:8], err)
-		return 0
-	}
-
-	var speedBoost float64
-	for _, r := range results {
-		speedBoost += r
-	}
-	return speedBoost
+	return 0
 }
 
+// getShipXPMultiplier returns the cumulative XP multiplier for a ship from purchased items.
+// Item shop has been removed — always returns 0 (no multiplier).
 func (e *Engine) getShipXPMultiplier(shipID string) float64 {
-	ctx := context.Background()
-	now := time.Now().UnixMilli()
-
-	results, err := e.store.Queries.GetShipXPMultiplier(ctx, generated.GetShipXPMultiplierParams{
-		ShipID:    stringToPgUUID(shipID),
-		ExpiresAt: &now,
-	})
-	if err != nil {
-		log.Printf("[Engine] Failed to get ship XP multiplier for %s: %v", shipID[:8], err)
-		return 0
-	}
-
-	var xpMult float64
-	for _, r := range results {
-		xpMult += r
-	}
-	return xpMult
+	return 0
 }
 
 func (e *Engine) getActiveRewardMultiplier() float64 {

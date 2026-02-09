@@ -60,7 +60,6 @@ export const NAMESPACE_COLORS: Record<string, string> = {
   ship: '#14b8a6',    // Teal for ships
   auth: '#f59e0b',    // Amber for auth
   user: '#ec4899',    // Pink for user
-  shop: '#10b981',    // Emerald for shop
   event: '#6366f1',   // Indigo for events
   config: '#64748b',  // Slate for config
   agent: '#06b6d4',   // Cyan for agents

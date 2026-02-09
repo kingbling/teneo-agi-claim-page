@@ -119,21 +119,21 @@ func (q *Queries) GetSpaceCluster(ctx context.Context, id string) (SpaceCluster,
 const insertAgentClusters = `-- name: InsertAgentClusters :exec
 INSERT INTO agent_clusters (id, lod_level, position_x, position_y, position_z, agent_count, dominant_state, avg_progress, updated_at)
 SELECT
-    format('a%s_%s_%s_%s', $1::int, FLOOR(position_x/$2::float)::int, FLOOR(position_y/$2::float)::int, FLOOR(position_z/$2::float)::int),
+    format('a%s_%s_%s_%s', $1::int, bx, by, bz),
     $1::int,
     ROUND(AVG(position_x)::numeric, 2)::float,
     ROUND(AVG(position_y)::numeric, 2)::float,
     ROUND(AVG(position_z)::numeric, 2)::float,
     COUNT(*)::int,
     (SELECT a2.state FROM agents a2
-     WHERE FLOOR(a2.position_x/$2::float)::int = FLOOR(agents.position_x/$2::float)::int
-       AND FLOOR(a2.position_y/$2::float)::int = FLOOR(agents.position_y/$2::float)::int
-       AND FLOOR(a2.position_z/$2::float)::int = FLOOR(agents.position_z/$2::float)::int
+     WHERE FLOOR(a2.position_x/$2::float)::int = bx
+       AND FLOOR(a2.position_y/$2::float)::int = by
+       AND FLOOR(a2.position_z/$2::float)::int = bz
      GROUP BY a2.state ORDER BY COUNT(*) DESC LIMIT 1),
     0,
     $3::bigint
-FROM agents
-GROUP BY FLOOR(position_x/$2::float)::int, FLOOR(position_y/$2::float)::int, FLOOR(position_z/$2::float)::int
+FROM (SELECT id, owner_id, name, state, position_x, position_y, position_z, start_position_x, start_position_y, start_position_z, target_space_id, travel_start_time, travel_duration, traits, wander_dir_x, wander_dir_y, wander_dir_z, wander_phase, autopilot_enabled, equipped_items, current_points_per_min, spaces_discovered, total_agi_earned, total_brain_xp_earned, created_at, creation_cost, needs_repair, ship_type, home_x, home_y, home_z, target_x, target_y, target_z, current_space_id, solve_start_time, distance_traveled, deployed_at, trance_active, trance_end_time, trance_level, autopilot_target_types, autopilot_max_points_cap, autopilot_avoid_crowded, FLOOR(position_x/$2::float)::int AS bx, FLOOR(position_y/$2::float)::int AS by, FLOOR(position_z/$2::float)::int AS bz FROM agents) agents
+GROUP BY bx, by, bz
 `
 
 type InsertAgentClustersParams struct {

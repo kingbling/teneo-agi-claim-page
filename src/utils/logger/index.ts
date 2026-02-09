@@ -70,8 +70,6 @@ export const log = {
   auth: createLogger('Auth'),
   /** User store operations */
   user: createLogger('UserStore'),
-  /** Shop and purchases */
-  shop: createLogger('ShopStore'),
   /** Event store */
   event: createLogger('EventStore'),
   /** Configuration */
