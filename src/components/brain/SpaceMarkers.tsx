@@ -1013,11 +1013,8 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     <>
       {showTooltip() && (
         <div
-          class="fixed pointer-events-auto"
+          class="fixed pointer-events-none bottom-4 left-4"
           style={{
-            left: `${tooltipPosition()!.x}px`,
-            top: `${tooltipPosition()!.y}px`,
-            transform: 'translate(-50%, -100%) translateY(-8px)',
             'z-index': 'var(--z-tooltip, 70)',
           }}
         >
