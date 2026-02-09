@@ -54,6 +54,12 @@ func NewStore(ctx context.Context, databaseURL string) (*Store, error) {
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
+	// Seed spaces if table is empty
+	if err := seedSpaces(ctx, pool); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("seed spaces: %w", err)
+	}
+
 	queries := generated.New(pool)
 
 	return &Store{

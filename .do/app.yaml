@@ -29,25 +29,10 @@ services:
         value: "true"
     health_check:
       http_path: /health
-      initial_delay_seconds: 15
+      initial_delay_seconds: 120
       period_seconds: 10
       timeout_seconds: 5
-      failure_threshold: 3
-
-jobs:
-  - name: seed
-    github:
-      repo: kingbling/teneo-agi-claim-page
-      branch: main
-    dockerfile_path: Dockerfile
-    instance_count: 1
-    instance_size_slug: apps-s-1vcpu-1gb
-    kind: POST_DEPLOY
-    run_command: ./seed
-    envs:
-      - key: DATABASE_URL
-        scope: RUN_TIME
-        value: ${db.DATABASE_URL}
+      failure_threshold: 5
 
 ingress:
   rules:
