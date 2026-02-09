@@ -205,16 +205,6 @@ function createUserStore() {
 
   // ============ TOKEN MANAGEMENT ============
 
-  const addAgentic = (amount: number) => {
-    setState('agenticBalance', (balance) => balance + amount)
-  }
-
-  const spendAgentic = (amount: number): boolean => {
-    if (state.agenticBalance < amount) return false
-    setState('agenticBalance', state.agenticBalance - amount)
-    return true
-  }
-
   const addAgi = (amount: number) => {
     setState('totalAgiEarned', (total) => total + amount)
   }
@@ -310,8 +300,6 @@ function createUserStore() {
     recordUSDCSpent,
 
     // Token Management
-    addAgentic,
-    spendAgentic,
     addAgi,
     addTeneo,
 

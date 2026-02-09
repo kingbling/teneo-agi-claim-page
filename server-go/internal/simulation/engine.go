@@ -221,6 +221,9 @@ func (e *Engine) Start() {
 
 	log.Printf("[Engine] Starting simulation at tick %d", e.tickCount)
 
+	// Compute clusters on startup so /api/world has data immediately
+	e.recomputeClusters()
+
 	ticker := time.NewTicker(time.Duration(e.cfg.TickInterval) * time.Millisecond)
 	defer ticker.Stop()
 

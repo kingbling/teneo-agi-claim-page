@@ -69,18 +69,6 @@ type AgentCluster struct {
 	UpdatedAt     int64   `json:"updated_at"`
 }
 
-type ItemShop struct {
-	ID              string  `json:"id"`
-	Name            string  `json:"name"`
-	Description     *string `json:"description"`
-	Cost            int32   `json:"cost"`
-	EffectType      string  `json:"effect_type"`
-	EffectValue     float64 `json:"effect_value"`
-	DurationMinutes *int32  `json:"duration_minutes"`
-	IsAvailable     bool    `json:"is_available"`
-	CreatedAt       int64   `json:"created_at"`
-}
-
 type LiveEvent struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
@@ -192,14 +180,4 @@ type User struct {
 	IsAdmin           bool    `json:"is_admin"`
 	BannedAt          *int64  `json:"banned_at"`
 	BanReason         *string `json:"ban_reason"`
-}
-
-type UserPurchase struct {
-	ID          string      `json:"id"`
-	UserID      string      `json:"user_id"`
-	ItemID      string      `json:"item_id"`
-	ShipID      pgtype.UUID `json:"ship_id"`
-	PurchasedAt int64       `json:"purchased_at"`
-	ExpiresAt   *int64      `json:"expires_at"`
-	IsActive    bool        `json:"is_active"`
 }

@@ -25,15 +25,5 @@ export type {
 // Event store - live events with multipliers and bonuses
 export { eventStore } from './eventStore'
 
-// Shop store - item shop, purchases, active effects
-export { shopStore } from './shopStore'
-export type {
-  ShopItem,
-  UserItem,
-  PurchaseResult,
-  ItemCategory,
-  ShopState,
-} from './shopStore'
-
 // UI store - local UI preferences and settings
 export { uiStore } from './uiStore'

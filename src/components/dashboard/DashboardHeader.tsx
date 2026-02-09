@@ -7,7 +7,7 @@
 
 import { type Component, Show } from 'solid-js'
 import { A } from '@solidjs/router'
-import { HelpCircle, Wallet, Zap, Coins, Ship, Calendar, ShoppingBag } from 'lucide-solid'
+import { HelpCircle, Wallet, Zap, Ship, Calendar } from 'lucide-solid'
 import { useWebSocketConnection } from '@/hooks'
 import { userStore, shipStore, eventStore } from '@/stores'
 import { formatPoints } from '@/types/game'
@@ -15,7 +15,6 @@ import { cn } from '@/lib/utils'
 
 export interface DashboardHeaderProps {
   onHelpClick: () => void
-  onShopClick?: () => void
 }
 
 export const DashboardHeader: Component<DashboardHeaderProps> = (props) => {
@@ -47,28 +46,16 @@ export const DashboardHeader: Component<DashboardHeaderProps> = (props) => {
 
         {/* Right side */}
         <div class="flex items-center gap-3">
-          {/* Currency Balances */}
-          <div class="flex items-center gap-2">
-            {/* $AGENTIC Balance */}
+          {/* $AGI Earned */}
+          <Show when={userStore.totalAgiEarned > 0}>
             <div class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--background-secondary)] border border-[var(--card-border)]">
-              <Coins class="w-3.5 h-3.5 text-amber-400" />
+              <Zap class="w-3.5 h-3.5 text-purple-400" />
               <span class="text-xs font-medium text-[var(--text-primary)]">
-                {formatPoints(userStore.agenticBalance)}
+                {formatPoints(userStore.totalAgiEarned)}
               </span>
-              <span class="text-[10px] text-[var(--text-muted)]">$AGENTIC</span>
+              <span class="text-[10px] text-[var(--text-muted)]">$AGI</span>
             </div>
-
-            {/* $AGI Earned */}
-            <Show when={userStore.totalAgiEarned > 0}>
-              <div class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--background-secondary)] border border-[var(--card-border)]">
-                <Zap class="w-3.5 h-3.5 text-purple-400" />
-                <span class="text-xs font-medium text-[var(--text-primary)]">
-                  {formatPoints(userStore.totalAgiEarned)}
-                </span>
-                <span class="text-[10px] text-[var(--text-muted)]">$AGI</span>
-              </div>
-            </Show>
-          </div>
+          </Show>
 
           {/* Ship Count */}
           <div class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--background-secondary)] border border-[var(--card-border)]">
@@ -92,16 +79,6 @@ export const DashboardHeader: Component<DashboardHeaderProps> = (props) => {
               <span class="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
             </A>
           </Show>
-
-          {/* Shop */}
-          <button
-            onClick={props.onShopClick}
-            class="w-7 h-7 rounded-lg flex items-center justify-center text-amber-400 hover:text-amber-300 hover:bg-amber-500/20 transition-colors relative"
-            title="Item Shop (S)"
-          >
-            <ShoppingBag class="w-4 h-4" />
-            <span class="absolute -top-0.5 -right-0.5 w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
-          </button>
 
           {/* Help */}
           <button

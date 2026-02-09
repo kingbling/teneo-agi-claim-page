@@ -9,7 +9,6 @@ import { type Component, createSignal, createMemo, createEffect, onMount, onClea
 import * as THREE from 'three'
 import { ThreeCanvas } from '@/three'
 import { DashboardHeader, BrainSceneMinimal, BrainMinimap, QualitySettings, LoginOverlay, SynapseListPanel, type QualityPreset } from '@/components/dashboard'
-import { ItemShop } from '@/components/shop/ItemShop'
 import { ToastContainer } from '@/components/ui/Toast'
 import { ShipNavigator } from '@/components/ships/ShipNavigator'
 import { CreateShipDialog } from '@/components/ships/CreateShipDialog'
@@ -97,9 +96,6 @@ export const DiscoveryDashboard: Component = () => {
   // Create ship dialog state
   const [showCreateShipDialog, setShowCreateShipDialog] = createSignal(false)
 
-  // Shop panel state
-  const [showShop, setShowShop] = createSignal(false)
-
   // Explore prompt state (for searching ships clicking a synapse)
   const [explorePromptData, setExplorePromptData] = createSignal<{
     cluster: SynapseCluster
@@ -163,19 +159,12 @@ export const DiscoveryDashboard: Component = () => {
         setSelectedRegionIndex(-1)
         setHighlightIntensity(0)
         setShowHelp(false)
-        setShowShop(false)
         setDeployTarget(null)
         setPendingDeploy(null)
         setIsZooming(false)
         setIsShipZoom(false)
         setExplorePromptData(null)  // Clear explore prompt
         shipStore.selectShip(null)  // Deselect ship
-        return
-      }
-
-      // S for shop
-      if (key === 's') {
-        setShowShop((prev) => !prev)
         return
       }
 
@@ -375,7 +364,6 @@ export const DiscoveryDashboard: Component = () => {
       {/* Dashboard Header */}
       <DashboardHeader
         onHelpClick={() => setShowHelp(true)}
-        onShopClick={() => setShowShop(true)}
       />
 
       {/* 3D Brain Visualization */}
@@ -527,7 +515,6 @@ export const DiscoveryDashboard: Component = () => {
           >
             <h2 class="text-xl font-bold text-white mb-4">Keyboard Shortcuts</h2>
             <div class="space-y-2 text-gray-300">
-              <p><kbd class="px-2 py-1 bg-gray-800 rounded text-xs">S</kbd> Toggle shop</p>
               <p><kbd class="px-2 py-1 bg-gray-800 rounded text-xs">H</kbd> Toggle help</p>
               <p><kbd class="px-2 py-1 bg-gray-800 rounded text-xs">R</kbd> Reset camera</p>
               <p><kbd class="px-2 py-1 bg-gray-800 rounded text-xs">1-9</kbd> Navigate regions</p>
@@ -539,28 +526,6 @@ export const DiscoveryDashboard: Component = () => {
             >
               Close
             </button>
-          </div>
-        </div>
-      </Show>
-
-      {/* Shop Panel - Slide-in from right */}
-      <Show when={showShop()}>
-        <div
-          class="absolute inset-0 bg-black/60 backdrop-blur-sm z-50"
-          onClick={() => setShowShop(false)}
-        >
-          <div
-            class="absolute right-0 top-0 bottom-0 w-full max-w-lg bg-[var(--background-secondary)] border-l border-[var(--card-border)] shadow-2xl animate-slide-in-right overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Close button */}
-            <button
-              onClick={() => setShowShop(false)}
-              class="absolute top-4 right-4 z-10 w-8 h-8 rounded-lg bg-gray-800/80 hover:bg-gray-700 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-            >
-              ✕
-            </button>
-            <ItemShop class="h-full" />
           </div>
         </div>
       </Show>
