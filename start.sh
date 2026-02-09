@@ -71,14 +71,18 @@ graceful_stop() {
     done
 }
 
-# Check if database exists, if not generate spaces
+# Check if PostgreSQL is reachable
 init_database() {
-    if [ ! -f "server-go/data/teneo.db" ]; then
-        print_warning "Database not found. Run Go server to initialize..."
-        mkdir -p server-go/data
-        print_status "Database directory created"
+    local db_url="${DATABASE_URL:-postgres://teneo:teneo@localhost:5432/teneo?sslmode=disable}"
+    if command -v pg_isready >/dev/null 2>&1; then
+        if pg_isready -d "$db_url" >/dev/null 2>&1; then
+            print_status "PostgreSQL is reachable"
+        else
+            print_warning "PostgreSQL not reachable at $db_url"
+            print_warning "Make sure PostgreSQL is running (migrations run on server start)"
+        fi
     else
-        print_status "Database found"
+        print_info "pg_isready not found, skipping DB check"
     fi
 }
 
@@ -176,7 +180,7 @@ build_go_server() {
 
 # Start Go server
 start_go_server() {
-    cd server-go && DATABASE_PATH="$(pwd)/data/teneo.db" ./bin/server 2>&1 | tee "../logs/server.log" &
+    cd server-go && ./bin/server 2>&1 | tee "../logs/server.log" &
     echo $!
 }
 
@@ -380,7 +384,7 @@ case "${1:-tmux}" in
         echo ""
 
         # Start Go server with log streaming
-        (cd server-go && DATABASE_PATH="$(pwd)/data/teneo.db" ./bin/server 2>&1 | tee "../logs/server.log") &
+        (cd server-go && ./bin/server 2>&1 | tee "../logs/server.log") &
         SERVER_PID=$!
 
         sleep 2
@@ -445,7 +449,7 @@ case "${1:-tmux}" in
         echo ""
 
         # Start both in parallel with logging
-        (cd server-go && DATABASE_PATH="$(pwd)/data/teneo.db" ./bin/server 2>&1 | tee "../logs/server.log") &
+        (cd server-go && ./bin/server 2>&1 | tee "../logs/server.log") &
         SERVER_PID=$!
 
         sleep 2
@@ -491,7 +495,7 @@ case "${1:-tmux}" in
         init_database
 
         print_status "Starting Go server on port 4000..."
-        (cd server-go && DATABASE_PATH="$(pwd)/data/teneo.db" ./bin/server) &
+        (cd server-go && ./bin/server) &
         SERVER_PID=$!
 
         sleep 2

@@ -29,3 +29,6 @@ logs/
 *.db-wal
 *.db-shm
 server-go/data/
+
+# Go binary
+server-go/bin/

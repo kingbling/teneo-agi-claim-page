@@ -1,0 +1,64 @@
+name: teneo
+region: nyc
+
+services:
+  - name: teneo
+    github:
+      repo: kingbling/teneo-agi-claim-page
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    http_port: 8080
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: JWT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: NODE_ENV
+        scope: RUN_TIME
+        value: production
+      - key: PORT
+        scope: RUN_TIME
+        value: "8080"
+      - key: SIMULATION_ENABLED
+        scope: RUN_TIME
+        value: "true"
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 15
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 3
+
+jobs:
+  - name: seed
+    github:
+      repo: kingbling/teneo-agi-claim-page
+      branch: main
+    dockerfile_path: Dockerfile
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    kind: POST_DEPLOY
+    run_command: ./seed
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+
+ingress:
+  rules:
+    - match:
+        path:
+          prefix: /
+      component:
+        name: teneo
+
+databases:
+  - name: db
+    engine: PG
+    version: "17"
+    production: false

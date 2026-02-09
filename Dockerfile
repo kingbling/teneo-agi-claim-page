@@ -15,6 +15,7 @@ COPY server-go/go.mod server-go/go.sum ./
 RUN go mod download
 COPY server-go/ .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -o /seed ./cmd/seed
 
 # Stage 3: Production image
 FROM alpine:3.21
@@ -22,6 +23,7 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 
 COPY --from=backend /server ./server
+COPY --from=backend /seed ./seed
 COPY --from=frontend /app/dist ./dist
 
 ENV PORT=8080
