@@ -149,6 +149,7 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
   let engineTrail: ReturnType<typeof createEngineTrail> | null = null
   let shipLight: THREE.PointLight | null = null
   let rimLight: THREE.PointLight | null = null
+  let prevState: string | null = null
   const [modelLoaded, setModelLoaded] = createSignal(false)
 
   // Debug: Log when component is rendered
@@ -298,7 +299,11 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
       // Slight Y wobble for 3D effect
       const orbitY = synapseY + Math.sin(angle * 2) * 0.01
 
-      shipGroup.position.set(orbitX, orbitY, orbitZ)
+      // Lerp to orbit position — smooth transition when arriving from deploying state
+      const isTransition = prevState !== null && prevState !== 'solving'
+      const lerpFactor = isTransition ? 0.08 : 0.3
+      const target = new THREE.Vector3(orbitX, orbitY, orbitZ)
+      shipGroup.position.lerp(target, lerpFactor)
 
       // Rotate ship to face direction of orbit (tangent to orbit path)
       const tangentAngle = angle + Math.PI / 2 // 90 degrees ahead in orbit
@@ -313,6 +318,9 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
         shipGroup.rotation.y = freshShip.rotationY
       }
     }
+
+    // Track state for transition detection
+    prevState = freshShip.state
 
     // Update engine trail
     if (engineTrail) {

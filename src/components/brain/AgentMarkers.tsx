@@ -398,6 +398,7 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
     const stateAttr = geometry.getAttribute('aState') as THREE.BufferAttribute
     const colorAttr = geometry.getAttribute('aColor') as THREE.BufferAttribute
+    const sizeAttr = geometry.getAttribute('aSize') as THREE.BufferAttribute
     if (!posAttr) {
       animationFrameId = requestAnimationFrame(runStandaloneAnimation)
       return
@@ -406,6 +407,7 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     const updateCount = Math.min(posAttr.count, lastShipIds.length)
     let positionChanged = false
     let stateChanged = false
+    let sizeChanged = false
 
     for (let i = 0; i < updateCount; i++) {
       const shipId = lastShipIds[i]
@@ -461,32 +463,6 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       // Apply brain constraint first
       let [cx, cy, cz] = constrainToBrainShape(x, y, z)
 
-      // === SMOOTH POSITION JUMPS ===
-      // If the new position is too far from last rendered position, lerp to prevent visual glitches
-      // This catches edge cases like buffer resets or server sync issues
-      const lastPos = renderedPositions.get(shipId)
-      if (lastPos && ship.state === 'deploying') {
-        const jumpDist = Math.sqrt(
-          (cx - lastPos.x) ** 2 + (cy - lastPos.y) ** 2 + (cz - lastPos.z) ** 2
-        )
-        // If jump is larger than expected frame movement, smooth it out
-        // At ~60fps with 15-30 second travel times, normal movement is tiny
-        const maxNormalJump = 0.05  // Threshold for "suspicious" jump
-        if (jumpDist > maxNormalJump) {
-          // Lerp toward target to smooth the jump
-          const lerpFactor = 0.3
-          cx = lastPos.x + (cx - lastPos.x) * lerpFactor
-          cy = lastPos.y + (cy - lastPos.y) * lerpFactor
-          cz = lastPos.z + (cz - lastPos.z) * lerpFactor
-        }
-      }
-      // Update rendered position cache
-      if (!lastPos) {
-        renderedPositions.set(shipId, new THREE.Vector3(cx, cy, cz))
-      } else {
-        lastPos.set(cx, cy, cz)
-      }
-
       // === IDLE ANIMATION: Gentle hover/breathing motion ===
       if (ship.state === 'idle') {
         // Subtle vertical oscillation - "breathing" hover
@@ -520,8 +496,43 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
         cy = synapseY + 0.08 + Math.sin(angle * 2) * 0.04
       }
 
+      // === SMOOTH POSITION JUMPS ===
+      // Detect state transitions for tighter smoothing
+      const prevState = shipStateTracker.get(shipId)
+      const isTransition = prevState !== undefined && prevState !== ship.state
+      shipStateTracker.set(shipId, ship.state)
+
+      const lastPos = renderedPositions.get(shipId)
+      if (lastPos) {
+        const jumpDist = Math.sqrt(
+          (cx - lastPos.x) ** 2 + (cy - lastPos.y) ** 2 + (cz - lastPos.z) ** 2
+        )
+        // Tighter threshold and slower lerp during state transitions (e.g. deploying→solving)
+        // to smooth the orbit position pop. Normal movement uses looser values.
+        const maxNormalJump = isTransition ? 0.02 : 0.05
+        const lerpFactor = isTransition ? 0.15 : 0.3
+        if (jumpDist > maxNormalJump) {
+          cx = lastPos.x + (cx - lastPos.x) * lerpFactor
+          cy = lastPos.y + (cy - lastPos.y) * lerpFactor
+          cz = lastPos.z + (cz - lastPos.z) * lerpFactor
+        }
+      }
+
       posAttr.setXYZ(i, cx, cy, cz)
       positionChanged = true
+
+      // Hide particle for selected ship when 3D model is visible
+      if (sizeAttr) {
+        const shouldHide = props.hideSelectedShipParticle && shipId === props.selectedShipId
+        const currentSize = sizeAttr.getX(i)
+        if (shouldHide && currentSize !== 0) {
+          sizeAttr.setX(i, 0)
+          sizeChanged = true
+        } else if (!shouldHide && currentSize === 0) {
+          sizeAttr.setX(i, SHIP_MARKER_CONFIG.pointSize)
+          sizeChanged = true
+        }
+      }
 
       // Update raycasting position
       if (shipPositions[i]) {
@@ -546,6 +557,9 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     if (stateChanged) {
       stateAttr.needsUpdate = true
       colorAttr.needsUpdate = true
+    }
+    if (sizeChanged && sizeAttr) {
+      sizeAttr.needsUpdate = true
     }
 
     // Update selection ring

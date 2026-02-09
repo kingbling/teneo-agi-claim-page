@@ -17,11 +17,14 @@ export function mapServerSynapseState(serverState: string): 'undiscovered' | 'be
 }
 
 // Map server ship states to client ship states
-// Server sends: idle, traveling, solving, returning
+// Two input paths:
+//   1. Raw AgentState from `agents:update`: idle, traveling, solving, returning
+//   2. Pre-mapped ShipDTO from `ships:sync`/`ships:update`: idle, deploying, solving, returning
 // Client expects: idle, deploying, solving, returning
 export function mapServerShipState(serverState: string): ShipStatus {
   switch (serverState) {
     case 'traveling': return 'deploying'
+    case 'deploying': return 'deploying'
     case 'solving': return 'solving'
     case 'returning': return 'returning'
     case 'searching': return 'idle'  // Deprecated - treat as idle
