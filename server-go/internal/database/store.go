@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 )
 
@@ -70,15 +72,9 @@ func runMigrations(databaseURL string) error {
 	}
 
 	// goose needs a database/sql.DB — open one via pgx stdlib adapter
-	cfg, err := pgxpool.ParseConfig(databaseURL)
+	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
-		return err
-	}
-	connStr := cfg.ConnConfig.ConnString()
-
-	db, err := goose.OpenDBWithDriver("pgx", connStr)
-	if err != nil {
-		return fmt.Errorf("goose open db: %w", err)
+		return fmt.Errorf("open db for migrations: %w", err)
 	}
 	defer db.Close()
 
