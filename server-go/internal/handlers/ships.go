@@ -166,7 +166,7 @@ func StringToPgUUID(s string) pgtype.UUID {
 }
 
 // CreateShip creates a new ship for a user
-func CreateShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
+func CreateShip(c *fiber.Ctx, store *database.Store) error {
 	ctx := c.Context()
 
 	var req struct {
@@ -416,7 +416,7 @@ func DeployShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *config
 }
 
 // RecallShip recalls a ship from exploration back to idle state
-func RecallShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
+func RecallShip(c *fiber.Ctx, store *database.Store) error {
 	ctx := c.Context()
 	shipID := c.Params("id")
 
@@ -573,7 +573,7 @@ func TravelToSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *c
 }
 
 // ToggleAutopilot toggles autopilot settings for a ship
-func ToggleAutopilot(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
+func ToggleAutopilot(c *fiber.Ctx, store *database.Store) error {
 	ctx := c.Context()
 	shipID := c.Params("id")
 

@@ -405,7 +405,7 @@ func LeaveSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
 }
 
 // UpdateExplorationRate updates the spending rate for an active exploration
-func UpdateExplorationRate(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
+func UpdateExplorationRate(c *fiber.Ctx, store *database.Store) error {
 	ctx := context.Background()
 	synapseID := c.Params("id")
 

@@ -150,11 +150,11 @@ func main() {
 
 	// Ships routes
 	ships := app.Group("/api/ships")
-	ships.Post("/", func(c *fiber.Ctx) error { return handlers.CreateShip(c, store, hub) })
+	ships.Post("/", func(c *fiber.Ctx) error { return handlers.CreateShip(c, store) })
 	ships.Post("/:id/deploy", func(c *fiber.Ctx) error { return handlers.DeployShip(c, store, hub, cfg) })
-	ships.Post("/:id/recall", func(c *fiber.Ctx) error { return handlers.RecallShip(c, store, hub) })
+	ships.Post("/:id/recall", func(c *fiber.Ctx) error { return handlers.RecallShip(c, store) })
 	ships.Post("/:id/travel-to-synapse", func(c *fiber.Ctx) error { return handlers.TravelToSynapse(c, store, hub, cfg) })
-	ships.Post("/:id/autopilot", func(c *fiber.Ctx) error { return handlers.ToggleAutopilot(c, store, hub) })
+	ships.Post("/:id/autopilot", func(c *fiber.Ctx) error { return handlers.ToggleAutopilot(c, store) })
 
 	// Users routes
 	users := app.Group("/api/users")
@@ -169,7 +169,7 @@ func main() {
 	synapses.Get("/:id", func(c *fiber.Ctx) error { return handlers.GetSynapse(c, store) })
 	synapses.Post("/:id/explore", func(c *fiber.Ctx) error { return handlers.ExploreSynapse(c, store, hub) })
 	synapses.Post("/:id/leave", func(c *fiber.Ctx) error { return handlers.LeaveSynapse(c, store, hub) })
-	synapses.Post("/:id/rate", func(c *fiber.Ctx) error { return handlers.UpdateExplorationRate(c, store, hub) })
+	synapses.Post("/:id/rate", func(c *fiber.Ctx) error { return handlers.UpdateExplorationRate(c, store) })
 
 	// World state
 	app.Get("/api/world", func(c *fiber.Ctx) error { return handlers.GetWorldState(c, store) })
