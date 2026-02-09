@@ -156,8 +156,8 @@ func VerifySignature(c *fiber.Ctx, database *gorm.DB) error {
 	}
 
 	// DEV BYPASS: Skip signature verification in development
-	// TODO: Change to os.Getenv("DEV_AUTH_BYPASS") == "true" for production
-	devBypassEnabled := true // HARDCODED FOR DEV
+	// Set DEV_AUTH_BYPASS=true in environment to enable
+	devBypassEnabled := os.Getenv("DEV_AUTH_BYPASS") == "true"
 	if devBypassEnabled && req.DevBypass {
 		log.Printf("[AUTH] DEV BYPASS: Skipping signature verification for wallet: %s", req.Wallet)
 	} else {

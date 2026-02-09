@@ -7,11 +7,8 @@
 
 export type SynapseType = 'minor' | 'complex' | 'deep' | 'core' | 'rare' | 'legendary' | 'unique'
 
-// Note: 'searching' is deprecated but kept for backwards compatibility with existing DB data
-export type AgentState = 'idle' | 'searching' | 'traveling' | 'solving' | 'returning'
-
-// Ship states (client-side, mapped from AgentState) - 'searching' removed as obsolete
-export type ShipState = 'idle' | 'deploying' | 'exploring' | 'returning'
+// Ship states
+export type ShipState = 'idle' | 'deploying' | 'solving' | 'returning'
 
 export type SpaceState = 'undiscovered' | 'being_solved' | 'discovered'
 
@@ -24,42 +21,8 @@ export type UserTier = 'free' | 'bronze' | 'silver' | 'gold' | 'platinum' | 'dia
 export type BrainRegion = 'frontal' | 'parietal' | 'temporal' | 'occipital' | 'cerebellum' | 'brainstem'
 
 // ============================================================================
-// AGENT / SHIP
+// SHIP
 // ============================================================================
-
-export interface Agent {
-  id: string
-  ownerId: string
-  name: string
-  state: AgentState
-  positionX: number
-  positionY: number
-  positionZ: number
-  homeX: number
-  homeY: number
-  homeZ: number
-  targetX?: number
-  targetY?: number
-  targetZ?: number
-  startPositionX?: number
-  startPositionY?: number
-  startPositionZ?: number
-  wanderDirX: number
-  wanderDirY: number
-  wanderDirZ: number
-  wanderPhase: number
-  targetSpaceId?: string
-  currentSpaceId?: string
-  travelStartTime?: number
-  travelDuration?: number
-  spacesDiscovered: number
-  distanceTraveled: number
-  createdAt: number
-  deployedAt?: number
-  currentPointsPerMin: number
-  totalAgiEarned: number
-  autopilotEnabled: boolean
-}
 
 export interface ShipDTO {
   id: string
@@ -87,18 +50,6 @@ export interface ShipDTO {
   createdAt: number
 }
 
-export interface AgentCluster {
-  id: string
-  lodLevel: number
-  positionX: number
-  positionY: number
-  positionZ: number
-  agentCount: number
-  dominantState: AgentState
-  avgProgress: number
-  updatedAt: number
-}
-
 export interface ShipCluster {
   id: string
   lodLevel: number
@@ -109,15 +60,6 @@ export interface ShipCluster {
   dominantState: ShipState
   avgProgress: number
   updatedAt: number
-}
-
-export interface AgentUpdate {
-  id: string
-  positionX: number
-  positionY: number
-  positionZ: number
-  state: AgentState
-  targetSpaceId?: string
 }
 
 export interface EquippedItem {
@@ -297,8 +239,7 @@ export interface ServerMessage {
 
 export interface WorldState {
   synapseClusters: SpaceCluster[]
-  agentClusters: AgentCluster[]
-  shipClusters?: ShipCluster[]
+  shipClusters: ShipCluster[]
   userShips?: ShipDTO[]
   discoveryProgress: DiscoveryProgress
   timestamp?: number

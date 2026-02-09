@@ -156,7 +156,7 @@ function StatusBadge({ status, label, showDot = true, ...props }: StatusBadgePro
       variant={config.variant}
       dot={showDot}
       dotColor={config.dotColor}
-      pulse={status === 'active' || status === 'solving'}
+      pulse={status === 'active' || status === 'solving' || status === 'exploring'}
       {...props}
     >
       {label || config.label}

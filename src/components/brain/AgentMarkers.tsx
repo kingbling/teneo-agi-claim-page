@@ -9,7 +9,7 @@ import {
   SHIP_STATE_COLORS,
   constrainToBrainShape,
 } from './core/brainConstants'
-import type { Ship, ShipCluster, ShipStatus } from '@/stores/shipStore'
+import { shipStore, type Ship, type ShipCluster, type ShipStatus } from '@/stores/shipStore'
 
 interface ShipMarkersProps {
   userShips: Ship[]
@@ -20,14 +20,11 @@ interface ShipMarkersProps {
   hideSelectedShipParticle?: boolean  // Hide the selected ship's particle when 3D model is visible
 }
 
-// Debug: log props when component mounts
-let propsLogCount = 0
-
 // State-based colors (imported from brainConstants for consistency)
-const STATE_COLORS: Record<ShipStatus, [number, number, number]> = SHIP_STATE_COLORS as unknown as Record<ShipStatus, [number, number, number]>
+const STATE_COLORS = SHIP_STATE_COLORS
 
 // Vertex shader for ship markers - uses constants from brainConstants.ts
-// State indices: 0=idle, 1=searching, 2=exploring, 3=deploying, 4=returning
+// State indices: 0=idle (gentle hover), 1=solving (orbit synapse), 2=(unused), 3=deploying, 4=returning
 const SHIP_VERTEX_SHADER = `
   attribute vec3 aColor;
   attribute float aSize;
@@ -47,20 +44,21 @@ const SHIP_VERTEX_SHADER = `
     float pulse = 1.0;
 
     // State-based animation (values from SHIP_STATE_PULSE in brainConstants.ts)
+    // States: 0=idle, 1=solving, 2=(unused), 3=deploying, 4=returning
     if (aState < 0.5) {
-      // Idle: subtle breathing
-      pulse = 1.0 + sin(uTime * ${SHIP_STATE_PULSE.idle.frequency.toFixed(1)}) * ${SHIP_STATE_PULSE.idle.amplitude.toFixed(2)};
+      // Idle: no pulse (stationary)
+      pulse = 1.0;
     } else if (aState < 1.5) {
-      // Searching: wandering pulse
-      pulse = 1.0 + sin(uTime * ${SHIP_STATE_PULSE.searching.frequency.toFixed(1)}) * ${SHIP_STATE_PULSE.searching.amplitude.toFixed(2)};
+      // Solving: subtle pulse (working at synapse)
+      pulse = 1.0 + sin(uTime * 1.5) * 0.1;
     } else if (aState < 2.5) {
-      // Exploring: active pulsing
-      pulse = 1.0 + sin(uTime * ${SHIP_STATE_PULSE.exploring.frequency.toFixed(1)}) * ${SHIP_STATE_PULSE.exploring.amplitude.toFixed(2)};
+      // (unused state 2)
+      pulse = 1.0;
     } else if (aState < 3.5) {
-      // Deploying: rapid pulse
+      // Deploying: rapid pulse (moving)
       pulse = 1.0 + sin(uTime * ${SHIP_STATE_PULSE.deploying.frequency.toFixed(1)}) * ${SHIP_STATE_PULSE.deploying.amplitude.toFixed(2)};
     } else {
-      // Returning: gentle pulse
+      // Returning: gentle pulse (moving)
       pulse = 1.0 + sin(uTime * ${SHIP_STATE_PULSE.returning.frequency.toFixed(1)}) * ${SHIP_STATE_PULSE.returning.amplitude.toFixed(2)};
     }
 
@@ -93,17 +91,23 @@ const SHIP_FRAGMENT_SHADER = `
     // Softer outer glow
     float glow = 1.0 - smoothstep(${SHIP_SHAPE_CONFIG.glowInner.toFixed(2)}, ${SHIP_SHAPE_CONFIG.glowOuter.toFixed(2)}, diamond);
 
-    // Engine glow - ALL ships get it, idle is subtle (values from SHIP_ENGINE_CONFIG)
+    // Engine glow - ONLY for moving ships (values from SHIP_ENGINE_CONFIG)
     float engineGlow = 0.0;
     float engineDist = length(coord - vec2(0.0, 0.2));
     float baseEngine = (1.0 - smoothstep(0.0, ${SHIP_ENGINE_CONFIG.radius.toFixed(2)}, engineDist));
 
-    if (vState < 0.5) {
-      // Idle: subtle breathing glow
-      engineGlow = baseEngine * ${SHIP_ENGINE_CONFIG.idleIntensity.toFixed(2)} * (0.8 + sin(uTime * ${SHIP_ENGINE_CONFIG.idleFlickerFreq.toFixed(1)}) * ${SHIP_ENGINE_CONFIG.idleFlickerAmp.toFixed(1)});
-    } else {
-      // Active: strong flickering engine
+    // State check: only animate for moving ships
+    // searching=1, deploying=3, returning=4 should glow
+    // idle=0, exploring=2 should NOT glow
+    if (vState > 0.5 && vState < 1.5) {
+      // Searching: moderate glow
+      engineGlow = baseEngine * 0.35 * (0.75 + sin(uTime * 5.0) * 0.25);
+    } else if (vState > 2.5 && vState < 3.5) {
+      // Deploying: strong glow
       engineGlow = baseEngine * ${SHIP_ENGINE_CONFIG.activeIntensity.toFixed(2)} * (0.7 + sin(uTime * ${SHIP_ENGINE_CONFIG.activeFlickerFreq.toFixed(1)}) * ${SHIP_ENGINE_CONFIG.activeFlickerAmp.toFixed(1)});
+    } else if (vState > 3.5) {
+      // Returning: moderate glow
+      engineGlow = baseEngine * 0.4 * (0.75 + sin(uTime * 4.0) * 0.25);
     }
 
     // Combine effects - brighter core (values from SHIP_SHAPE_CONFIG)
@@ -111,11 +115,13 @@ const SHIP_FRAGMENT_SHADER = `
     vec3 glowColor = vColor * ${SHIP_SHAPE_CONFIG.glowBrightness.toFixed(1)};
     vec3 finalColor = mix(glowColor, coreColor, core);
 
-    // Add engine glow for ALL ships (colors from SHIP_ENGINE_CONFIG)
-    if (vState < 0.5) {
-      vec3 engineColor = vec3(${SHIP_ENGINE_CONFIG.idleColor[0].toFixed(1)}, ${SHIP_ENGINE_CONFIG.idleColor[1].toFixed(1)}, ${SHIP_ENGINE_CONFIG.idleColor[2].toFixed(1)});
+    // Add engine glow ONLY for moving ships (colors from SHIP_ENGINE_CONFIG)
+    if (vState > 0.5 && vState < 1.5) {
+      // Searching: use active color
+      vec3 engineColor = vec3(${SHIP_ENGINE_CONFIG.activeColor[0].toFixed(1)}, ${SHIP_ENGINE_CONFIG.activeColor[1].toFixed(1)}, ${SHIP_ENGINE_CONFIG.activeColor[2].toFixed(1)});
       finalColor += engineColor * engineGlow;
-    } else {
+    } else if (vState > 2.5) {
+      // Deploying or returning: use active color
       vec3 engineColor = vec3(${SHIP_ENGINE_CONFIG.activeColor[0].toFixed(1)}, ${SHIP_ENGINE_CONFIG.activeColor[1].toFixed(1)}, ${SHIP_ENGINE_CONFIG.activeColor[2].toFixed(1)});
       finalColor += engineColor * engineGlow;
     }
@@ -211,40 +217,51 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
 
   // Smooth position interpolation - tracks rendered position per ship for smooth movement
   const renderedPositions = new Map<string, THREE.Vector3>()
-  const LERP_SPEED = 4.0  // Lerp factor per second - higher = faster catch up
-  let lastFrameTime = 0
+
+  // Track ship states for force-update detection
+  const shipStateTracker = new Map<string, ShipStatus>()
+
+  // Cache animation parameters to prevent glitches during server updates
+  interface AnimationCache {
+    startX: number
+    startY: number
+    startZ: number
+    targetX: number
+    targetY: number
+    targetZ: number
+    startTime: number
+    duration: number
+  }
+  const deployAnimationCache = new Map<string, AnimationCache>()
 
   // Hover state signal for tooltip
   const [hoveredShipId, setHoveredShipId] = createSignal<string | null>(null)
   const [tooltipPosition, setTooltipPosition] = createSignal<{ x: number; y: number } | null>(null)
 
-  // Filter ships based on showIdleShips setting and hideSelectedShipParticle
+  // Track ship state changes for animation triggers
+
+  // Get ships DIRECTLY from store - props may be stale due to SolidJS reactivity issues
+  // The store is the source of truth for ship state and positions
   const visibleShips = createMemo(() => {
-    // Safety check for undefined/null userShips
-    if (!props.userShips || !Array.isArray(props.userShips)) {
-      console.log('[AgentMarkers visibleShips] No userShips array')
+    // Read directly from store, not props
+    const allShips = shipStore.userShips
+    if (!allShips || !Array.isArray(allShips)) {
       return []
     }
 
-    console.log('[AgentMarkers visibleShips] Total ships:', props.userShips.length, 'showIdleShips:', props.showIdleShips, 'hideSelectedShipParticle:', props.hideSelectedShipParticle, 'selectedShipId:', props.selectedShipId)
+    let ships = [...allShips] // Copy to avoid mutating store
 
-    let ships = props.userShips
-
-    // Filter idle ships if not shown
+    // Filter idle ships if not shown (but always keep selected ship and deploying ships)
     if (!props.showIdleShips) {
-      const before = ships.length
-      ships = ships.filter(s => s.state !== 'idle')
-      console.log('[AgentMarkers visibleShips] Filtered out', before - ships.length, 'idle ships')
+      ships = ships.filter(s => {
+        // Always show selected ship
+        if (s.id === props.selectedShipId) return true
+        // Always show deploying ships (they're in motion)
+        if (s.state === 'deploying') return true
+        // Filter out idle ships
+        return s.state !== 'idle'
+      })
     }
-
-    // Hide selected ship particle when 3D model is visible
-    if (props.hideSelectedShipParticle && props.selectedShipId) {
-      const before = ships.length
-      ships = ships.filter(s => s.id !== props.selectedShipId)
-      console.log('[AgentMarkers visibleShips] Hid selected ship particle:', props.selectedShipId?.slice(0, 8), 'filtered:', before - ships.length)
-    }
-
-    console.log('[AgentMarkers visibleShips] Returning', ships.length, 'ships:', ships.map(s => ({ id: s.id.slice(0, 8), state: s.state })))
 
     return ships
   })
@@ -253,11 +270,8 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
   const computeBufferData = createMemo(() => {
     const ships = visibleShips()
     if (ships.length === 0) {
-      console.log('[AgentMarkers] No ships to render')
       return null
     }
-
-    console.log('[AgentMarkers] Computing buffer for', ships.length, 'ships:', ships.map(s => ({ id: s.id.slice(0, 8), state: s.state, rawPos: `(${s.positionX.toFixed(2)},${s.positionY.toFixed(2)},${s.positionZ.toFixed(2)})` })))
 
     const positions = new Float32Array(ships.length * 3)
     const colors = new Float32Array(ships.length * 3)
@@ -288,11 +302,12 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       sizes[i] = SHIP_MARKER_CONFIG.pointSize
 
       // State as float for shader
+      // Map actual ShipStatus to shader state indices
+      // Shader expects: 0=idle, 1=solving, 2=(unused), 3=deploying, 4=returning
       const stateMap: Record<ShipStatus, number> = {
         idle: 0,
-        searching: 1,
-        exploring: 2,
-        deploying: 3,
+        solving: 1,      // Ship is at synapse, working on it
+        deploying: 3,    // Ship is traveling to synapse
         returning: 4
       }
       states[i] = stateMap[ship.state]
@@ -337,24 +352,17 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     }
   }
 
-  onMount(() => {
-    // Debug: log props when component mounts
-    propsLogCount++
-    console.log(`[AgentMarkers onMount #${propsLogCount}] Props:`, {
-      userShipsCount: props.userShips?.length ?? 0,
-      userShips: props.userShips?.map(s => ({ id: s.id.slice(0, 8), state: s.state, pos: `(${s.positionX.toFixed(2)},${s.positionY.toFixed(2)},${s.positionZ.toFixed(2)})` })) ?? [],
-      showIdleShips: props.showIdleShips,
-      selectedShipId: props.selectedShipId?.slice(0, 8) ?? null,
-      hideSelectedShipParticle: props.hideSelectedShipParticle
-    })
+  // NOTE: Animation is handled entirely by useFrame below
+  // No separate requestAnimationFrame loop needed - useFrame handles all position updates
 
+  onMount(() => {
     const sceneObj = scene()
     const renderer = gl()
 
     if (!sceneObj || !renderer) {
-      console.warn('ShipMarkers: Scene or renderer not available')
       return
     }
+
 
     // Initialize raycaster
     raycaster = new THREE.Raycaster()
@@ -399,6 +407,10 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     selectionRingMesh.visible = false  // Hidden until a ship is selected
     selectionRingMesh.renderOrder = 110  // Above ships
     sceneObj.add(selectionRingMesh)
+
+    // Debug sphere removed - was for debugging ship animation
+
+    // Animation is handled by the standalone animation loop below
 
     // Canvas event listeners
     const canvas = renderer.domElement
@@ -456,14 +468,12 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
   })
 
   // Update geometry structure when ships change (add/remove/reorder)
-  // Does NOT update positions - that's handled by useFrame with interpolation
+  // IMPORTANT: Only recreate buffers when ship COUNT or IDs change, NOT when state changes
+  // State/color/position changes are handled by useFrame to avoid overwriting interpolated positions
   let lastShipIds: string[] = []
-  let lastShipStates: ShipStatus[] = []
   createEffect(() => {
     const data = computeBufferData()
     const ships = visibleShips()
-
-    console.log('[AgentMarkers createEffect] Triggered, data:', data ? 'has data' : 'no data', 'ships count:', ships.length)
 
     if (!geometry || !data) {
       // Clear geometry if no ships
@@ -478,16 +488,17 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       return
     }
 
-    // Check if ships have changed (count or IDs/order OR STATE)
+    // ONLY check if ship ID SET changed (count or which IDs) - NOT order or state
+    // Order changes should NOT trigger buffer reset (would break interpolation)
+    // State changes are handled by useFrame to preserve interpolated positions
     const currentIds = ships.map(s => s.id)
-    const currentStates = ships.map(s => s.state)
-    const shipsChanged = currentIds.length !== lastShipIds.length ||
-      currentIds.some((id, i) => id !== lastShipIds[i]) ||
-      currentStates.some((state, i) => state !== lastShipStates[i])
+    const currentIdSet = new Set(currentIds)
+    const lastIdSet = new Set(lastShipIds)
+    const idsChanged = currentIds.length !== lastShipIds.length ||
+      currentIds.some(id => !lastIdSet.has(id)) ||
+      lastShipIds.some(id => !currentIdSet.has(id))
 
-    console.log('[AgentMarkers createEffect] Ships changed:', shipsChanged, 'currentIds:', currentIds.length, 'lastIds:', lastShipIds.length, 'states changed:', currentStates.some((state, i) => state !== lastShipStates[i]))
-
-    if (shipsChanged) {
+    if (idsChanged) {
       geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
       geometry.setAttribute('aColor', new THREE.BufferAttribute(data.colors, 3))
       geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
@@ -514,248 +525,247 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
         }
       }
 
+      // Clean up old ship state tracking
+      for (const id of shipStateTracker.keys()) {
+        if (!currentIdSet.has(id)) {
+          shipStateTracker.delete(id)
+        }
+      }
+
       lastShipIds = currentIds
-      lastShipStates = currentStates
     }
   })
 
-  // Animation loop
-  useFrame(({ clock, camera: cam }) => {
-    const elapsedTime = clock.getElapsedTime()
+  // === STANDALONE ANIMATION LOOP ===
+  // Bypasses useFrame entirely - runs its own requestAnimationFrame
+  // FIX: useFrame callbacks weren't reliably being called, so we animate directly
+  let animationFrameId: number | null = null
+  const animStartTime = Date.now()
 
-    // Debug log to verify useFrame is running
-    if (elapsedTime > 1 && Math.random() < 0.005) { // Log once after 1 second, 0.5% chance
-      const ships = visibleShips()
-      console.log('[AgentMarkers useFrame] Running! elapsedTime:', elapsedTime.toFixed(1), 'ships.length:', ships.length, 'geometry:', !!geometry, 'posAttr count:', geometry?.getAttribute('position')?.count)
+  const runStandaloneAnimation = () => {
+    const now = Date.now()
+    const elapsedTime = (now - animStartTime) / 1000
+
+    // Update shader time uniforms
+    if (material) material.uniforms.uTime.value = elapsedTime
+    if (selectionRingMaterial) selectionRingMaterial.uniforms.uTime.value = elapsedTime
+
+    // Read FRESH data from store each frame
+    const allShips = shipStore.userShips
+
+    if (!geometry || !allShips || !Array.isArray(allShips) || lastShipIds.length === 0) {
+      animationFrameId = requestAnimationFrame(runStandaloneAnimation)
+      return
     }
 
-    // Update shader time uniform
-    if (material) {
-      material.uniforms.uTime.value = elapsedTime
+    const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
+    const stateAttr = geometry.getAttribute('aState') as THREE.BufferAttribute
+    const colorAttr = geometry.getAttribute('aColor') as THREE.BufferAttribute
+    if (!posAttr) {
+      animationFrameId = requestAnimationFrame(runStandaloneAnimation)
+      return
     }
 
-    // Update selection ring time uniform
-    if (selectionRingMaterial) {
-      selectionRingMaterial.uniforms.uTime.value = elapsedTime
-    }
+    const updateCount = Math.min(posAttr.count, lastShipIds.length)
+    let positionChanged = false
+    let stateChanged = false
 
-    // Update positions in real-time with smooth interpolation
-    // OPTIMIZATION: Only update ships that are actually moving
-    const ships = visibleShips()
-    if (geometry && ships.length > 0) {
-      const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
-      const stateAttr = geometry.getAttribute('aState') as THREE.BufferAttribute
-      const colorAttr = geometry.getAttribute('aColor') as THREE.BufferAttribute
+    for (let i = 0; i < updateCount; i++) {
+      const shipId = lastShipIds[i]
+      const ship = allShips.find(s => s.id === shipId)
+      if (!ship) continue
 
-      // Handle count mismatch gracefully - update as many ships as buffer allows
-      // This prevents ships from disappearing during the frame between visibleShips change and buffer rebuild
-      const updateCount = Math.min(posAttr?.count ?? 0, ships.length)
-      if (posAttr && updateCount > 0) {
-        let positionChanged = false
-        let stateChanged = false
-        const CONVERGE_THRESHOLD = 0.0001 // Skip updates when position delta is tiny
+      // === CLIENT-SIDE INTERPOLATION FOR SMOOTH ANIMATION ===
+      let x = ship.positionX
+      let y = ship.positionY
+      let z = ship.positionZ
 
-        // Only iterate over ships that have buffer slots
-        for (let i = 0; i < updateCount; i++) {
-          const ship = ships[i]
-          if (!ship) continue
+      // Check if ship has valid animation data from server
+      const hasServerAnimData = ship.state === 'deploying' &&
+        ship.startPositionX !== undefined &&
+        ship.targetPositionX !== undefined &&
+        ship.travelStartTime !== undefined &&
+        ship.travelDuration !== undefined &&
+        ship.travelDuration > 0
 
-          // IMPORTANT: Use positionX/Y/Z directly from ship data
-          // The backend sends interpolated positions via travel:position WebSocket events
-          // We use smooth lerp interpolation between these updates for fluid motion
-          let targetX = ship.positionX
-          let targetY = ship.positionY
-          let targetZ = ship.positionZ
-
-          // CRITICAL FIX: For exploring ships, ALWAYS use targetPosition (synapse location)
-          // This prevents ships from disappearing when the state changes from deploying to exploring
-          // The ship should be at the synapse location it's exploring
-          if (ship.state === 'exploring' && ship.targetPositionX !== undefined) {
-            targetX = ship.targetPositionX
-            targetY = ship.targetPositionY
-            targetZ = ship.targetPositionZ
-          }
-
-          // For deploying ships, calculate client-side interpolation if server updates are delayed
-          // This ensures smooth "x += formula" animation even with infrequent WebSocket updates
-          if (ship.state === 'deploying' && ship.targetPositionX !== undefined &&
-              ship.startPositionX !== undefined && ship.travelStartTime && ship.travelDuration) {
-            // Calculate current progress based on elapsed time
-            const elapsed = Date.now() - ship.travelStartTime
-            const progress = Math.min(Math.max(elapsed / ship.travelDuration, 0), 1)
-
-            // Client-side interpolation: x = start + (target - start) * progress
-            // This is the "x += formula" approach that ensures smooth movement
-            const interpX = ship.startPositionX + (ship.targetPositionX - ship.startPositionX) * progress
-            const interpY = ship.startPositionY + (ship.targetPositionY - ship.startPositionY) * progress
-            const interpZ = ship.startPositionZ + (ship.targetPositionZ - ship.startPositionZ) * progress
-
-            // Always use client-side interpolation for deploying ships to ensure smooth animation
-            // Server updates via travel:position will be used for lerping in the next frame
-            targetX = interpX
-            targetY = interpY
-            targetZ = interpZ
-          }
-
-          // Debug log for deploying and exploring ships
-          if (ship.state === 'deploying' && Math.random() < 0.02) { // Only log 2% of frames to avoid spam
-            console.log(`[AgentMarkers useFrame] Ship ${ship.id.slice(0, 8)} state=${ship.state} rawPos=(${targetX.toFixed(2)},${targetY.toFixed(2)},${targetZ.toFixed(2)}) targetPos=(${ship.targetPositionX?.toFixed(2)},${ship.targetPositionY?.toFixed(2)},${ship.targetPositionZ?.toFixed(2)})`)
-          }
-          if (ship.state === 'exploring' && Math.random() < 0.02) { // Only log 2% of frames to avoid spam
-            console.log(`[AgentMarkers useFrame] Ship ${ship.id.slice(0, 8)} state=${ship.state} pos=(${targetX.toFixed(4)},${targetY.toFixed(4)},${targetZ.toFixed(4)})`)
-          }
-
-          // Get or create rendered position for this ship
-          let rendered = renderedPositions.get(ship.id)
-          if (!rendered) {
-            // Initialize at target position (constrained to brain shape)
-            const [cx, cy, cz] = constrainToBrainShape(targetX, targetY, targetZ)
-            rendered = new THREE.Vector3(cx, cy, cz)
-            renderedPositions.set(ship.id, rendered)
-            console.log(`[AgentMarkers] Initialized ship ${ship.id.slice(0, 8)} at constrained (${cx.toFixed(2)},${cy.toFixed(2)},${cz.toFixed(2)})`)
-            positionChanged = true
-          }
-
-          // Validate target position before constraining (prevent NaN from causing disappearance)
-          const isValidPosition = isFinite(targetX) && isFinite(targetY) && isFinite(targetZ)
-
-          // CRITICAL FIX: Don't skip ships with invalid positions - use fallback instead
-          // This prevents ships from disappearing when position data is stale or invalid
-          if (!isValidPosition) {
-            // Use targetPosition as fallback if available
-            if (ship.targetPositionX !== undefined) {
-              targetX = ship.targetPositionX
-              targetY = ship.targetPositionY
-              targetZ = ship.targetPositionZ
-              console.warn(`[AgentMarkers] Ship ${ship.id.slice(0, 8)} has invalid position, using targetPosition as fallback`)
-            } else {
-              // Last resort: keep previous rendered position
-              const prevRendered = renderedPositions.get(ship.id)
-              if (prevRendered) {
-                targetX = prevRendered.x
-                targetY = prevRendered.y
-                targetZ = prevRendered.z
-                console.warn(`[AgentMarkers] Ship ${ship.id.slice(0, 8)} has invalid position and no target, keeping previous position`)
-              } else {
-                // No valid position at all - skip this ship (rare edge case)
-                console.error(`[AgentMarkers] Ship ${ship.id.slice(0, 8)} has invalid position: (${targetX}, ${targetY}, ${targetZ}) - skipping`)
-                continue
-              }
-            }
-          }
-
-          // Constrain target position to brain shape for display
-          const [constrainedX, constrainedY, constrainedZ] = constrainToBrainShape(targetX, targetY, targetZ)
-
-          // Calculate delta to check if we need to update
-          const deltaX = constrainedX - rendered.x
-          const deltaY = constrainedY - rendered.y
-          const deltaZ = constrainedZ - rendered.z
-          const totalDelta = Math.abs(deltaX) + Math.abs(deltaY) + Math.abs(deltaZ)
-
-          // Only lerp and update if the ship hasn't converged
-          if (totalDelta > CONVERGE_THRESHOLD) {
-            // Calculate frame-rate independent lerp factor
-            const currentTime = elapsedTime
-            const deltaTime = lastFrameTime > 0 ? Math.min(currentTime - lastFrameTime, 0.1) : 0.016
-            const lerpFactor = 1.0 - Math.exp(-LERP_SPEED * deltaTime)
-
-            // Smoothly lerp rendered position toward constrained target
-            rendered.x += deltaX * lerpFactor
-            rendered.y += deltaY * lerpFactor
-            rendered.z += deltaZ * lerpFactor
-
-            // Use the lerped position directly (already constrained)
-            posAttr.setXYZ(i, rendered.x, rendered.y, rendered.z)
-
-            // Update ship positions for raycasting
-            if (shipPositions[i]) {
-              shipPositions[i].set(rendered.x, rendered.y, rendered.z)
-            }
-
-            positionChanged = true
-
-            // Debug log for deploying ships
-            if (ship.state === 'deploying' && Math.random() < 0.05) {
-              console.log(`[AgentMarkers useFrame] Ship ${ship.id.slice(0, 8)} posAttr=(${rendered.x.toFixed(3)},${rendered.y.toFixed(3)},${rendered.z.toFixed(3)})`)
-            }
-          }
-
-          // Update state (check if changed)
-          const stateMap: Record<ShipStatus, number> = {
-            idle: 0,
-            searching: 1,
-            exploring: 2,
-            deploying: 3,
-            returning: 4
-          }
-          const newState = stateMap[ship.state]
-          if (stateAttr.getX(i) !== newState) {
-            stateAttr.setX(i, newState)
-            stateChanged = true
-
-            // Update color only when state changes
-            const color = STATE_COLORS[ship.state]
-            colorAttr.setXYZ(i, color[0], color[1], color[2])
-          }
+      // Cache animation data when ship starts deploying (prevents glitches from server updates)
+      if (hasServerAnimData) {
+        // Only update cache if this is new animation data (different start time or not cached)
+        const cached = deployAnimationCache.get(shipId)
+        if (!cached || cached.startTime !== ship.travelStartTime) {
+          deployAnimationCache.set(shipId, {
+            startX: ship.startPositionX!,
+            startY: ship.startPositionY ?? 0,
+            startZ: ship.startPositionZ ?? 0,
+            targetX: ship.targetPositionX!,
+            targetY: ship.targetPositionY ?? 0,
+            targetZ: ship.targetPositionZ ?? 0,
+            startTime: ship.travelStartTime!,
+            duration: ship.travelDuration!,
+          })
         }
+      }
 
-        // Only trigger GPU upload if something actually changed
-        if (positionChanged) {
-          posAttr.needsUpdate = true
+      // Use cached animation data for interpolation (immune to server update glitches)
+      const animCache = deployAnimationCache.get(shipId)
+      if (ship.state === 'deploying' && animCache) {
+        const elapsed = now - animCache.startTime
+        const progress = Math.min(Math.max(elapsed / animCache.duration, 0), 1)
+
+        // Linear interpolation from start to target
+        x = animCache.startX + (animCache.targetX - animCache.startX) * progress
+        y = animCache.startY + (animCache.targetY - animCache.startY) * progress
+        z = animCache.startZ + (animCache.targetZ - animCache.startZ) * progress
+      } else if (ship.state !== 'deploying') {
+        // Clear cache when no longer deploying
+        deployAnimationCache.delete(shipId)
+      }
+
+      // Apply brain constraint first
+      let [cx, cy, cz] = constrainToBrainShape(x, y, z)
+
+      // === SMOOTH POSITION JUMPS ===
+      // If the new position is too far from last rendered position, lerp to prevent visual glitches
+      // This catches edge cases like buffer resets or server sync issues
+      const lastPos = renderedPositions.get(shipId)
+      if (lastPos && ship.state === 'deploying') {
+        const jumpDist = Math.sqrt(
+          (cx - lastPos.x) ** 2 + (cy - lastPos.y) ** 2 + (cz - lastPos.z) ** 2
+        )
+        // If jump is larger than expected frame movement, smooth it out
+        // At ~60fps with 15-30 second travel times, normal movement is tiny
+        const maxNormalJump = 0.05  // Threshold for "suspicious" jump
+        if (jumpDist > maxNormalJump) {
+          // Lerp toward target to smooth the jump
+          const lerpFactor = 0.3
+          cx = lastPos.x + (cx - lastPos.x) * lerpFactor
+          cy = lastPos.y + (cy - lastPos.y) * lerpFactor
+          cz = lastPos.z + (cz - lastPos.z) * lerpFactor
         }
-        if (stateChanged) {
-          stateAttr.needsUpdate = true
-          colorAttr.needsUpdate = true
-        }
+      }
+      // Update rendered position cache
+      if (!lastPos) {
+        renderedPositions.set(shipId, new THREE.Vector3(cx, cy, cz))
+      } else {
+        lastPos.set(cx, cy, cz)
+      }
+
+      // === IDLE ANIMATION: Gentle hover/breathing motion ===
+      if (ship.state === 'idle') {
+        // Subtle vertical oscillation - "breathing" hover
+        // Amplitude: ~0.02 units (subtle), Period: ~6 seconds (slow, calm)
+        // Phase offset based on ship ID so ships don't sync
+        const idlePhase = ship.id.charCodeAt(0) + ship.id.charCodeAt(ship.id.length - 1)
+        const idleOffset = Math.sin(now * 0.001 + idlePhase) * 0.02
+        cy += idleOffset
+      }
+
+      // === SOLVING ANIMATION: Orbit around target synapse ===
+      if (ship.state === 'solving' && ship.targetPositionX !== undefined) {
+        // Orbit in XZ plane around synapse position
+        const orbitRadius = 0.15  // Increased for visibility
+        // Vary orbit speed slightly based on ship ID for visual interest
+        const orbitSpeed = 0.002 + (ship.id.charCodeAt(0) % 10) * 0.0003
+        const orbitPhase = ship.id.charCodeAt(0)
+        const angle = now * orbitSpeed + orbitPhase
+
+        // Get synapse position (target position)
+        const [synapseX, synapseY, synapseZ] = constrainToBrainShape(
+          ship.targetPositionX,
+          ship.targetPositionY ?? 0,
+          ship.targetPositionZ ?? 0
+        )
+
+        // Orbit around synapse with hover offset above
+        cx = synapseX + Math.cos(angle) * orbitRadius
+        cz = synapseZ + Math.sin(angle) * orbitRadius
+        // More pronounced Y wobble for 3D effect + slight hover above synapse
+        cy = synapseY + 0.08 + Math.sin(angle * 2) * 0.04
+      }
+
+      posAttr.setXYZ(i, cx, cy, cz)
+      positionChanged = true
+
+      // Update raycasting position
+      if (shipPositions[i]) {
+        shipPositions[i].set(cx, cy, cz)
+      }
+
+      // Update state attribute for shader
+      const stateMap: Record<ShipStatus, number> = { idle: 0, solving: 1, deploying: 3, returning: 4 }
+      const newState = stateMap[ship.state]
+      if (stateAttr.getX(i) !== newState) {
+        stateAttr.setX(i, newState)
+        const color = ship.state === 'deploying' ? [1.0, 0.0, 1.0] : STATE_COLORS[ship.state]
+        colorAttr.setXYZ(i, color[0], color[1], color[2])
+        stateChanged = true
       }
     }
 
-    // Update selection ring position
-    if (selectionRingMesh) {
-      const selectedId = props.selectedShipId
-      if (selectedId) {
-        const selectedIndex = ships.findIndex(s => s.id === selectedId)
-        if (selectedIndex >= 0 && shipPositions[selectedIndex]) {
-          const pos = shipPositions[selectedIndex]
-          selectionRingMesh.position.copy(pos)
-          selectionRingMesh.visible = true
-        } else {
-          selectionRingMesh.visible = false
-        }
+    // Trigger GPU upload
+    if (positionChanged) {
+      posAttr.needsUpdate = true
+    }
+    if (stateChanged) {
+      stateAttr.needsUpdate = true
+      colorAttr.needsUpdate = true
+    }
+
+    // Update selection ring
+    if (selectionRingMesh && props.selectedShipId) {
+      const idx = lastShipIds.indexOf(props.selectedShipId)
+      if (idx >= 0 && shipPositions[idx]) {
+        selectionRingMesh.position.copy(shipPositions[idx])
+        selectionRingMesh.visible = true
       } else {
         selectionRingMesh.visible = false
       }
+    } else if (selectionRingMesh) {
+      selectionRingMesh.visible = false
     }
 
+    animationFrameId = requestAnimationFrame(runStandaloneAnimation)
+  }
+
+  // Start standalone animation loop on mount
+  createEffect(() => {
+    // Start after geometry is ready
+    if (geometry && !animationFrameId) {
+      animationFrameId = requestAnimationFrame(runStandaloneAnimation)
+    }
+  })
+
+  onCleanup(() => {
+    if (animationFrameId) {
+      cancelAnimationFrame(animationFrameId)
+      animationFrameId = null
+    }
+  })
+
+  // Keep useFrame for hover detection and tooltip (these need camera access)
+  useFrame(({ camera: cam }) => {
     // Hover detection
     const renderer = gl()
-    const hoveredShip = findClosestShip()
-    const currentHovered = hoveredShipId()
-
-    if (hoveredShip?.id !== currentHovered) {
-      setHoveredShipId(hoveredShip?.id || null)
-      document.body.style.cursor = hoveredShip ? 'pointer' : 'auto'
+    const hovered = findClosestShip()
+    if (hovered?.id !== hoveredShipId()) {
+      setHoveredShipId(hovered?.id || null)
+      document.body.style.cursor = hovered ? 'pointer' : 'auto'
     }
 
-    // Update tooltip position
-    if (hoveredShip && renderer) {
-      const shipIndex = visibleShips().findIndex(s => s.id === hoveredShip.id)
-      if (shipIndex >= 0 && shipPositions[shipIndex]) {
-        const pos = shipPositions[shipIndex].clone()
-        pos.project(cam)
-
+    // Tooltip position - use lastShipIds for buffer index lookup
+    if (hovered && renderer) {
+      const idx = lastShipIds.indexOf(hovered.id)
+      if (idx >= 0 && shipPositions[idx]) {
+        const pos = shipPositions[idx].clone().project(cam)
         const rect = renderer.domElement.getBoundingClientRect()
-        const x = (pos.x * 0.5 + 0.5) * rect.width + rect.left
-        const y = (-pos.y * 0.5 + 0.5) * rect.height + rect.top
-        setTooltipPosition({ x, y })
+        setTooltipPosition({
+          x: (pos.x * 0.5 + 0.5) * rect.width + rect.left,
+          y: (-pos.y * 0.5 + 0.5) * rect.height + rect.top
+        })
       }
     } else {
       setTooltipPosition(null)
     }
-
-    // Update last frame time for delta calculation
-    lastFrameTime = elapsedTime
   })
 
   // Get hovered ship for tooltip
@@ -790,9 +800,11 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
                 Autopilot: {hoveredShip()!.autopilotTargetType || 'Any'}
               </div>
             )}
-            <div class="text-cyan-400">
-              {hoveredShip()!.synapsesExplored} explored
-            </div>
+            {(hoveredShip()!.synapsesExplored ?? 0) > 0 && (
+              <div class="text-cyan-400">
+                {hoveredShip()!.synapsesExplored} explored
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -800,5 +812,3 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
   )
 }
 
-// Re-export for backward compatibility
-export { ShipMarkers as AgentMarkers }

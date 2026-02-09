@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { SynapseDiscoveryEvent } from '@/stores/shipStore'
 import { LOOT_THRESHOLDS, constrainToBrainShape } from '@/constants'
-import { TRANCE_CONFIG } from './core/brainConstants'
+import { log } from '@/utils/logger'
 
 interface DiscoveryBurstProps {
   recentDiscoveries: SynapseDiscoveryEvent[]
@@ -173,9 +173,6 @@ function BurstParticles(props: { burst: Burst }) {
   let geometry: THREE.BufferGeometry | null = null
   let material: THREE.ShaderMaterial | null = null
 
-  // Time tracking for scaled time (trance mode)
-  let scaledTime = 0
-  let lastRealTime = 0
 
   // Build geometry data for this burst
   const geometryData = createMemo(() => {
@@ -212,7 +209,7 @@ function BurstParticles(props: { burst: Burst }) {
   onMount(() => {
     const sceneObj = scene()
     if (!sceneObj) {
-      console.warn('BurstParticles: Scene not available')
+      log.brain.warn('BurstParticles: Scene not available')
       return
     }
 
@@ -253,18 +250,10 @@ function BurstParticles(props: { burst: Burst }) {
     })
   })
 
-  // Update shader uniforms with scaled time
+  // Update shader uniforms
   useFrame(({ clock }) => {
-    // Update scaled time (trance mode deprecated - always normal scale)
-    const timeScale = TRANCE_CONFIG.normalScale
-
-    const realTime = clock.getElapsedTime()
-    const delta = realTime - lastRealTime
-    lastRealTime = realTime
-    scaledTime += delta * timeScale
-
     if (material) {
-      material.uniforms.uTime.value = scaledTime
+      material.uniforms.uTime.value = clock.getElapsedTime()
     }
   })
 

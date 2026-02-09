@@ -17,9 +17,8 @@ import {
 } from '@wagmi/core'
 import { injected } from '@wagmi/connectors'
 import { wagmiConfig } from '@/lib/wagmi'
-
-// API Configuration - empty string means same-origin (App Platform deployment)
-const API_URL = import.meta.env.VITE_API_URL ?? ''
+import { API_URL } from '@/constants/api'
+import { log } from '@/utils/logger'
 
 // DEV BYPASS: Skip MetaMask and use test wallet
 const DEV_AUTH_BYPASS = import.meta.env.VITE_DEV_AUTH_BYPASS === 'true'
@@ -71,7 +70,7 @@ function createAuthStore() {
   async function init(): Promise<{ token: string | null; walletAddress: string | null }> {
     // DEV BYPASS: Auto-login immediately with test wallet
     if (DEV_AUTH_BYPASS) {
-      console.log('[AUTH] DEV BYPASS: Auto-login enabled, using test wallet', DEV_TEST_WALLET)
+      log.auth.info('DEV BYPASS: Auto-login enabled, using test wallet', DEV_TEST_WALLET)
       setState({
         isConnected: true,
         walletAddress: DEV_TEST_WALLET,
@@ -80,10 +79,10 @@ function createAuthStore() {
       // Auto-authenticate
       const result = await authenticate()
       if (result.success) {
-        console.log('[AUTH] DEV BYPASS: Auto-login successful')
+        log.auth.success('DEV BYPASS: Auto-login successful')
         return { token: state.token, walletAddress: DEV_TEST_WALLET }
       } else {
-        console.error('[AUTH] DEV BYPASS: Auto-login failed')
+        log.auth.error('DEV BYPASS: Auto-login failed')
       }
       return { token: null, walletAddress: DEV_TEST_WALLET }
     }
@@ -160,7 +159,7 @@ function createAuthStore() {
 
     // DEV BYPASS: Skip MetaMask entirely
     if (DEV_AUTH_BYPASS) {
-      console.log('[AUTH] DEV BYPASS: Using test wallet', DEV_TEST_WALLET)
+      log.auth.info('DEV BYPASS: Using test wallet', DEV_TEST_WALLET)
       setState({
         isConnected: true,
         walletAddress: DEV_TEST_WALLET,
@@ -182,7 +181,7 @@ function createAuthStore() {
 
       return true
     } catch (error) {
-      console.error('Failed to connect wallet:', error)
+      log.auth.error('Failed to connect wallet:', error)
       const err = error as { shortMessage?: string; message?: string }
       setState({
         isConnecting: false,
@@ -236,7 +235,7 @@ function createAuthStore() {
     try {
       // DEV BYPASS: Skip nonce and signature
       if (DEV_AUTH_BYPASS) {
-        console.log('[AUTH] DEV BYPASS: Skipping signature for wallet', state.walletAddress)
+        log.auth.info('DEV BYPASS: Skipping signature for wallet', state.walletAddress)
 
         const verifyResponse = await fetch(`${API_URL}/api/auth/verify`, {
           method: 'POST',
@@ -306,7 +305,7 @@ function createAuthStore() {
 
       return { success: true, user }
     } catch (error) {
-      console.error('Authentication failed:', error)
+      log.auth.error('Authentication failed:', error)
       const err = error as { shortMessage?: string; message?: string }
       setState({
         isAuthenticating: false,

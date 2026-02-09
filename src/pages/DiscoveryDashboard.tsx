@@ -31,6 +31,8 @@ import {
   type SynapseType,
 } from '@/types/game'
 import { getDominantSynapseType } from '@/utils/synapseUtils'
+import { constrainToBrainShape } from '@/components/brain/core/brainConstants'
+import { log, fmt } from '@/utils/logger'
 
 // Helper to get brain region from position
 function getRegionFromPosition(x: number, y: number, z: number): string {
@@ -271,12 +273,20 @@ export const DiscoveryDashboard: Component = () => {
 
   // Handle ship click - zoom camera to ship position with close zoom
   const handleShipClick = (ship: Ship) => {
+    log.dashboard.info('Ship clicked:', {
+      id: fmt.shortId(ship.id),
+      name: ship.name,
+      state: ship.state,
+      position: fmt.pos(ship.positionX, ship.positionY, ship.positionZ),
+    })
+
     // Select the ship (enables selection ring, fetches synapse details)
     shipStore.selectShip(ship.id)
 
     // Use constrainToBrainShape to match the exact rendered ship position
     const [x, y, z] = constrainToBrainShape(ship.positionX, ship.positionY, ship.positionZ)
     const pos = new THREE.Vector3(x, y, z)
+    log.dashboard.debug('Setting zoom target to:', fmt.pos(pos.x, pos.y, pos.z))
     setZoomTarget(pos)
     setIsShipZoom(true)  // Enable close zoom for ship inspection
   }
@@ -295,11 +305,53 @@ export const DiscoveryDashboard: Component = () => {
 
     // Only follow during intentional travel states, NOT searching (wandering)
     const isIntentionalTravel = ship.state === 'deploying' || ship.state === 'returning'
-    const isExploring = ship.state === 'exploring'
+    const isSolving = ship.state === 'solving'
 
-    if (isIntentionalTravel || isExploring) {
+    if (isIntentionalTravel || isSolving) {
+      // Calculate position - use client-side interpolation for deploying ships
+      let posX = ship.positionX
+      let posY = ship.positionY
+      let posZ = ship.positionZ
+
+      // Client-side interpolation for deploying ships
+      const hasAnimationData = ship.state === 'deploying' &&
+        ship.startPositionX !== undefined &&
+        ship.targetPositionX !== undefined &&
+        ship.travelStartTime !== undefined &&
+        ship.travelDuration !== undefined &&
+        ship.travelDuration > 0
+
+      // Log what camera follow sees
+      log.dashboard.debug('CameraFollow ship data:', {
+        state: ship.state,
+        hasAnimationData,
+        startX: ship.startPositionX?.toFixed(3),
+        targetX: ship.targetPositionX?.toFixed(3),
+        travelDuration: fmt.ms(ship.travelDuration),
+      })
+
+      if (hasAnimationData) {
+        const now = Date.now()
+        const elapsed = now - ship.travelStartTime!
+        const progress = Math.min(Math.max(elapsed / ship.travelDuration!, 0), 1)
+
+        posX = ship.startPositionX! + (ship.targetPositionX! - ship.startPositionX!) * progress
+        posY = (ship.startPositionY ?? 0) + ((ship.targetPositionY ?? 0) - (ship.startPositionY ?? 0)) * progress
+        posZ = (ship.startPositionZ ?? 0) + ((ship.targetPositionZ ?? 0) - (ship.startPositionZ ?? 0)) * progress
+
+        log.dashboard.debug('CameraFollow INTERPOLATING', fmt.percent(progress), fmt.pos(posX, posY, posZ))
+      } else if (isSolving && ship.targetPositionX !== undefined) {
+        // For solving ships, use target position (synapse location)
+        posX = ship.targetPositionX
+        posY = ship.targetPositionY ?? posY
+        posZ = ship.targetPositionZ ?? posZ
+        log.dashboard.debug('CameraFollow using target position (solving)', fmt.pos(posX, posY, posZ))
+      } else {
+        log.dashboard.debug('CameraFollow using store position (no anim data)', fmt.pos(posX, posY, posZ))
+      }
+
       // Update camera target to follow ship using constrainToBrainShape for accuracy
-      const [x, y, z] = constrainToBrainShape(ship.positionX, ship.positionY, ship.positionZ)
+      const [x, y, z] = constrainToBrainShape(posX, posY, posZ)
       const pos = new THREE.Vector3(x, y, z)
       setZoomTarget(pos)
     }
@@ -373,7 +425,7 @@ export const DiscoveryDashboard: Component = () => {
               if (ship && target) {
                 const config = SYNAPSE_CONFIG[target.synapseType]
                 const pointsPerMin = Math.floor(config.maxPerMin / 2) || 50
-                // Use travelToSynapse - ship will travel to synapse and auto-start exploring on arrival
+                // Use travelToSynapse - ship will travel to synapse and auto-start solving on arrival
                 const success = await shipStore.travelToSynapse(ship.id, target.id, pointsPerMin)
                 if (success) {
                   setExplorePromptData(null)

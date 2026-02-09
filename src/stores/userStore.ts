@@ -10,9 +10,8 @@ import {
 } from '@/types/game'
 import { authStore } from './authStore'
 import { shipStore } from './shipStore'
-
-// API Configuration - empty string means same-origin (App Platform deployment)
-const API_URL = import.meta.env.VITE_API_URL ?? ''
+import { API_URL } from '@/constants/api'
+import { log } from '@/utils/logger'
 
 // ============================================================================
 // MASTERPLAN 2026: USER STORE
@@ -150,7 +149,7 @@ function createUserStore() {
 
       return true
     } catch (error) {
-      console.error('Login failed:', error)
+      log.user.error('Login failed:', error)
       setState({ isLoading: false, error: 'Failed to login' })
       return false
     }
@@ -199,7 +198,7 @@ function createUserStore() {
 
       return true
     } catch (error) {
-      console.error('Failed to record USDC spent:', error)
+      log.user.error('Failed to record USDC spent:', error)
       return false
     }
   }

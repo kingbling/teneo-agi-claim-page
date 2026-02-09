@@ -7,8 +7,7 @@
 import { createRoot } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import { authStore } from './authStore'
-
-const API_URL = import.meta.env.VITE_API_URL ?? ''
+import { API_URL } from '@/constants/api'
 
 // Types
 export interface AdminUser {

@@ -8,52 +8,7 @@ import {
   formatETA,
 } from '@/types/game'
 import type { Synapse } from '@/stores/shipStore'
-
-// Synapse type colors for styling
-const SYNAPSE_TYPE_COLORS: Record<SynapseType, { bg: string; text: string; border: string; glow: string }> = {
-  minor: {
-    bg: 'bg-blue-500/10',
-    text: 'text-blue-400',
-    border: 'border-blue-500/30',
-    glow: 'shadow-blue-500/20',
-  },
-  complex: {
-    bg: 'bg-purple-500/10',
-    text: 'text-purple-400',
-    border: 'border-purple-500/30',
-    glow: 'shadow-purple-500/20',
-  },
-  deep: {
-    bg: 'bg-teal-500/10',
-    text: 'text-teal-400',
-    border: 'border-teal-500/30',
-    glow: 'shadow-teal-500/20',
-  },
-  core: {
-    bg: 'bg-yellow-500/10',
-    text: 'text-yellow-400',
-    border: 'border-yellow-500/30',
-    glow: 'shadow-yellow-500/20',
-  },
-  rare: {
-    bg: 'bg-red-500/10',
-    text: 'text-red-400',
-    border: 'border-red-500/30',
-    glow: 'shadow-red-500/20',
-  },
-  legendary: {
-    bg: 'bg-pink-500/10',
-    text: 'text-pink-400',
-    border: 'border-pink-500/30',
-    glow: 'shadow-pink-500/20',
-  },
-  unique: {
-    bg: 'bg-amber-400/10',
-    text: 'text-amber-300',
-    border: 'border-amber-400/30',
-    glow: 'shadow-amber-400/20',
-  },
-}
+import { SYNAPSE_COLORS } from '@/constants/colors'
 
 export interface SynapseInfoProps {
   /** Synapse object to display */
@@ -73,7 +28,7 @@ export interface SynapseInfoProps {
  * current ETA, explorer count, and reward distribution type.
  */
 export function SynapseInfo(props: SynapseInfoProps) {
-  const colors = () => SYNAPSE_TYPE_COLORS[props.synapse.synapseType]
+  const colors = () => SYNAPSE_COLORS[props.synapse.synapseType].tw
 
   // Calculate progress
   const progress = () => props.synapse.pointsRequired > 0
@@ -251,7 +206,7 @@ export interface SynapseTypeBadgeProps {
 }
 
 export function SynapseTypeBadge(props: SynapseTypeBadgeProps) {
-  const colors = () => SYNAPSE_TYPE_COLORS[props.type]
+  const colors = () => SYNAPSE_COLORS[props.type].tw
   const size = () => props.size ?? 'md'
 
   const sizes = {

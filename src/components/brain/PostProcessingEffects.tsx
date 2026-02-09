@@ -15,6 +15,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { useThree } from '@/three/ThreeContext'
+import { log } from '@/utils/logger'
 
 interface PostProcessingEffectsProps {
   bloomIntensity?: number
@@ -76,7 +77,7 @@ export function PostProcessingEffects(props: PostProcessingEffectsProps) {
     const cam = camera()
 
     if (!renderer || !sceneObj || !cam) {
-      console.warn('PostProcessingEffects: Three.js not yet initialized')
+      log.brain.warn('PostProcessingEffects: Three.js not yet initialized')
       return
     }
 

@@ -89,7 +89,7 @@ export default function DataPage() {
       key: 'state',
       label: 'State',
       render: (a) => (
-        <Badge variant={a.state === 'idle' ? 'secondary' : a.state === 'exploring' ? 'success' : 'warning'}>
+        <Badge variant={a.state === 'idle' ? 'secondary' : a.state === 'solving' ? 'success' : 'warning'}>
           {a.state}
         </Badge>
       ),
@@ -218,7 +218,7 @@ export default function DataPage() {
               >
                 <option value="">All States</option>
                 <option value="idle">Idle</option>
-                <option value="exploring">Exploring</option>
+                <option value="solving">Solving</option>
                 <option value="deploying">Deploying</option>
               </select>
             </div>

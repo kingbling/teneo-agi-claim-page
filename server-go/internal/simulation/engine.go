@@ -1,6 +1,7 @@
 package simulation
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"sync"
@@ -39,6 +40,9 @@ type Engine struct {
 	synapseDeltaMu    sync.Mutex
 	spaceOrderIndex   map[string]uint32 // space ID → array index (matches bulk endpoint order)
 
+	// LOD cluster dirty tracking - only recompute when state changes
+	clustersDirty bool
+
 	// Callbacks for WebSocket events
 	OnSpaceDiscovered     func(dto.SpaceDiscovery)
 	OnAgentsUpdated       func([]dto.AgentUpdate)
@@ -48,6 +52,79 @@ type Engine struct {
 	OnLootDistributed     func(dto.LootEvent)
 	OnUserShipUpdated     func(shipID, userID string) // Send ships:sync to specific user after state change
 	OnTravelPositions     func(dto.TravelPositionBatch) // Stream positions during travel
+	OnClusterUpdate       func(dto.ClusterUpdateEvent) // Immediate cluster update for dashboard sync
+}
+
+// Grid sizes for LOD cluster computation (must match handlers/synapses.go)
+var lodGridSizes = map[int]float64{
+	0: 0.08,
+	1: 0.3,
+	2: 1.0,
+}
+
+// getClusterIDForPosition computes the cluster ID for a given position and LOD level
+func getClusterIDForPosition(x, y, z float64, lodLevel int) string {
+	gridSize := lodGridSizes[lodLevel]
+	gridX := int(x / gridSize)
+	gridY := int(y / gridSize)
+	gridZ := int(z / gridSize)
+	return fmt.Sprintf("%d_%d_%d_%d", lodLevel, gridX, gridY, gridZ)
+}
+
+// updateClusterCounts updates cluster counts for a synapse state change
+// beingSolvedDelta: +1/-1 for being_solved state changes
+// discoveredDelta: +1 for discovered state changes
+func (e *Engine) updateClusterCounts(posX, posY, posZ float64, beingSolvedDelta, discoveredDelta int) {
+	now := time.Now().UnixMilli()
+
+	// Mark clusters as dirty so they get recomputed on the next interval
+	e.clustersDirty = true
+
+	for lodLevel := 0; lodLevel <= 2; lodLevel++ {
+		clusterID := getClusterIDForPosition(posX, posY, posZ, lodLevel)
+		e.db.Model(&models.SpaceCluster{}).
+			Where("id = ?", clusterID).
+			Updates(map[string]interface{}{
+				"being_solved_count": gorm.Expr("MAX(0, being_solved_count + ?)", beingSolvedDelta),
+				"discovered_count":   gorm.Expr("discovered_count + ?", discoveredDelta),
+				"updated_at":         now,
+			})
+	}
+}
+
+// broadcastClusterUpdate broadcasts updated cluster data for a synapse position
+func (e *Engine) broadcastClusterUpdate(posX, posY, posZ float64) {
+	if e.OnClusterUpdate == nil {
+		return
+	}
+
+	var clusters []dto.SpaceCluster
+	now := time.Now().UnixMilli()
+
+	for lodLevel := 0; lodLevel <= 2; lodLevel++ {
+		clusterID := getClusterIDForPosition(posX, posY, posZ, lodLevel)
+		var cluster models.SpaceCluster
+		if err := e.db.First(&cluster, "id = ?", clusterID).Error; err == nil {
+			clusters = append(clusters, dto.SpaceCluster{
+				ID:               cluster.ID,
+				LODLevel:         cluster.LodLevel,
+				PositionX:        cluster.PositionX,
+				PositionY:        cluster.PositionY,
+				PositionZ:        cluster.PositionZ,
+				SpaceCount:       cluster.SpaceCount,
+				DiscoveredCount:  cluster.DiscoveredCount,
+				BeingSolvedCount: cluster.BeingSolvedCount,
+				UpdatedAt:        cluster.UpdatedAt,
+			})
+		}
+	}
+
+	if len(clusters) > 0 {
+		e.OnClusterUpdate(dto.ClusterUpdateEvent{
+			Clusters:  clusters,
+			Timestamp: now,
+		})
+	}
 }
 
 // New creates a new simulation engine
@@ -162,8 +239,9 @@ func (e *Engine) processTick() {
 		e.logTickStats()
 	}
 
-	// Recompute clusters every 30 ticks
-	if e.tickCount%30 == 0 {
+	// Recompute clusters every 30 ticks, but only if something changed
+	if e.tickCount%30 == 0 && e.clustersDirty {
+		e.clustersDirty = false
 		go e.recomputeClusters()
 	}
 
@@ -442,7 +520,7 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 	}
 
 	e.db.Model(&models.Space{}).Where("id = ?", synapseID).Updates(map[string]interface{}{
-		"points_accumulated":  int(newAccumulated),
+		"points_accumulated":  int(math.Round(newAccumulated)),
 		"current_eta_minutes": currentETA,
 		"state":               newState,
 	})
@@ -557,6 +635,11 @@ func (e *Engine) completeSynapse(synapseID string, synapseType dto.SynapseType, 
 	// Track state change for delta broadcast
 	e.trackSynapseStateChange(synapseID, 2) // 2 = discovered
 
+	// Update cluster counts: -1 being_solved (was exploring), +1 discovered
+	e.updateClusterCounts(space.PositionX, space.PositionY, space.PositionZ, -1, 1)
+	// Broadcast immediate cluster update for dashboard sync
+	e.broadcastClusterUpdate(space.PositionX, space.PositionY, space.PositionZ)
+
 	if mintNFT {
 		log.Printf("[NFT] Minted %s synapse NFT for user %s", synapseType, exp.userID[:8])
 	}
@@ -626,12 +709,17 @@ func (e *Engine) joinSynapseExploration(synapseID, shipID, userID string, points
 		Update("state", "being_solved")
 	if result.RowsAffected > 0 {
 		e.trackSynapseStateChange(synapseID, 1) // 1 = being_solved
+		// Update cluster counts and broadcast for immediate dashboard sync
+		e.updateClusterCounts(space.PositionX, space.PositionY, space.PositionZ, 1, 0)
+		e.broadcastClusterUpdate(space.PositionX, space.PositionY, space.PositionZ)
 	}
 
-	// Update ship state
+	// Update ship state - set both target_space_id and current_space_id
+	// current_space_id is what the frontend uses to know which synapse the ship is at
 	e.db.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
 		"state":                  "solving",
 		"target_space_id":        synapseID,
+		"current_space_id":       synapseID,
 		"current_points_per_min": int(effectiveRate),
 	})
 
@@ -674,10 +762,11 @@ func (e *Engine) redirectToNearbySynapse(shipID, userID string, currentX, curren
 	}
 	now := time.Now().UnixMilli()
 
-	// Update ship to start traveling to new synapse
+	// Update ship to start traveling to new synapse - clear current_space_id since ship is leaving
 	e.db.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
 		"state":             "traveling",
 		"target_space_id":   nextSpace.ID,
+		"current_space_id":  nil,
 		"position_x":        currentX,
 		"position_y":        currentY,
 		"position_z":        currentZ,
@@ -705,10 +794,11 @@ func (e *Engine) redirectToNearbySynapse(shipID, userID string, currentX, curren
 func (e *Engine) processAutopilot(shipID, userID string, currentX, currentY, currentZ float64) *dto.AgentUpdate {
 	var agent models.Agent
 	if err := e.db.First(&agent, "id = ?", shipID).Error; err != nil || !agent.AutopilotEnabled {
-		// Return to idle
+		// Return to idle - clear both target and current space
 		e.db.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
-			"state":           "idle",
-			"target_space_id": nil,
+			"state":            "idle",
+			"target_space_id":  nil,
+			"current_space_id": nil,
 		})
 		return &dto.AgentUpdate{
 			ID:        shipID,
@@ -722,10 +812,11 @@ func (e *Engine) processAutopilot(shipID, userID string, currentX, currentY, cur
 	// Find next available synapse
 	var nextSpace models.Space
 	if err := e.db.Where("state = ?", "undiscovered").Order("RANDOM()").First(&nextSpace).Error; err != nil {
-		// No available synapses
+		// No available synapses - clear both target and current space
 		e.db.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
-			"state":           "idle",
-			"target_space_id": nil,
+			"state":            "idle",
+			"target_space_id":  nil,
+			"current_space_id": nil,
 		})
 		return &dto.AgentUpdate{
 			ID:        shipID,
@@ -748,10 +839,11 @@ func (e *Engine) processAutopilot(shipID, userID string, currentX, currentY, cur
 	}
 	now := time.Now().UnixMilli()
 
-	// Start traveling
+	// Start traveling - clear current_space_id since ship is leaving synapse
 	e.db.Model(&models.Agent{}).Where("id = ?", shipID).Updates(map[string]interface{}{
 		"state":             "traveling",
 		"target_space_id":   nextSpace.ID,
+		"current_space_id":  nil,
 		"start_position_x":  currentX,
 		"start_position_y":  currentY,
 		"start_position_z":  currentZ,

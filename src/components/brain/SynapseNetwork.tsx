@@ -3,8 +3,9 @@ import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { SynapseType, UserLevel } from '@/types/game'
 import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG, SYNAPSE_TYPE_ORDER } from '@/types/game'
-import { TRANCE_CONFIG, constrainToBrainShape } from './core/brainConstants'
+import { constrainToBrainShape } from './core/brainConstants'
 import type { SynapseCluster } from '@/stores/shipStore'
+import { log } from '@/utils/logger'
 
 interface SynapseNetworkProps {
   synapseClusters: SynapseCluster[]
@@ -135,15 +136,8 @@ const NODE_VERTEX_SHADER = `
     vColor = aColor;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
-    // Depth-based visibility for ship zoom mode
-    if (uIsShipZoom == 1) {
-      vec4 shipViewPos = modelViewMatrix * vec4(uShipPosition, 1.0);
-      float shipDepth = shipViewPos.z;
-      float particleDepth = mvPosition.z;
-      vBehindShip = particleDepth < (shipDepth + 0.05) ? 1.0 : 0.0;
-    } else {
-      vBehindShip = 1.0;
-    }
+    // Depth-based visibility DISABLED - caused white sphere artifact
+    vBehindShip = 1.0;
 
     gl_PointSize = aSize;
     gl_Position = projectionMatrix * mvPosition;
@@ -186,15 +180,8 @@ const LINE_VERTEX_SHADER = `
     vOpacity = aOpacity;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
-    // Depth-based visibility for ship zoom mode
-    if (uIsShipZoom == 1) {
-      vec4 shipViewPos = modelViewMatrix * vec4(uShipPosition, 1.0);
-      float shipDepth = shipViewPos.z;
-      float particleDepth = mvPosition.z;
-      vBehindShip = particleDepth < (shipDepth + 0.05) ? 1.0 : 0.0;
-    } else {
-      vBehindShip = 1.0;
-    }
+    // Depth-based visibility DISABLED - caused white sphere artifact
+    vBehindShip = 1.0;
 
     gl_Position = projectionMatrix * mvPosition;
   }
@@ -237,15 +224,8 @@ const SPARKLE_VERTEX_SHADER = `
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
-    // Depth-based visibility for ship zoom mode
-    if (uIsShipZoom == 1) {
-      vec4 shipViewPos = modelViewMatrix * vec4(uShipPosition, 1.0);
-      float shipDepth = shipViewPos.z;
-      float particleDepth = mvPosition.z;
-      vBehindShip = particleDepth < (shipDepth + 0.05) ? 1.0 : 0.0;
-    } else {
-      vBehindShip = 1.0;
-    }
+    // Depth-based visibility DISABLED - caused white sphere artifact
+    vBehindShip = 1.0;
 
     gl_PointSize = clamp(aSize * (100.0 / -mvPosition.z), 1.0, 8.0);
     gl_Position = projectionMatrix * mvPosition;
@@ -296,9 +276,6 @@ export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
   let sparkleConnections: Connection[] = []
   let sparkleOffsets: Float32Array | null = null
 
-  // Time tracking for scaled time (trance mode)
-  let scaledTime = 0
-  let lastRealTime = 0
 
   // Build network
   const networkData = createMemo(() => {
@@ -388,7 +365,7 @@ export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
     const renderer = gl()
 
     if (!sceneObj || !renderer) {
-      console.warn('SynapseNetworkNew: Scene or renderer not available')
+      log.brain.warn('SynapseNetwork: Scene or renderer not available')
       return
     }
 
@@ -593,20 +570,15 @@ export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
 
   // Animation frame for time updates and sparkle animation
   useFrame(({ clock }) => {
-    // Update scaled time (trance mode deprecated - always normal scale)
-    const timeScale = TRANCE_CONFIG.normalScale
-
-    const realTime = clock.getElapsedTime()
-    const delta = realTime - lastRealTime
-    lastRealTime = realTime
-    scaledTime += delta * timeScale
+    const time = clock.getElapsedTime()
+    const delta = clock.getDelta()
 
     // Update shader uniforms
     if (pointsMaterial) {
-      pointsMaterial.uniforms.uTime.value = scaledTime
+      pointsMaterial.uniforms.uTime.value = time
     }
     if (sparklesMaterial) {
-      sparklesMaterial.uniforms.uTime.value = scaledTime
+      sparklesMaterial.uniforms.uTime.value = time
     }
 
     // Animate sparkle particles along connections (flowing river style)

@@ -1,12 +1,14 @@
 import { Show, For, createMemo } from 'solid-js'
-import { ChevronDown, ChevronUp, Ship as ShipIcon, Compass, Eye, EyeOff, Plus } from 'lucide-solid'
+import { ChevronDown, ChevronUp, Ship as ShipIcon, Compass, Eye, EyeOff, Plus, LayoutGrid } from 'lucide-solid'
 import { shipStore, type Ship } from '@/stores/shipStore'
 import { userStore } from '@/stores/userStore'
 import { uiStore } from '@/stores/uiStore'
+import { SHIP_STATUS_COLORS } from '@/constants/colors'
 
 interface ShipNavigatorProps {
   onFocusShip: (ship: Ship) => void
   onCreateShip: () => void
+  onOpenSwitcher: () => void
   isExpanded: boolean
   onToggle: () => void
 }
@@ -16,9 +18,12 @@ interface ShipNavigatorProps {
  * Shows list of ships with click-to-navigate functionality
  */
 export function ShipNavigator(props: ShipNavigatorProps) {
+  // Access userShips directly from store getter - SolidJS tracks the dependency
+  // The spread creates a new array reference to ensure reactivity on state changes
   const userShips = createMemo(() => {
     const ships = shipStore.userShips
-    return Array.isArray(ships) ? ships : []
+    // Creating a new array with spread ensures SolidJS detects changes to individual ship properties
+    return Array.isArray(ships) ? [...ships] : []
   })
 
   const idleCount = createMemo(() => userShips().filter(s => s.state === 'idle').length)
@@ -26,38 +31,39 @@ export function ShipNavigator(props: ShipNavigatorProps) {
 
   // Get status badge color and text
   const getStatusStyle = (state: Ship['state']) => {
-    switch (state) {
-      case 'idle':
-        return { bg: 'bg-gray-500/20', text: 'text-gray-400', label: 'Idle' }
-      case 'exploring':
-        return { bg: 'bg-teal-500/20', text: 'text-teal-400', label: 'Exploring' }
-      case 'deploying':
-        return { bg: 'bg-yellow-500/20', text: 'text-yellow-400', label: 'Deploying' }
-      case 'returning':
-        return { bg: 'bg-purple-500/20', text: 'text-purple-400', label: 'Returning' }
-      default:
-        return { bg: 'bg-gray-500/20', text: 'text-gray-400', label: 'Unknown' }
-    }
+    const config = SHIP_STATUS_COLORS[state] || SHIP_STATUS_COLORS.idle
+    return { bg: config.badgeClass.split(' ')[0], text: config.textClass, label: config.label }
   }
 
   return (
     <div class="pointer-events-auto">
       {/* Header - always visible */}
-      <button
-        onClick={props.onToggle}
-        class="w-full flex items-center justify-between px-4 py-2 rounded-lg bg-black/60 backdrop-blur-sm border border-gray-700 hover:bg-black/70 transition-colors"
-      >
-        <div class="flex items-center gap-2">
-          <ShipIcon class="h-4 w-4 text-teal-400" />
-          <span class="text-sm font-medium text-white">Ships</span>
-          <span class="text-xs text-gray-400">
-            {activeCount()}/{userShips().length}
-          </span>
-        </div>
-        <Show when={props.isExpanded} fallback={<ChevronDown class="h-4 w-4 text-gray-400" />}>
-          <ChevronUp class="h-4 w-4 text-gray-400" />
-        </Show>
-      </button>
+      <div class="flex items-center gap-1">
+        <button
+          onClick={props.onToggle}
+          class="flex-1 flex items-center justify-between px-4 py-2 rounded-lg bg-black/60 backdrop-blur-sm border border-gray-700 hover:bg-black/70 transition-colors"
+        >
+          <div class="flex items-center gap-2">
+            <ShipIcon class="h-4 w-4 text-teal-400" />
+            <span class="text-sm font-medium text-white">Ships</span>
+            <span class="text-xs text-gray-400">
+              {activeCount()}/{userShips().length}
+            </span>
+          </div>
+          <Show when={props.isExpanded} fallback={<ChevronDown class="h-4 w-4 text-gray-400" />}>
+            <ChevronUp class="h-4 w-4 text-gray-400" />
+          </Show>
+        </button>
+
+        {/* Ship Switcher button */}
+        <button
+          onClick={props.onOpenSwitcher}
+          class="p-2 rounded-lg bg-black/60 backdrop-blur-sm border border-gray-700 hover:bg-black/70 hover:border-teal-500/50 transition-colors"
+          title="Open ship switcher"
+        >
+          <LayoutGrid class="h-4 w-4 text-gray-400 hover:text-teal-400" />
+        </button>
+      </div>
 
       {/* Expanded panel */}
       <Show when={props.isExpanded}>
@@ -85,7 +91,9 @@ export function ShipNavigator(props: ShipNavigatorProps) {
             >
               <For each={userShips()}>
                 {(ship) => {
-                  const status = getStatusStyle(ship.state)
+                  // Wrap status in a function for SolidJS reactivity
+                  // This ensures the status updates when ship.state changes
+                  const status = () => getStatusStyle(ship.state)
                   return (
                     <button
                       onClick={() => props.onFocusShip(ship)}
@@ -98,11 +106,11 @@ export function ShipNavigator(props: ShipNavigatorProps) {
                       <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-2">
                           <span class="text-sm text-white truncate">{ship.name}</span>
-                          <span class={`text-[10px] px-1.5 py-0.5 rounded ${status.bg} ${status.text}`}>
-                            {status.label}
+                          <span class={`text-[10px] px-1.5 py-0.5 rounded ${status().bg} ${status().text}`}>
+                            {status().label}
                           </span>
                         </div>
-                        <Show when={ship.state === 'exploring' && ship.currentSynapseId}>
+                        <Show when={ship.state === 'solving' && ship.currentSynapseId}>
                           <p class="text-[10px] text-gray-500 truncate">
                             Synapse: {ship.currentSynapseId?.slice(0, 8)}...
                           </p>

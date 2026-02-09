@@ -7,6 +7,7 @@ import { Terminal, Trash2, Download, Filter, Pause, Play } from 'lucide-solid'
 import { authStore } from '@/stores/authStore'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { log } from '@/utils/logger'
 
 const API_URL = import.meta.env.VITE_API_URL ?? ''
 const WS_URL = import.meta.env.VITE_WS_URL ?? ''
@@ -67,7 +68,7 @@ export default function LogsPage() {
         setLogs([])
       }
     } catch (err) {
-      console.error('Failed to clear logs:', err)
+      log.admin.error('Failed to clear logs:', err)
     }
   }
 

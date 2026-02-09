@@ -31,7 +31,7 @@ const (
 	ShipIdle      ShipState = "idle"
 	ShipSearching ShipState = "searching"
 	ShipDeploying ShipState = "deploying" // = traveling
-	ShipExploring ShipState = "exploring" // = solving
+	ShipSolving   ShipState = "solving"   // was "exploring"
 	ShipReturning ShipState = "returning"
 )
 
@@ -46,7 +46,7 @@ func MapAgentStateToShipState(state AgentState) ShipState {
 	case AgentTraveling:
 		return ShipDeploying
 	case AgentSolving:
-		return ShipExploring
+		return ShipSolving
 	case AgentReturning:
 		return ShipReturning
 	default:

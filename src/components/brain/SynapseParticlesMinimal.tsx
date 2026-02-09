@@ -4,6 +4,7 @@ import { useThree, useFrame } from '@/three/hooks'
 import { BRAIN_REGION_VERTEX_SHADER, BRAIN_REGION_FRAGMENT_SHADER } from './core/shaderUtils'
 import { LOD_PARTICLE_COUNTS } from './core/brainConstants'
 import { FUNCTIONAL_BRAIN_REGIONS } from '@/constants/brainRegions'
+import { log } from '@/utils/logger'
 
 interface SynapseParticlesMinimalProps {
   count?: number
@@ -211,7 +212,7 @@ export function SynapseParticlesMinimal(props: SynapseParticlesMinimalProps) {
   onMount(() => {
     const sceneObj = scene()
     if (!sceneObj) {
-      console.warn('SynapseParticlesMinimal: Scene not available')
+      log.brain.warn('SynapseParticlesMinimal: Scene not available')
       return
     }
 

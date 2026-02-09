@@ -2,7 +2,8 @@ import { onMount, onCleanup, createEffect, createMemo } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { Ship } from '@/stores/shipStore'
-import { TRANCE_CONFIG, constrainToBrainShape } from './core/brainConstants'
+import { constrainToBrainShape } from './core/brainConstants'
+import { log } from '@/utils/logger'
 
 interface BurnParticlesProps {
   userAgents: Ship[]
@@ -77,9 +78,6 @@ export function BurnParticles(props: BurnParticlesProps) {
   let geometry: THREE.BufferGeometry | null = null
   let material: THREE.ShaderMaterial | null = null
 
-  // Time tracking for scaled time (trance mode)
-  let scaledTime = 0
-  let lastRealTime = 0
 
   // Filter to only solving/deploying agents (active burn effect)
   const activeShips = createMemo(() => {
@@ -135,7 +133,7 @@ export function BurnParticles(props: BurnParticlesProps) {
   onMount(() => {
     const sceneObj = scene()
     if (!sceneObj) {
-      console.warn('BurnParticlesNew: Scene not available')
+      log.brain.warn('BurnParticles: Scene not available')
       return
     }
 
@@ -187,18 +185,10 @@ export function BurnParticles(props: BurnParticlesProps) {
     geometry.setAttribute('aVelocity', new THREE.BufferAttribute(data.velocities, 3))
   })
 
-  // Update shader uniforms with scaled time
+  // Update shader uniforms
   useFrame(({ clock }) => {
-    // Update scaled time (trance mode support deprecated - always normal scale)
-    const timeScale = TRANCE_CONFIG.normalScale
-
-    const realTime = clock.getElapsedTime()
-    const delta = realTime - lastRealTime
-    lastRealTime = realTime
-    scaledTime += delta * timeScale
-
     if (material) {
-      material.uniforms.uTime.value = scaledTime
+      material.uniforms.uTime.value = clock.getElapsedTime()
     }
   })
 

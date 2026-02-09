@@ -41,6 +41,7 @@ const (
 	ServerMessageTypeSynapsesDelta       = "synapses:delta"
 	ServerMessageTypeTravelStarted       = "travel:started"
 	ServerMessageTypeTravelPosition      = "travel:position"
+	ServerMessageTypeClusterUpdate       = "cluster:update"
 	ServerMessageTypeAuthSuccess         = "auth:success"
 	ServerMessageTypeAuthError           = "auth:error"
 	ServerMessageTypeError               = "error"
@@ -200,4 +201,11 @@ type TravelPositionUpdate struct {
 type TravelPositionBatch struct {
 	Ships     []TravelPositionUpdate `json:"ships"`
 	Timestamp int64                  `json:"timestamp"`
+}
+
+// ClusterUpdateEvent is sent when a cluster's state counts change (exploration start/stop)
+// This enables immediate dashboard updates without waiting for periodic state:sync
+type ClusterUpdateEvent struct {
+	Clusters  []SpaceCluster `json:"clusters"`
+	Timestamp int64          `json:"timestamp"`
 }

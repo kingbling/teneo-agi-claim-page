@@ -1,6 +1,5 @@
 import { Show, onMount, createEffect, lazy, Suspense } from 'solid-js'
 import { Router, Route } from '@solidjs/router'
-import { QueryClient, QueryClientProvider } from '@tanstack/solid-query'
 import { Landing } from './pages/Landing'
 import { DiscoveryDashboard } from './pages/DiscoveryDashboard'
 import { configStore } from './stores/configStore'
@@ -21,18 +20,6 @@ const LogsPage = lazy(() => import('./pages/admin/LogsPage'))
 // Admin components
 import { AdminGuard } from './components/admin/AdminGuard'
 import { AdminLayout } from './components/admin/AdminLayout'
-
-// Create a client
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 30_000,
-      gcTime: 5 * 60_000,
-      retry: 2,
-      refetchOnWindowFocus: false,
-    },
-  },
-})
 
 /**
  * Attempt auto-login with stored token and wallet address
@@ -82,11 +69,13 @@ function App() {
     // Auto-login if both token and wallet are available immediately
     if (token && walletAddress) {
       await tryAutoLogin(walletAddress)
+    } else if (walletAddress && authStore.isAuthenticated) {
+      // DEV_AUTH_BYPASS case: authenticated but token might not be returned immediately
+      await userStore.loginUser(walletAddress)
     }
   })
 
   return (
-    <QueryClientProvider client={queryClient}>
       <Show
         when={configStore.isLoaded}
         fallback={
@@ -185,8 +174,8 @@ function App() {
           )} />
         </Router>
       </Show>
-    </QueryClientProvider>
   )
 }
 
 export default App
+/* Force reload: 1770028275 */

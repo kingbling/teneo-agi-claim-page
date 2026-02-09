@@ -8,22 +8,23 @@
 import { createSignal, createEffect, onCleanup, onMount, createMemo, type Accessor } from 'solid-js'
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsType } from 'three/examples/jsm/controls/OrbitControls.js'
-import { useThree, useFrame } from '@/three/hooks'
+import { useThree } from '@/three/hooks'
 import { OrbitControls } from '@/three/components'
 import { SynapseParticlesMinimal } from '@/components/brain/SynapseParticlesMinimal'
 import { SpaceMarkers } from '@/components/brain/SpaceMarkers'
 import { ShipMarkers } from '@/components/brain/AgentMarkers'
 import { SynapseNetwork } from '@/components/brain/SynapseNetwork'
-import { BurnParticles } from '@/components/brain/BurnParticles'
 import { DiscoveryBurst } from '@/components/brain/DiscoveryBurst'
-import { PostProcessingEffects } from '@/components/brain/PostProcessingEffects'
 import { ShipModel3D } from '@/components/brain/ShipModel3D'
 import { TargetBeam } from '@/components/brain/TargetBeam'
 import { SolvingBeam } from '@/components/brain/SolvingBeam'
+import { SolvingSparks } from '@/components/brain/SolvingSparks'
+import { SolvingSynapseHighlight } from '@/components/brain/SolvingSynapseHighlight'
 import { ArrivalPulseManager } from '@/components/brain/ArrivalPulseManager'
-import { TravelPathManager } from '@/components/brain/TravelPath'
 import { CAMERA_CONFIG, LOD_THRESHOLDS, SHIP_ZOOM_CONFIG, SHIP_FOLLOW_CONFIG, constrainToBrainShape } from '@/components/brain/core/brainConstants'
+import { TIMING } from '@/constants/timing'
 import type { SynapseCluster, ShipCluster, Ship, Synapse, SynapseDiscoveryEvent } from '@/stores/shipStore'
+import { log, fmt } from '@/utils/logger'
 
 /**
  * Region camera target for navigating to brain regions
@@ -43,15 +44,17 @@ function isValidVector3(v: THREE.Vector3 | null): boolean {
 }
 
 /**
- * CameraController - Handles camera zoom, LOD changes, and region navigation
+ * Camera animation modes - only one can be active at a time
+ */
+type CameraMode = 'idle' | 'zoom' | 'follow' | 'region'
+
+/**
+ * CameraController - Unified camera control with single animation loop
  *
- * Converted to SolidJS patterns:
- * - Uses createEffect instead of useEffect
- * - Uses createSignal for local state
- * - Uses custom useFrame and useThree hooks
- *
- * Ship follow mode: After initial zoom animation completes, camera smoothly
- * follows the ship using lerp interpolation for cinematic movement.
+ * Uses a state machine approach:
+ * - Single requestAnimationFrame loop handles all camera movement
+ * - Clear priority: FOLLOW > ZOOM > REGION > IDLE
+ * - Effects only trigger state changes, not animations directly
  */
 export function CameraController(props: {
   zoomTarget: Accessor<THREE.Vector3 | null>
@@ -60,305 +63,215 @@ export function CameraController(props: {
   controlsRef: Accessor<OrbitControlsType | null>
   onCameraUpdate?: (update: CameraUpdate) => void
   isShipZoom?: Accessor<boolean>
+  isFollowing?: Accessor<boolean>
 }) {
   const { camera } = useThree()
 
-  // Animation state - using object to persist across effect runs
-  const animationState = {
-    regionAnimationId: null as number | null,
-    zoomAnimationId: null as number | null,
-    originalMinDistance: CAMERA_CONFIG.minDistance,
+  // Centralized animation state
+  const state = {
+    loopId: null as number | null,
+    mode: 'idle' as CameraMode,
+    // Timed animation state (for zoom/region)
+    startPos: new THREE.Vector3(),
+    endPos: new THREE.Vector3(),
+    startTarget: new THREE.Vector3(),
+    endTarget: new THREE.Vector3(),
+    startTime: 0,
+    duration: 0,
+    easeType: 'out' as 'out' | 'inout',
+    // Tracking to prevent duplicate animations
     lastZoomTargetId: '',
+    originalMinDistance: CAMERA_CONFIG.minDistance,
+    // LOD reporting state
+    lastReportedCam: { x: 0, y: 0, z: 0 },
+    lastReportedTarget: { x: 0, y: 0, z: 0 },
   }
 
-  // Track if initial zoom animation is complete for smooth follow mode
-  const [isFollowMode, setIsFollowMode] = createSignal(false)
-  // Store the current follow target for smooth interpolation
-  const [followTarget, setFollowTarget] = createSignal<THREE.Vector3 | null>(null)
+  // Easing functions
+  const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
+  const easeInOutCubic = (t: number) =>
+    t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 
-  // Component-level cleanup for all animations
-  onMount(() => {
-    onCleanup(() => {
-      // Cancel any active animations
-      if (animationState.zoomAnimationId) {
-        cancelAnimationFrame(animationState.zoomAnimationId)
-        animationState.zoomAnimationId = null
-      }
-      if (animationState.regionAnimationId) {
-        cancelAnimationFrame(animationState.regionAnimationId)
-        animationState.regionAnimationId = null
-      }
-
-      // Restore camera constraints
-      const controls = props.controlsRef()
-      if (controls) {
-        controls.minDistance = CAMERA_CONFIG.minDistance
-        controls.maxDistance = CAMERA_CONFIG.maxDistance
-      }
-
-      // Reset follow mode
-      setIsFollowMode(false)
-      setFollowTarget(null)
-    })
-  })
-
-  // LOD update loop and camera position reporting
-  createEffect(() => {
-    const cam = camera()
+  // Main animation loop - runs continuously, checks state each frame
+  const animationLoop = () => {
     const controls = props.controlsRef()
-    if (!cam) return
+    const cam = camera()
 
-    // Track previous values to avoid unnecessary updates
-    let lastCamX = 0, lastCamY = 0, lastCamZ = 0
-    let lastTargetX = 0, lastTargetY = 0, lastTargetZ = 0
-    const POSITION_THRESHOLD = 0.01 // Only update if moved more than this
+    if (controls && cam) {
+      const zoomTarget = props.zoomTarget()
+      const isFollowing = props.isFollowing?.() ?? false
+      const isShipZoom = props.isShipZoom?.() ?? false
 
-    const updateLODAndCamera = () => {
+      // Priority 1: FOLLOW MODE - continuous ship tracking
+      if (isFollowing && zoomTarget && isValidVector3(zoomTarget)) {
+        state.mode = 'follow'
+        const offset = new THREE.Vector3(...SHIP_FOLLOW_CONFIG.followOffset)
+        const targetCamPos = zoomTarget.clone().add(offset)
+
+        const distToCam = cam.position.distanceTo(targetCamPos)
+        const distToTarget = controls.target.distanceTo(zoomTarget)
+
+        // Only lerp if not already at target (prevents drift)
+        if (distToCam > 0.01 || distToTarget > 0.01) {
+          const lerpFactor = SHIP_FOLLOW_CONFIG.followLerpSpeed / 60
+          cam.position.lerp(targetCamPos, lerpFactor)
+          controls.target.lerp(zoomTarget, lerpFactor)
+          controls.update()
+        }
+      }
+      // Priority 2: ZOOM/REGION - timed animations
+      else if (state.mode === 'zoom' || state.mode === 'region') {
+        const elapsed = Date.now() - state.startTime
+        const progress = Math.min(elapsed / state.duration, 1)
+        const eased = state.easeType === 'out'
+          ? easeOutCubic(progress)
+          : easeInOutCubic(progress)
+
+        cam.position.lerpVectors(state.startPos, state.endPos, eased)
+        controls.target.lerpVectors(state.startTarget, state.endTarget, eased)
+        controls.update()
+
+        // Animation complete
+        if (progress >= 1) {
+          // Restore minDistance after non-ship zoom
+          if (state.mode === 'zoom' && !isShipZoom) {
+            controls.minDistance = state.originalMinDistance
+          }
+          state.mode = 'idle'
+        }
+      }
+
+      // Update LOD (runs every frame, cheap calculation)
       const distance = cam.position.distanceTo(new THREE.Vector3(...CAMERA_CONFIG.brainCenter))
       let lod = 0
       if (distance > LOD_THRESHOLDS.lod1) lod = 2
       else if (distance > LOD_THRESHOLDS.lod0) lod = 1
       props.setZoomInfo({ distance, lod })
 
-      // Report camera position for minimap only if position changed significantly
+      // Report camera position for minimap (throttled by delta check)
       if (props.onCameraUpdate) {
-        const target = controls?.target ?? new THREE.Vector3(...CAMERA_CONFIG.brainCenter)
-        const camDelta = Math.abs(cam.position.x - lastCamX) +
-                         Math.abs(cam.position.y - lastCamY) +
-                         Math.abs(cam.position.z - lastCamZ)
-        const targetDelta = Math.abs(target.x - lastTargetX) +
-                            Math.abs(target.y - lastTargetY) +
-                            Math.abs(target.z - lastTargetZ)
+        const camDelta = Math.abs(cam.position.x - state.lastReportedCam.x) +
+                         Math.abs(cam.position.y - state.lastReportedCam.y) +
+                         Math.abs(cam.position.z - state.lastReportedCam.z)
+        const targetDelta = Math.abs(controls.target.x - state.lastReportedTarget.x) +
+                            Math.abs(controls.target.y - state.lastReportedTarget.y) +
+                            Math.abs(controls.target.z - state.lastReportedTarget.z)
 
-        if (camDelta > POSITION_THRESHOLD || targetDelta > POSITION_THRESHOLD) {
-          lastCamX = cam.position.x
-          lastCamY = cam.position.y
-          lastCamZ = cam.position.z
-          lastTargetX = target.x
-          lastTargetY = target.y
-          lastTargetZ = target.z
+        if (camDelta > TIMING.POSITION_THRESHOLD || targetDelta > TIMING.POSITION_THRESHOLD) {
+          state.lastReportedCam = { x: cam.position.x, y: cam.position.y, z: cam.position.z }
+          state.lastReportedTarget = { x: controls.target.x, y: controls.target.y, z: controls.target.z }
           props.onCameraUpdate({
-            position: { x: cam.position.x, y: cam.position.y, z: cam.position.z },
-            target: { x: target.x, y: target.y, z: target.z },
+            position: state.lastReportedCam,
+            target: state.lastReportedTarget,
           })
         }
       }
     }
 
-    updateLODAndCamera()
+    state.loopId = requestAnimationFrame(animationLoop)
+  }
 
-    const interval = setInterval(updateLODAndCamera, 500)  // Reduced from 100ms for better performance
-    onCleanup(() => clearInterval(interval))
+  // Start loop on mount, cleanup on unmount
+  onMount(() => {
+    state.loopId = requestAnimationFrame(animationLoop)
+
+    onCleanup(() => {
+      if (state.loopId) {
+        cancelAnimationFrame(state.loopId)
+        state.loopId = null
+      }
+      const controls = props.controlsRef()
+      if (controls) {
+        controls.minDistance = CAMERA_CONFIG.minDistance
+        controls.maxDistance = CAMERA_CONFIG.maxDistance
+      }
+    })
   })
 
-  // Update follow target when zoom target changes (for smooth follow mode)
+  // Effect: Trigger zoom animation when target changes
   createEffect(() => {
     const zoomTarget = props.zoomTarget()
     const isShipZoom = props.isShipZoom?.() ?? false
-
-    if (zoomTarget && isShipZoom) {
-      setFollowTarget(zoomTarget.clone())
-    } else {
-      setFollowTarget(null)
-      setIsFollowMode(false)
-    }
-  })
-
-  // Smooth camera follow using useFrame (runs every frame when in follow mode)
-  useFrame(({ delta }) => {
+    const isFollowing = props.isFollowing?.() ?? false
     const controls = props.controlsRef()
     const cam = camera()
-    const target = followTarget()
-    const isShipZoom = props.isShipZoom?.() ?? false
 
-    // Only follow when in follow mode and ship zoom is active
-    if (!isFollowMode() || !isShipZoom || !controls || !cam || !target) return
+    // Don't trigger zoom during follow mode
+    if (!zoomTarget || !controls || !cam || isFollowing) return
+    if (!isValidVector3(zoomTarget)) return
 
-    // Calculate desired camera position (target + offset)
-    const offset = new THREE.Vector3(...SHIP_FOLLOW_CONFIG.followOffset)
-    const desiredPosition = target.clone().add(offset)
-
-    // Smooth lerp toward desired position using exponential smoothing
-    const lerpFactor = 1.0 - Math.exp(-SHIP_FOLLOW_CONFIG.followLerpSpeed * delta)
-    cam.position.lerp(desiredPosition, lerpFactor)
-
-    // Smooth lerp the controls target toward the ship
-    controls.target.lerp(target, lerpFactor)
-    controls.update()
-  })
-
-  // Initial zoom animation to target (only on new ship selection)
-  createEffect(() => {
-    const zoomTarget = props.zoomTarget()
-    const controls = props.controlsRef()
-    const cam = camera()
-    const isShipZoom = props.isShipZoom?.() ?? false
-
-    if (!zoomTarget || !controls || !cam) return
-
-    // Validate zoom target to prevent camera flying to infinity
-    if (!isValidVector3(zoomTarget)) {
-      console.warn('Invalid zoom target detected, skipping animation:', zoomTarget)
-      return
-    }
-
-    // Create a unique ID for this zoom target to detect new selections
+    // Check if this is a new target
     const targetId = `${zoomTarget.x.toFixed(3)}-${zoomTarget.y.toFixed(3)}-${zoomTarget.z.toFixed(3)}-${isShipZoom}`
+    if (state.lastZoomTargetId === targetId) return
+    state.lastZoomTargetId = targetId
 
-    // If already in follow mode and target is similar, let follow mode handle it
-    if (isFollowMode() && isShipZoom && animationState.lastZoomTargetId.startsWith(targetId.substring(0, targetId.lastIndexOf('-')))) {
-      // Just update the follow target, don't restart animation
-      return
-    }
-
-    animationState.lastZoomTargetId = targetId
-    setIsFollowMode(false) // Disable follow during initial animation
-
-    // Cancel any ongoing region animation
-    if (animationState.regionAnimationId) {
-      cancelAnimationFrame(animationState.regionAnimationId)
-      animationState.regionAnimationId = null
-    }
-    // Cancel any ongoing zoom animation
-    if (animationState.zoomAnimationId) {
-      cancelAnimationFrame(animationState.zoomAnimationId)
-      animationState.zoomAnimationId = null
-    }
-
-    // Use close zoom offset for ship inspection, default for other targets
+    // Set up zoom animation
     const offset = isShipZoom
       ? new THREE.Vector3(...SHIP_ZOOM_CONFIG.zoomOffset)
       : new THREE.Vector3(0, 0, 3)
 
-    const startPosition = cam.position.clone()
-    const endPosition = zoomTarget.clone().add(offset)
-    const startTarget = controls.target.clone()
-    const duration = isShipZoom ? SHIP_ZOOM_CONFIG.animationDuration : 1000
-    const startTime = Date.now()
+    state.startPos.copy(cam.position)
+    state.endPos.copy(zoomTarget).add(offset)
+    state.startTarget.copy(controls.target)
+    state.endTarget.copy(zoomTarget)
+    state.startTime = Date.now()
+    state.duration = isShipZoom ? SHIP_ZOOM_CONFIG.animationDuration : 1000
+    state.easeType = 'out'
+    state.mode = 'zoom'
 
-    // Store original minDistance before override for close ship zoom
+    // Handle minDistance for ship zoom
     if (isShipZoom) {
-      animationState.originalMinDistance = controls.minDistance
+      state.originalMinDistance = controls.minDistance
       controls.minDistance = SHIP_ZOOM_CONFIG.minDistanceOverride
     }
-
-    const animateCamera = () => {
-      // Safety check - controls might be gone if component unmounted
-      const currentControls = props.controlsRef()
-      const currentCam = camera()
-      if (!currentControls || !currentCam) {
-        animationState.zoomAnimationId = null
-        return
-      }
-
-      const elapsed = Date.now() - startTime
-      const progress = Math.min(elapsed / duration, 1)
-      const eased = 1 - Math.pow(1 - progress, 3) // Ease out cubic
-
-      currentCam.position.lerpVectors(startPosition, endPosition, eased)
-      // Also animate the target for smoother transition
-      currentControls.target.lerpVectors(startTarget, zoomTarget, eased)
-      currentControls.update()
-
-      if (progress < 1) {
-        animationState.zoomAnimationId = requestAnimationFrame(animateCamera)
-      } else {
-        animationState.zoomAnimationId = null
-        if (!isShipZoom) {
-          // Restore minDistance after non-ship zoom completes
-          currentControls.minDistance = animationState.originalMinDistance
-        } else {
-          // Enable follow mode after initial zoom completes
-          setIsFollowMode(true)
-        }
-      }
-    }
-
-    animateCamera()
   })
 
-  // Restore minDistance when exiting ship zoom mode
-  createEffect(() => {
-    const isShipZoom = props.isShipZoom?.() ?? false
-    const controls = props.controlsRef()
-
-    if (!isShipZoom && controls) {
-      // Restore original minDistance when exiting ship zoom
-      controls.minDistance = animationState.originalMinDistance
-    }
-  })
-
-  // Animate camera to region viewpoint
+  // Effect: Trigger region animation
   createEffect(() => {
     const regionCamera = props.regionCamera()
+    const isShipZoom = props.isShipZoom?.() ?? false
+    const isFollowing = props.isFollowing?.() ?? false
     const controls = props.controlsRef()
     const cam = camera()
-    const isShipZoom = props.isShipZoom?.() ?? false
 
     if (!controls || !cam) return
+    // Don't animate regions during ship zoom or follow
+    if (isShipZoom || isFollowing) return
+    // Don't interrupt zoom animation
+    if (state.mode === 'zoom') return
+    if (!regionCamera) return
 
-    // Don't animate to default view if in ship zoom mode - let ship zoom handle camera
-    if (!regionCamera && isShipZoom) return
+    // Set up region animation
+    state.startPos.copy(cam.position)
+    state.endPos.set(...regionCamera.position)
+    state.startTarget.copy(controls.target)
+    state.endTarget.set(...regionCamera.target)
+    state.startTime = Date.now()
+    state.duration = 1200
+    state.easeType = 'inout'
+    state.mode = 'region'
+  })
 
-    // Don't start region animation if there's an active zoom animation
-    if (animationState.zoomAnimationId) return
+  // Effect: Handle minDistance restoration when exiting ship zoom
+  createEffect(() => {
+    const isShipZoom = props.isShipZoom?.() ?? false
+    const isFollowing = props.isFollowing?.() ?? false
+    const controls = props.controlsRef()
 
-    // Cancel any ongoing region animation
-    if (animationState.regionAnimationId) {
-      cancelAnimationFrame(animationState.regionAnimationId)
-      animationState.regionAnimationId = null
+    if (!isShipZoom && !isFollowing && controls && state.mode === 'idle') {
+      controls.minDistance = state.originalMinDistance
     }
+  })
 
-    // Disable follow mode when navigating to region
-    setIsFollowMode(false)
+  // Effect: Set minDistance when entering follow mode
+  createEffect(() => {
+    const isFollowing = props.isFollowing?.() ?? false
+    const controls = props.controlsRef()
 
-    // If no region selected, animate back to default view
-    const targetPosition = regionCamera
-      ? new THREE.Vector3(...regionCamera.position)
-      : new THREE.Vector3(...CAMERA_CONFIG.defaultPosition)
-    const targetLookAt = regionCamera
-      ? new THREE.Vector3(...regionCamera.target)
-      : new THREE.Vector3(...CAMERA_CONFIG.brainCenter)
-
-    const startPosition = cam.position.clone()
-    const startTarget = controls.target.clone()
-
-    const duration = 1200 // 1.2s for region transitions
-    const startTime = Date.now()
-
-    const animateToRegion = () => {
-      // Safety check - controls might be gone if component unmounted
-      const currentControls = props.controlsRef()
-      const currentCam = camera()
-      if (!currentControls || !currentCam) {
-        animationState.regionAnimationId = null
-        return
-      }
-
-      const elapsed = Date.now() - startTime
-      const progress = Math.min(elapsed / duration, 1)
-
-      // Ease-in-out cubic for smooth feel
-      const eased =
-        progress < 0.5
-          ? 4 * progress * progress * progress
-          : 1 - Math.pow(-2 * progress + 2, 3) / 2
-
-      // Interpolate camera position
-      currentCam.position.lerpVectors(startPosition, targetPosition, eased)
-
-      // Interpolate orbit target
-      currentControls.target.lerpVectors(startTarget, targetLookAt, eased)
-      currentControls.update()
-
-      if (progress < 1) {
-        animationState.regionAnimationId = requestAnimationFrame(animateToRegion)
-      } else {
-        animationState.regionAnimationId = null
-      }
+    if (isFollowing && controls) {
+      state.originalMinDistance = controls.minDistance
+      controls.minDistance = SHIP_ZOOM_CONFIG.minDistanceOverride
     }
-
-    animateToRegion()
   })
 
   return null
@@ -455,12 +368,18 @@ export interface BrainSceneMinimalProps {
   selectedShipId?: string | null
   // Ship zoom mode - triggers close camera zoom for ship inspection
   isShipZoom?: boolean
-  // Callback to exit ship zoom mode when user interacts with camera
-  onExitShipZoom?: () => void
+  // Camera following mode - continuous tracking of moving ship
+  isFollowing?: boolean
   // Synapse type filter - dims non-matching synapses and makes them non-selectable
   synapseTypeFilter?: string | null
   // Exploration target for visualizing ship-to-synapse connection
   explorationTarget?: Synapse | null
+  // Current synapse being explored by the selected ship (for solving beam animation)
+  currentExplorationSynapse?: Synapse | null
+  // Whether user has at least one idle ship available for deployment
+  hasIdleShip?: boolean
+  // User level for unlocking synapse types
+  userLevel?: number
 }
 
 /**
@@ -563,12 +482,6 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
         maxPolarAngle={Math.PI * 0.75}
         target={CAMERA_CONFIG.brainCenter}
         ref={setControlsRef}
-        onStart={() => {
-          // Exit ship zoom mode when user starts interacting - they want free control
-          if (props.isShipZoom && props.onExitShipZoom) {
-            props.onExitShipZoom()
-          }
-        }}
       />
 
       {/* Scene lighting and fog */}
@@ -582,15 +495,16 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
         controlsRef={controlsRef}
         onCameraUpdate={onCameraUpdate}
         isShipZoom={() => props.isShipZoom ?? false}
+        isFollowing={() => props.isFollowing ?? false}
       />
 
-      {/* Core particles with region coloring - depth-filtered when zoomed on ship */}
+      {/* Core particles with region coloring */}
       <SynapseParticlesMinimal
         selectedRegionIndex={selectedRegionIndex()}
         highlightIntensity={highlightIntensity()}
         lodLevel={currentLodLevel()}
         shipPosition={shipWorldPosition()}
-        isShipZoom={showShipModel()}
+        isShipZoom={false}  // Disabled: depth cutout looked bad
       />
 
       {/* Synapse clusters - always visible for selection */}
@@ -600,15 +514,17 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
           onSynapseClick={onSpaceClick}
           onIndividualSynapseClick={onIndividualSynapseClick}
           filterType={props.synapseTypeFilter}
+          hasIdleShip={props.hasIdleShip}
+          userLevel={props.userLevel}
         />
       )}
 
-      {/* Synapse network connections - depth-filtered when zoomed on ship */}
+      {/* Synapse network connections */}
       {spaceClusters().length > 0 && (
         <SynapseNetwork
           synapseClusters={spaceClusters()}
           shipPosition={shipWorldPosition()}
-          isShipZoom={showShipModel()}
+          isShipZoom={false}  // Disabled: depth cutout looked bad
         />
       )}
 
@@ -632,42 +548,76 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
       />
 
       {/* 3D Ship model - shown when zoomed in close on a ship */}
-      {showShipModel() && selectedShip() && (
-        <ShipModel3D
-          ship={selectedShip()!}
-          isVisible={showShipModel()}
-        />
-      )}
-
-      {/* Solving beams - visualize connection between exploring ships and their synapses */}
-      {userAgents()
-        .filter(ship => ship.state === 'exploring' && ship.targetPositionX !== undefined)
-        .map(ship => (
-          <SolvingBeam
+      {(() => {
+        const shouldShowModel = showShipModel()
+        const ship = selectedShip()
+        // Debug logging
+        if (shouldShowModel || ship) {
+          log.brain.debug('Ship model check:', {
+            showShipModel: shouldShowModel,
+            selectedShipId: fmt.shortId(props.selectedShipId),
+            hasShip: !!ship,
+            shipId: fmt.shortId(ship?.id),
+          })
+        }
+        return shouldShowModel && ship ? (
+          <ShipModel3D
             ship={ship}
-            synapsePosition={{
-              x: ship.targetPositionX!,
-              y: ship.targetPositionY!,
-              z: ship.targetPositionZ!,
-            }}
-            isActive={true}
+            isVisible={shouldShowModel}
           />
-        ))}
+        ) : null
+      })()}
 
-      {/* Burn particles for active agents */}
-      <BurnParticles userAgents={userAgents()} />
+      {/* Solving beams - visualize connection between solving ships and their synapses */}
+      {userAgents()
+        .filter(ship => {
+          if (ship.state !== 'solving') return false
+          // Ship has targetPosition from travel
+          if (ship.targetPositionX !== undefined) return true
+          // Ship is solving and we have synapse data with matching ID
+          if (ship.currentSynapseId && props.currentExplorationSynapse?.id === ship.currentSynapseId) return true
+          return false
+        })
+        .map(ship => {
+          // Get synapse type for animation speed - use currentExplorationSynapse if it matches this ship
+          const matchesSynapse = props.currentExplorationSynapse?.id === ship.currentSynapseId
+          const synapseType = matchesSynapse ? props.currentExplorationSynapse?.synapseType : undefined
+
+          // Use ship's targetPosition if available, otherwise fall back to synapse position
+          const synapsePos = ship.targetPositionX !== undefined
+            ? { x: ship.targetPositionX, y: ship.targetPositionY!, z: ship.targetPositionZ! }
+            : matchesSynapse && props.currentExplorationSynapse
+              ? { x: props.currentExplorationSynapse.positionX, y: props.currentExplorationSynapse.positionY, z: props.currentExplorationSynapse.positionZ }
+              : null
+
+          if (!synapsePos) return null
+
+          return (
+            <>
+              <SolvingBeam
+                ship={ship}
+                synapsePosition={synapsePos}
+                isActive={true}
+                synapseType={synapseType}
+              />
+              <SolvingSparks
+                ship={ship}
+                synapsePosition={synapsePos}
+                isActive={true}
+                synapseType={synapseType}
+              />
+            </>
+          )
+        })}
+
+      {/* Highlight synapse being solved */}
+      <SolvingSynapseHighlight synapse={props.currentExplorationSynapse} />
 
       {/* Arrival pulse effects - shown when ships arrive at synapses */}
       <ArrivalPulseManager ships={userAgents()} />
 
-      {/* Travel path visualization - shows dotted line to destination for deploying ships */}
-      <TravelPathManager ships={userAgents()} />
-
       {/* Discovery effects - hidden when zoomed on ship */}
       {!showShipModel() && <DiscoveryBurst recentDiscoveries={recentDiscoveries()} />}
-
-      {/* Post-processing effects - minimal bloom to keep particles crisp */}
-      <PostProcessingEffects bloomIntensity={0.08} vignetteIntensity={0.2} />
     </>
   )
 }

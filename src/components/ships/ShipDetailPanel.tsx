@@ -1,14 +1,58 @@
-import { Show, createMemo } from 'solid-js'
-import { X, Navigation, Clock, Users, Target, ArrowLeft, Pause, Play } from 'lucide-solid'
-import { shipStore, type Ship } from '@/stores/shipStore'
+import { Show, createMemo, createSignal, createEffect, onCleanup } from 'solid-js'
+import { X, Navigation, Clock, Users, Target, ArrowLeft, Pause, Zap } from 'lucide-solid'
+import { shipStore } from '@/stores/shipStore'
 import {
   SYNAPSE_CONFIG,
-  SYNAPSE_TYPE_COLORS,
   formatPoints,
   formatETA,
   getSynapseTypeLabel,
   type SynapseType,
 } from '@/types/game'
+import { SHIP_STATUS_COLORS, getSynapseRgbColor } from '@/constants/colors'
+
+/**
+ * TickingCounter - Fast-updating display showing points accumulating in real-time
+ */
+function TickingCounter(props: { baseValue: number; ratePerMin: number }) {
+  const [displayValue, setDisplayValue] = createSignal(props.baseValue)
+  const [lastBaseValue, setLastBaseValue] = createSignal(props.baseValue)
+  const [lastUpdateTime, setLastUpdateTime] = createSignal(Date.now())
+
+  // Reset when base value changes (server update)
+  createEffect(() => {
+    const newBase = props.baseValue
+    if (newBase !== lastBaseValue()) {
+      setLastBaseValue(newBase)
+      setDisplayValue(newBase)
+      setLastUpdateTime(Date.now())
+    }
+  })
+
+  // Fast interval to interpolate between server updates
+  createEffect(() => {
+    const rate = props.ratePerMin
+    if (rate <= 0) return
+
+    const interval = setInterval(() => {
+      const elapsed = (Date.now() - lastUpdateTime()) / 1000 // seconds
+      const pointsPerSecond = rate / 60
+      const interpolated = lastBaseValue() + elapsed * pointsPerSecond
+      setDisplayValue(interpolated)
+    }, 50) // Update every 50ms for smooth animation
+
+    onCleanup(() => clearInterval(interval))
+  })
+
+  return (
+    <div class="flex items-center gap-1.5 bg-teal-500/10 border border-teal-500/30 rounded px-2 py-1">
+      <Zap class="w-3 h-3 text-teal-400 animate-pulse" />
+      <span class="font-mono text-sm text-teal-300 tabular-nums">
+        {displayValue().toFixed(1)}
+      </span>
+      <span class="text-[10px] text-teal-500">pts</span>
+    </div>
+  )
+}
 
 interface ShipDetailPanelProps {
   onClose: () => void
@@ -16,12 +60,14 @@ interface ShipDetailPanelProps {
 
 /**
  * ShipDetailPanel - Compact floating panel for ship details
+ *
+ * Shows selected ship info, exploration progress, and actions.
+ * Deployment is handled separately by DeploymentPanel.
  */
 export function ShipDetailPanel(props: ShipDetailPanelProps) {
   const ship = createMemo(() => shipStore.selectedShip)
   const synapse = createMemo(() => shipStore.currentExplorationSynapse)
   const explorers = createMemo(() => shipStore.currentExplorers)
-  const explorationTarget = createMemo(() => shipStore.explorationTarget)
 
   const travelProgress = createMemo(() => {
     const s = ship()
@@ -32,23 +78,13 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
     return { progress, remainingMinutes: remainingMs / 60000 }
   })
 
-  const statusConfig: Record<Ship['state'], { iconClass: string; badgeClass: string; barClass: string; label: string }> = {
-    idle: { iconClass: 'text-gray-400', badgeClass: 'bg-gray-500/20 text-gray-400', barClass: 'bg-gray-500', label: 'Idle' },
-    exploring: { iconClass: 'text-teal-400', badgeClass: 'bg-teal-500/20 text-teal-400', barClass: 'bg-teal-500', label: 'Exploring' },
-    deploying: { iconClass: 'text-yellow-400', badgeClass: 'bg-yellow-500/20 text-yellow-400', barClass: 'bg-yellow-500', label: 'Deploying' },
-    returning: { iconClass: 'text-purple-400', badgeClass: 'bg-purple-500/20 text-purple-400', barClass: 'bg-purple-500', label: 'Returning' },
-  }
-
-  const getSynapseColor = (type: SynapseType | undefined) => {
-    const c = SYNAPSE_TYPE_COLORS[type || 'minor'] || SYNAPSE_TYPE_COLORS.minor
-    return `rgb(${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)})`
-  }
+  const getSynapseColor = (type: SynapseType | undefined) => getSynapseRgbColor(type)
 
   return (
     <Show when={ship()}>
       {(currentShip) => {
         // Use getter function for reactivity - plain variable assignment doesn't track changes
-        const getStatus = () => statusConfig[currentShip().state] || statusConfig.idle
+        const getStatus = () => SHIP_STATUS_COLORS[currentShip().state] || SHIP_STATUS_COLORS.idle
 
         return (
           <div class="pointer-events-auto w-72 rounded-lg bg-gray-900/90 backdrop-blur border border-gray-700/50 shadow-xl text-sm">
@@ -94,7 +130,7 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
               </Show>
 
               {/* Exploring Synapse */}
-              <Show when={currentShip().state === 'exploring' && synapse()}>
+              <Show when={currentShip().state === 'solving' && synapse()}>
                 {(currentSynapse) => {
                   const config = SYNAPSE_CONFIG[currentSynapse().synapseType] || SYNAPSE_CONFIG.minor
                   const pct = currentSynapse().pointsRequired > 0
@@ -121,6 +157,15 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
                         </div>
                       </div>
 
+                      {/* Live points counter */}
+                      <div class="flex items-center justify-between">
+                        <span class="text-[10px] text-gray-500">Points accumulated</span>
+                        <TickingCounter
+                          baseValue={currentSynapse().pointsAccumulated}
+                          ratePerMin={currentShip().currentPointsPerMin ?? 0}
+                        />
+                      </div>
+
                       {/* Reward */}
                       <div class="flex items-center justify-between text-xs">
                         <span class="text-gray-500">Reward</span>
@@ -139,27 +184,9 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
                 }}
               </Show>
 
-              {/* Idle - show target if selected, otherwise prompt to select a synapse */}
+              {/* Idle state - prompt to click synapse */}
               <Show when={currentShip().state === 'idle'}>
-                <Show when={explorationTarget()} fallback={
-                  <p class="text-xs text-gray-500 text-center py-2">Click a synapse to explore</p>
-                }>
-                  {(target) => {
-                    const config = SYNAPSE_CONFIG[target().synapseType as SynapseType] || SYNAPSE_CONFIG.minor
-                    return (
-                      <div class="p-2 rounded bg-teal-500/10 border border-teal-500/20 space-y-1">
-                        <div class="flex items-center gap-1.5 text-xs">
-                          <Target class="w-3 h-3 text-teal-400" />
-                          <span class="text-white">{getSynapseTypeLabel(target().synapseType as SynapseType)}</span>
-                        </div>
-                        <div class="flex justify-between text-[10px]">
-                          <span class="text-gray-500">{formatPoints(target().pointsRequired)} pts</span>
-                          <span class="text-amber-400">{formatPoints(config.agiReward)} $AGI</span>
-                        </div>
-                      </div>
-                    )
-                  }}
-                </Show>
+                <p class="text-xs text-gray-500 text-center py-2">Click a synapse to deploy</p>
               </Show>
 
               {/* Stats row */}
@@ -176,23 +203,7 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
 
               {/* Actions */}
               <div class="flex gap-2">
-                <Show when={currentShip().state === 'idle' && explorationTarget()}>
-                  <button
-                    onClick={() => {
-                      const target = explorationTarget()
-                      if (target) {
-                        // Use travelToSynapse for the full flow: travel then auto-explore
-                        shipStore.travelToSynapse(currentShip().id, target.id, currentShip().currentPointsPerMin || 100)
-                      }
-                    }}
-                    class="flex-1 py-1.5 rounded bg-teal-500/20 border border-teal-500/30 text-teal-400 text-xs font-medium hover:bg-teal-500/30 flex items-center justify-center gap-1"
-                  >
-                    <Play class="w-3 h-3" />
-                    Travel & Explore
-                  </button>
-                </Show>
-
-                <Show when={currentShip().state === 'exploring'}>
+                <Show when={currentShip().state === 'solving'}>
                   <button
                     onClick={() => shipStore.leaveExploration(currentShip().id)}
                     class="flex-1 py-1.5 rounded bg-red-500/20 border border-red-500/30 text-red-400 text-xs font-medium hover:bg-red-500/30 flex items-center justify-center gap-1"

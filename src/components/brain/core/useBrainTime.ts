@@ -1,20 +1,18 @@
 /**
- * useBrainTime - SolidJS Version (Stub)
+ * useBrainTime - SolidJS Version
  *
  * Unified time management for brain visualization.
- * Trance mode has been deprecated - always uses normal time scale.
  */
 
 import { createSignal, onMount, onCleanup } from 'solid-js'
-import { TRANCE_CONFIG } from './brainConstants'
 
 /**
  * useBrainTime - Provides time values for brain visualization
  *
  * @returns Object with:
- *   - scaledTime: Cumulative time (always at normal scale since trance is deprecated)
+ *   - scaledTime: Cumulative time
  *   - deltaTime: Frame delta
- *   - timeScale: Always 1.0 (trance mode deprecated)
+ *   - timeScale: Always 1.0
  *   - realTime: Actual elapsed time
  */
 export function useBrainTime() {
@@ -33,7 +31,7 @@ export function useBrainTime() {
 
       setDeltaTime(delta)
       setRealTime((prev) => prev + delta)
-      setScaledTime((prev) => prev + delta * TRANCE_CONFIG.normalScale)
+      setScaledTime((prev) => prev + delta)
 
       animationId = requestAnimationFrame(update)
     }
@@ -48,8 +46,7 @@ export function useBrainTime() {
   return {
     scaledTime,
     deltaTime,
-    timeScale: () => TRANCE_CONFIG.normalScale,
-    isTranceActive: () => false, // Trance mode deprecated
+    timeScale: () => 1.0,
     realTime,
   }
 }

@@ -7,9 +7,8 @@
 
 import { createRoot } from 'solid-js'
 import { createStore } from 'solid-js/store'
-
-// API Configuration - empty string means same-origin (App Platform deployment)
-const API_URL = import.meta.env.VITE_API_URL ?? ''
+import { API_URL } from '@/constants/api'
+import { log } from '@/utils/logger'
 
 // ============ TYPES ============
 
@@ -88,7 +87,7 @@ function createConfigStore() {
       const config: GameConfig = await response.json()
       setState({ gameConfig: config, isLoaded: true, error: null })
     } catch (error) {
-      console.error('Failed to fetch game config:', error)
+      log.config.error('Failed to fetch game config:', error)
       setState({
         error: error instanceof Error ? error.message : 'Unknown error',
         isLoaded: false

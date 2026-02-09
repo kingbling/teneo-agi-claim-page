@@ -4,6 +4,7 @@ import type { SynapseType } from '@/types/game'
 import { authStore } from './authStore'
 import { userStore } from './userStore'
 import { toast } from '@/components/ui/Toast'
+import { log, fmt } from '@/utils/logger'
 
 // API Configuration - empty string means same-origin (App Platform deployment)
 const API_URL = import.meta.env.VITE_API_URL ?? ''
@@ -27,11 +28,11 @@ function mapServerSynapseState(serverState: string): 'undiscovered' | 'being_exp
 
 // Map server ship states to client ship states
 // Server sends: idle, traveling, solving, returning
-// Client expects: idle, deploying, exploring, returning
+// Client expects: idle, deploying, solving, returning
 function mapServerShipState(serverState: string): ShipStatus {
   switch (serverState) {
     case 'traveling': return 'deploying'
-    case 'solving': return 'exploring'
+    case 'solving': return 'solving'
     case 'returning': return 'returning'
     case 'searching': return 'idle'  // Deprecated - treat as idle
     case 'idle':
@@ -41,7 +42,8 @@ function mapServerShipState(serverState: string): ShipStatus {
 }
 
 // Ship Status (simplified from Agent) - 'searching' removed as obsolete
-export type ShipStatus = 'idle' | 'exploring' | 'deploying' | 'returning'
+// Note: 'solving' was renamed from 'exploring' to better reflect ship is working on a synapse
+export type ShipStatus = 'idle' | 'solving' | 'deploying' | 'returning'
 
 // Ship Type (visual style)
 export type ShipType = 'neuron' | 'synapse' | 'dendrite'
@@ -442,8 +444,7 @@ function createShipStore() {
     switch (message.type) {
       case 'state:sync': {
         const world = message.data
-        console.log('[WebSocket state:sync] Received world:', world)
-        console.log('[WebSocket state:sync] Cluster count:', world.synapseClusters?.length)
+        log.ws.info('state:sync - Received world, cluster count:', world.synapseClusters?.length)
 
         // Map server clusters to client format and separate by LOD level
         const rawClusters = world.synapseClusters || []
@@ -477,8 +478,13 @@ function createShipStore() {
         // Ship state updates from server - MERGES with local state (not a full replacement)
         // Server sends partial updates (single ship or subset), client merges them
         const { ships, timestamp } = message.data
-        console.log('[WebSocket ships:sync] Received ships:', ships?.length, 'timestamp:', timestamp)
-        console.log('[WebSocket ships:sync] Ships data:', ships?.map(s => ({ id: s.id.slice(0, 8), state: s.state, pos: `(${s.positionX?.toFixed(2)},${s.positionY?.toFixed(2)},${s.positionZ?.toFixed(2)})`, rotationY: s.rotationY !== undefined ? (s.rotationY * 180 / Math.PI).toFixed(1) + '°' : 'none' })))
+        log.ws.info('ships:sync - Received', ships?.length, 'ships, timestamp:', timestamp)
+        log.ws.debug('ships:sync data:', ships?.map((s: Ship) => ({
+          id: fmt.shortId(s.id),
+          state: s.state,
+          pos: fmt.pos(s.positionX, s.positionY, s.positionZ),
+          rotationY: fmt.deg(s.rotationY),
+        })))
         if (!Array.isArray(ships)) break
 
         setState(produce((s) => {
@@ -492,48 +498,84 @@ function createShipStore() {
             // Keep local state if it was modified more recently than the server's timestamp
             // This prevents flickering when user action is followed by stale WebSocket sync
             if (localShip?._lastLocalUpdate && localShip._lastLocalUpdate > timestamp) {
+              log.ws.debug('ships:sync - Skipping stale update for ship', fmt.shortId(serverShip.id))
               continue // Skip this update, keep local state
             }
 
-            // Map server state to client state (server: traveling/solving → client: deploying/exploring)
-            // IMPORTANT: Preserve position, rotation, and travel data from local ship if server doesn't send them
-            // This prevents ships from snapping to incorrect positions during sync
+            // === BULLETPROOF ANIMATION DATA PRESERVATION ===
+            // Check if local ship has animation data AND travel is still in progress
+            // This is independent of state - we preserve animation data based on timing, not state
+            const hasLocalAnimationData = localShip?.travelStartTime != null &&
+              localShip?.travelDuration != null &&
+              localShip.travelDuration > 0
+            const travelStillInProgress = hasLocalAnimationData &&
+              Date.now() < (localShip!.travelStartTime! + localShip!.travelDuration!)
+
+            // Map server state to client state (server: traveling/solving → client: deploying/solving)
+            const mappedState = mapServerShipState(serverShip.state)
+            const serverIsTraveling = serverShip.state === 'traveling'
+
+            // Override state if travel is still in progress locally
+            const finalState = travelStillInProgress ? 'deploying' as const : mappedState
+
+            // Check if ship is solving (we need to preserve its targetPosition for synapse location)
+            const shouldPreserveTargetPosition = (finalState === 'solving' || localShip?.state === 'solving') &&
+              localShip?.targetPositionX !== undefined
+
+            // Log animation data preservation
+            if (travelStillInProgress) {
+              log.ws.success('ships:sync - PRESERVING animation data!', fmt.shortId(serverShip.id), {
+                localState: localShip?.state,
+                serverState: serverShip.state,
+                finalState,
+                travelTimeRemaining: fmt.ms((localShip!.travelStartTime! + localShip!.travelDuration!) - Date.now()),
+              })
+            }
+
+            // Determine position source
             const serverHasPosition = serverShip.positionX !== undefined &&
               serverShip.positionY !== undefined &&
               serverShip.positionZ !== undefined
-            // Check if local ship is actively deploying (traveling)
-            const localIsDeploying = localShip?.state === 'deploying' &&
-              localShip.travelStartTime &&
-              localShip.travelDuration &&
-              Date.now() < localShip.travelStartTime + localShip.travelDuration
-            // Use server state normally, but preserve deploying state if travel is still in progress
-            const mappedState = mapServerShipState(serverShip.state)
-            const finalState = localIsDeploying ? 'deploying' as const : mappedState
-            // Check if ship is exploring OR arriving (we need to preserve its targetPosition)
-            // Use mappedState instead of localShip.state because localShip might not be updated yet
-            const shouldPreserveTargetPosition = (finalState === 'exploring' || localShip?.state === 'exploring') && localShip.targetPositionX !== undefined
 
-            const mergedShip = {
+            // Build merged ship
+            const mergedShip: Ship = {
               ...serverShip,
               state: finalState,
-              // Preserve local position if server doesn't send one (prevents ships from disappearing)
-              positionX: serverHasPosition ? serverShip.positionX : localShip?.positionX ?? 0,
-              positionY: serverHasPosition ? serverShip.positionY : localShip?.positionY ?? 0,
-              positionZ: serverHasPosition ? serverShip.positionZ : localShip?.positionZ ?? 0,
+              // Preserve local position if server doesn't send one
+              positionX: serverHasPosition ? serverShip.positionX : localShip?.positionX,
+              positionY: serverHasPosition ? serverShip.positionY : localShip?.positionY,
+              positionZ: serverHasPosition ? serverShip.positionZ : localShip?.positionZ,
               // Preserve rotationY from local ship since server doesn't send it in ShipDTO
-              rotationY: localShip?.rotationY ?? serverShip.rotationY ?? 0,
-              // Preserve travel animation data if ship is still traveling OR exploring
-              ...(localIsDeploying || shouldPreserveTargetPosition ? {
-                startPositionX: localShip.startPositionX,
-                startPositionY: localShip.startPositionY,
-                startPositionZ: localShip.startPositionZ,
+              rotationY: localShip?.rotationY ?? serverShip.rotationY,
+              // ALWAYS preserve animation data if travel is still in progress
+              ...(travelStillInProgress ? {
+                startPositionX: localShip!.startPositionX,
+                startPositionY: localShip!.startPositionY,
+                startPositionZ: localShip!.startPositionZ,
+                targetPositionX: localShip!.targetPositionX,
+                targetPositionY: localShip!.targetPositionY,
+                targetPositionZ: localShip!.targetPositionZ,
+                travelStartTime: localShip!.travelStartTime,
+                travelDuration: localShip!.travelDuration,
+                currentSynapseId: localShip!.currentSynapseId,
+                _lastLocalUpdate: localShip!._lastLocalUpdate,
+              } : shouldPreserveTargetPosition && localShip ? {
+                // Preserve target position for solving ships (synapse location)
                 targetPositionX: localShip.targetPositionX,
                 targetPositionY: localShip.targetPositionY,
                 targetPositionZ: localShip.targetPositionZ,
-                travelStartTime: localShip.travelStartTime,
-                travelDuration: localShip.travelDuration,
                 currentSynapseId: localShip.currentSynapseId,
-                _lastLocalUpdate: localShip._lastLocalUpdate,
+              } : serverIsTraveling ? {
+                // Server is traveling but local doesn't have data yet - use server data
+                startPositionX: serverShip.startPositionX,
+                startPositionY: serverShip.startPositionY,
+                startPositionZ: serverShip.startPositionZ,
+                targetPositionX: serverShip.targetPositionX,
+                targetPositionY: serverShip.targetPositionY,
+                targetPositionZ: serverShip.targetPositionZ,
+                travelStartTime: serverShip.travelStartTime,
+                travelDuration: serverShip.travelDuration,
+                currentSynapseId: serverShip.currentSynapseId,
               } : {}),
             }
 
@@ -550,27 +592,74 @@ function createShipStore() {
         setState((s) => {
           userStore.setCurrentShipCount(safeUserShips(s).length)
         })
+
+        // For solving ships without targetPosition, fetch synapse details to get position
+        // This handles fresh page load where ships are solving but we don't have synapse position yet
+        for (const serverShip of ships) {
+          const mappedState = mapServerShipState(serverShip.state)
+          const synapseId = serverShip.currentSynapseId || serverShip.targetSpaceId
+          if (mappedState === 'solving' && synapseId) {
+            const localShip = state.userShips?.find(s => s.id === serverShip.id)
+            // If ship is solving but has no targetPosition, fetch synapse to get it
+            if (!localShip?.targetPositionX) {
+              log.ws.info(`ships:sync - Solving ship ${fmt.shortId(serverShip.id)} needs synapse position, fetching...`)
+              fetchSynapseDetails(synapseId).then(synapse => {
+                if (synapse) {
+                  setState(produce((s) => {
+                    const shipIndex = safeUserShips(s).findIndex(ship => ship.id === serverShip.id)
+                    if (shipIndex >= 0) {
+                      s.userShips[shipIndex] = {
+                        ...s.userShips[shipIndex],
+                        targetPositionX: synapse.positionX,
+                        targetPositionY: synapse.positionY,
+                        targetPositionZ: synapse.positionZ,
+                        currentSynapseId: synapse.id,
+                      }
+                    }
+                  }))
+                }
+              })
+            }
+          }
+        }
         break
       }
 
       case 'travel:started': {
         // Handle travel:started event - update ship with travel interpolation data
         const event = message.data
-        console.log('[WebSocket travel:started] Ship traveling:', event.shipId)
+        log.travel.critical('travel:started RECEIVED!')
+        log.travel.debug('Full event data:', event)
+
+        const travelDuration = event.travelDuration
+        const travelStartTime = event.travelStartTime
+
+        // Calculate distance for logging
+        const dx = event.targetPositionX - event.startPositionX
+        const dy = (event.targetPositionY ?? 0) - (event.startPositionY ?? 0)
+        const dz = (event.targetPositionZ ?? 0) - (event.startPositionZ ?? 0)
+        const distance = Math.sqrt(dx * dx + dy * dy + dz * dz)
+
+        log.travel.info('travel:started key values:', {
+          shipId: fmt.shortId(event.shipId),
+          startPos: fmt.pos(event.startPositionX, event.startPositionY, event.startPositionZ),
+          targetPos: fmt.pos(event.targetPositionX, event.targetPositionY, event.targetPositionZ),
+          travelStartTime,
+          travelDuration: fmt.ms(travelDuration),
+          distance: distance.toFixed(3),
+        })
         const now = Date.now()
 
         // Calculate initial rotation (yaw) toward target - same formula as engine
-        const dx = event.targetPositionX - event.startPositionX
-        const dz = event.targetPositionZ - event.startPositionZ
         const initialRotationY = Math.atan2(dx, -dz)  // Ship model faces -Z
 
-        console.log('[WebSocket travel:started] Initial rotation:', (initialRotationY * 180 / Math.PI).toFixed(1) + '°')
+        log.travel.debug('travel:started initial rotation:', fmt.deg(initialRotationY))
 
         setState(produce((s) => {
           // Use map pattern to ensure proper reactivity (like agents:update handler)
           s.userShips = safeUserShips(s).map(ship => {
             if (ship.id !== event.shipId) return ship
-            console.log('[WebSocket travel:started] Updating ship state to deploying:', ship.id)
+            log.travel.info('travel:started - Updating ship to deploying:', fmt.shortId(ship.id))
             return {
               ...ship,
               state: 'deploying' as const,
@@ -580,11 +669,10 @@ function createShipStore() {
               targetPositionX: event.targetPositionX,
               targetPositionY: event.targetPositionY,
               targetPositionZ: event.targetPositionZ,
-              travelStartTime: event.travelStartTime,
-              travelDuration: event.travelDuration,
+              travelStartTime,
+              travelDuration,
               currentSynapseId: event.targetSynapseId,
-              rotationY: initialRotationY,  // Initialize rotation immediately
-              // Set local timestamp to prevent ships:sync from overwriting
+              rotationY: initialRotationY,
               _lastLocalUpdate: now,
             }
           })
@@ -597,12 +685,12 @@ function createShipStore() {
         const batch = message.data as TravelPositionBatch
         if (!batch.ships?.length) break
 
-        console.log('[WebSocket travel:position] Received position updates for', batch.ships.length, 'ships')
-        console.log('[WebSocket travel:position] Updates:', batch.ships.map(u => ({
-          shipId: u.shipId.slice(0, 8),
-          pos: `(${u.positionX.toFixed(2)},${u.positionY.toFixed(2)},${u.positionZ.toFixed(2)})`,
-          rotationY: (u.rotationY * 180 / Math.PI).toFixed(1) + '°',
-          progress: (u.progress * 100).toFixed(0) + '%'
+        log.travel.debug('travel:position - Received', batch.ships.length, 'updates')
+        log.travel.debug('travel:position updates:', batch.ships.map(u => ({
+          shipId: fmt.shortId(u.shipId),
+          pos: fmt.pos(u.positionX, u.positionY, u.positionZ),
+          rotationY: fmt.deg(u.rotationY),
+          progress: fmt.percent(u.progress),
         })))
 
         setState(produce((s) => {
@@ -610,32 +698,41 @@ function createShipStore() {
             const index = safeUserShips(s).findIndex(ship => ship.id === update.shipId)
             if (index >= 0) {
               const beforeRotation = s.userShips[index].rotationY
-              // Update position and rotation from server stream
+              const beforeState = s.userShips[index].state
+              // Update position, rotation, and ENSURE state is 'deploying'
+              // This fixes the issue where ships:sync resets state to idle
+              // while the ship is still traveling (receiving position updates)
               s.userShips[index] = {
                 ...s.userShips[index],
                 positionX: update.positionX,
                 positionY: update.positionY,
                 positionZ: update.positionZ,
                 rotationY: update.rotationY,
+                // If we're receiving position updates, the ship is definitely traveling
+                state: 'deploying' as const,
+                // Preserve timestamp to prevent ships:sync from overwriting
+                _lastLocalUpdate: Date.now(),
               }
               const afterRotation = s.userShips[index].rotationY
-              console.log(`[WebSocket travel:position] Ship ${update.shipId.slice(0, 8)} rotation:`,
-                beforeRotation !== undefined ? (beforeRotation * 180 / Math.PI).toFixed(1) + '°' : 'undefined',
-                '→', (afterRotation * 180 / Math.PI).toFixed(1) + '°')
+              if (beforeState !== 'deploying') {
+                log.travel.success(`travel:position - Fixed state: ${beforeState} → deploying`)
+              }
+              log.travel.debug(`travel:position - Ship ${fmt.shortId(update.shipId)} rotation:`,
+                fmt.deg(beforeRotation), '→', fmt.deg(afterRotation))
             }
           }
         }))
-        console.log('[WebSocket travel:position] After update, userShips count:', safeUserShips(state).length)
+        log.travel.debug('travel:position - After update, userShips count:', safeUserShips(state).length)
         break
       }
 
       case 'auth:success': {
-        console.log('WebSocket authenticated as user:', message.data.userId)
+        log.ws.success('Authenticated as user:', message.data.userId)
         break
       }
 
       case 'auth:error': {
-        console.error('WebSocket auth failed:', message.data.message)
+        log.ws.error('Auth failed:', message.data.message)
         toast.error('Session expired. Please reconnect your wallet.')
         // Clear ship state on auth failure to prevent stale data
         setState({
@@ -690,7 +787,7 @@ function createShipStore() {
             return {
               ...updated,
               state: mapServerShipState(updated.state),
-              rotationY: ship.rotationY ?? updated.rotationY ?? 0,  // Preserve local rotationY during travel
+              rotationY: ship.rotationY ?? updated.rotationY,
               _lastLocalUpdate: ship._lastLocalUpdate,
             }
           })
@@ -701,14 +798,17 @@ function createShipStore() {
       case 'agents:update': {
         // Agent updates from simulation engine - includes state changes on arrival
         const agents = message.data
-        console.log('[WebSocket agents:update] Received:', agents)
+        log.ws.debug('agents:update - Received:', agents)
         if (!Array.isArray(agents)) break
 
         // Only process if we have ships
         if (safeUserShips(state).length === 0) {
-          console.log('[WebSocket agents:update] No user ships, skipping')
+          log.ws.debug('agents:update - No user ships, skipping')
           break
         }
+
+        // Track ships that just arrived (deploying → solving) for synapse fetch
+        const newlyArrived: { shipId: string; synapseId: string }[] = []
 
         setState(produce((s) => {
           s.userShips = safeUserShips(s).map((ship) => {
@@ -716,7 +816,14 @@ function createShipStore() {
             if (!agent) return ship
 
             const newState = agent.state ? mapServerShipState(agent.state) : ship.state
-            console.log(`[WebSocket agents:update] Ship ${ship.id.slice(0,8)} state: ${ship.state} → ${newState} (server: ${agent.state})`)
+            const synapseId = agent.targetSpaceId ?? agent.currentSpaceId ?? ship.currentSynapseId
+            log.ws.debug(`agents:update - Ship ${fmt.shortId(ship.id)} state: ${ship.state} → ${newState} (server: ${agent.state})`)
+
+            // Detect arrival: was deploying, now solving, has synapse ID
+            if (ship.state === 'deploying' && newState === 'solving' && synapseId) {
+              log.ws.info(`agents:update - Ship ${fmt.shortId(ship.id)} ARRIVED at synapse ${fmt.shortId(synapseId)}`)
+              newlyArrived.push({ shipId: ship.id, synapseId })
+            }
 
             // Preserve current position if server doesn't send one (prevents ships from disappearing)
             // Also preserve targetPosition if ship was traveling (for smooth arrival animation)
@@ -727,19 +834,18 @@ function createShipStore() {
               agent.positionZ !== undefined &&
               agent.positionZ !== null
 
-            // When ship arrives at destination, use targetPosition as current position if available
-            // This ensures the ship stays at the synapse location
-            const arrivalPosition = ship.state === 'deploying' && newState === 'exploring'
+            // When ship arrives at destination, use targetPosition as current position
+            const arrivalPosition = ship.state === 'deploying' && newState === 'solving'
               ? {
-                  positionX: ship.targetPositionX ?? ship.positionX ?? 0,
-                  positionY: ship.targetPositionY ?? ship.positionY ?? 0,
-                  positionZ: ship.targetPositionZ ?? ship.positionZ ?? 0,
+                  positionX: ship.targetPositionX ?? ship.positionX,
+                  positionY: ship.targetPositionY ?? ship.positionY,
+                  positionZ: ship.targetPositionZ ?? ship.positionZ,
                 }
               : {}
 
-            // SAFEGUARD: Always preserve targetPosition for exploring ships, even if server doesn't send it
+            // SAFEGUARD: Always preserve targetPosition for solving ships, even if server doesn't send it
             // This is the synapse location and must be preserved
-            const shouldKeepTargetPosition = (newState === 'exploring' || ship.state === 'exploring')
+            const shouldKeepTargetPosition = (newState === 'solving' || ship.state === 'solving')
               && ship.targetPositionX !== undefined
 
             return {
@@ -752,24 +858,24 @@ function createShipStore() {
               // Update state if provided (arrival transitions: traveling->solving, etc.)
               state: newState,
               // Update synapse ID if provided
-              currentSynapseId: agent.targetSpaceId !== undefined ? agent.targetSpaceId : ship.currentSynapseId,
+              currentSynapseId: synapseId,
               // Clear travel data on arrival (when state changes from traveling)
-              // NOTE: Keep targetPosition for exploring ships - it represents the synapse location
+              // NOTE: Keep targetPosition for solving ships - it represents the synapse location
               ...(agent.state === 'solving' ? {
                 travelStartTime: null,
                 travelDuration: null,
                 startPositionX: undefined,
                 startPositionY: undefined,
                 startPositionZ: undefined,
-                // DO NOT clear targetPosition - it's the synapse location for exploring ships
-                // This ensures ships stay at the correct position when exploring
+                // DO NOT clear targetPosition - it's the synapse location for solving ships
+                // This ensures ships stay at the correct position when solving
                 // targetPositionX: undefined,
                 // targetPositionY: undefined,
                 // targetPositionZ: undefined,
                 // Keep rotationY to maintain ship orientation at target
                 // rotationY: undefined,
               } : {}),
-              // EXPLICITLY preserve targetPosition for exploring ships
+              // EXPLICITLY preserve targetPosition for solving ships
               ...(shouldKeepTargetPosition ? {
                 targetPositionX: ship.targetPositionX,
                 targetPositionY: ship.targetPositionY,
@@ -778,19 +884,42 @@ function createShipStore() {
             }
           })
         }))
+
+        // Fetch synapse details for arrived ships (outside produce to avoid nested state updates)
+        for (const { shipId, synapseId } of newlyArrived) {
+          // Fetch if this ship is selected OR if we don't have any synapse loaded
+          const selectedId = state.selectedShipId
+          if (selectedId === shipId || !state.currentExplorationSynapse) {
+            log.ws.info(`agents:update - Fetching synapse details for arrived ship ${fmt.shortId(shipId)}`)
+            fetchSynapseDetails(synapseId)
+            fetchSynapseExplorers(synapseId)
+          }
+        }
         break
       }
 
       case 'exploration:progress': {
-        const { synapseId, pointsAccumulated, eta, currentETAMinutes } = message.data
-        // Support both eta (legacy/client) and currentETAMinutes (server naming)
-        const etaMinutes = eta ?? currentETAMinutes
-        if (state.currentExplorationSynapse?.id === synapseId && etaMinutes !== undefined) {
+        const { synapseId, pointsAccumulated, eta, currentETAMinutes, etaMinutes: serverEtaMinutes } = message.data
+        // Support multiple field names: etaMinutes (server), eta (legacy), currentETAMinutes (alternative)
+        const etaMinutes = serverEtaMinutes ?? eta ?? currentETAMinutes
+        log.ws.debug(`exploration:progress - synapse ${fmt.shortId(synapseId)}, points: ${pointsAccumulated}, eta: ${etaMinutes}`)
+
+        // Update if we have matching synapse loaded
+        if (state.currentExplorationSynapse?.id === synapseId) {
           setState('currentExplorationSynapse', {
             ...state.currentExplorationSynapse,
             pointsAccumulated,
             currentEtaMinutes: etaMinutes,
           })
+        } else {
+          // Check if any of our ships is solving this synapse - if so, fetch details
+          const solvingShip = state.userShips?.find(
+            s => s.state === 'solving' && s.currentSynapseId === synapseId
+          )
+          if (solvingShip && !state.currentExplorationSynapse) {
+            log.ws.info(`exploration:progress - Ship ${fmt.shortId(solvingShip.id)} solving synapse ${fmt.shortId(synapseId)}, fetching details`)
+            fetchSynapseDetails(synapseId)
+          }
         }
         break
       }
@@ -818,7 +947,7 @@ function createShipStore() {
       }
 
       case 'error': {
-        console.error('Server error:', message.data.message)
+        log.ws.error('Server error:', message.data.message)
         break
       }
     }
@@ -834,11 +963,11 @@ function createShipStore() {
   const connect = () => {
     if (state.ws) return
 
-    console.log('[WebSocket] Connecting to:', WS_URL)
+    log.ws.info('Connecting to:', WS_URL)
     const socket = new WebSocket(WS_URL)
 
     socket.onopen = () => {
-      console.log('[WebSocket] Connected successfully')
+      log.ws.success('Connected successfully')
       setState({ isConnected: true, ws: socket })
       // Reset backoff on successful connection
       reconnectDelay = INITIAL_RECONNECT_DELAY
@@ -846,7 +975,7 @@ function createShipStore() {
       // Send auth token if available
       const token = authStore.token
       if (token) {
-        console.log('[WebSocket] Sending auth:identify')
+        log.ws.info('Sending auth:identify')
         socket.send(JSON.stringify({
           type: 'auth:identify',
           data: { token },
@@ -859,16 +988,16 @@ function createShipStore() {
         const message: ServerMessage = JSON.parse(event.data)
         handleServerMessage(message)
       } catch (error) {
-        console.error('Failed to parse server message:', error)
+        log.ws.error('Failed to parse server message:', error)
       }
     }
 
     socket.onclose = (event) => {
-      console.log('[WebSocket] Disconnected, code:', event.code, 'reason:', event.reason)
+      log.ws.warn('Disconnected, code:', event.code, 'reason:', event.reason)
       setState({ isConnected: false, ws: null })
 
       // Auto-reconnect with exponential backoff
-      console.log(`[WebSocket] Reconnecting in ${reconnectDelay}ms...`)
+      log.ws.info(`Reconnecting in ${fmt.ms(reconnectDelay)}...`)
       setTimeout(() => {
         if (!state.ws) {
           connect()
@@ -880,7 +1009,7 @@ function createShipStore() {
     }
 
     socket.onerror = (error) => {
-      console.error('[WebSocket] Connection error:', error)
+      log.ws.error('Connection error:', error)
     }
 
     setState({ ws: socket })
@@ -933,7 +1062,7 @@ function createShipStore() {
   const selectShip = (shipId: string | null) => {
     setState({ selectedShipId: shipId })
 
-    // If selecting a ship that's exploring, fetch synapse details
+    // If selecting a ship that's solving, fetch synapse details
     if (shipId) {
       const ship = state.userShips.find(s => s.id === shipId)
       if (ship?.currentSynapseId) {
@@ -964,11 +1093,11 @@ function createShipStore() {
   const startExploration = async (shipId: string, synapseId: string, pointsPerMin: number): Promise<boolean> => {
     const ship = state.userShips.find(s => s.id === shipId)
     if (!ship) {
-      console.error('Ship not found:', shipId)
+      log.ship.error('Ship not found:', fmt.shortId(shipId))
       return false
     }
     if (ship.state !== 'idle') {
-      console.error('Ship must be idle to start exploration:', ship.state)
+      log.ship.error('Ship must be idle to start exploration:', ship.state)
       return false
     }
 
@@ -977,7 +1106,7 @@ function createShipStore() {
 
     // Optimistic update with timestamp for reconciliation
     const now = Date.now()
-    const optimisticShip = { ...ship, state: 'exploring' as const, currentSynapseId: synapseId, _lastLocalUpdate: now }
+    const optimisticShip = { ...ship, state: 'solving' as const, currentSynapseId: synapseId, _lastLocalUpdate: now }
     setState(produce((s) => {
       updateShipInList(s, optimisticShip)
     }))
@@ -1006,14 +1135,14 @@ function createShipStore() {
 
       // Rollback on error
       const error = await response.json()
-      console.error('Start exploration failed:', error.error || error)
+      log.ship.error('Start exploration failed:', error.error || error)
       toast.error(error.error || 'Failed to start exploration')
       setState(produce((s) => {
         updateShipInList(s, ship)  // Revert to original state
       }))
       return false
     } catch (error) {
-      console.error('Failed to start exploration:', error)
+      log.ship.error('Failed to start exploration:', error)
       toast.error('Failed to start exploration')
       // Rollback on error
       setState(produce((s) => {
@@ -1025,9 +1154,9 @@ function createShipStore() {
 
   const leaveExploration = async (shipId: string): Promise<boolean> => {
     const ship = state.userShips.find(s => s.id === shipId)
-    if (!ship || ship.state !== 'exploring' || !ship.currentSynapseId) {
+    if (!ship || ship.state !== 'solving' || !ship.currentSynapseId) {
       // This can happen due to race condition with WebSocket updates - not an error
-      console.debug('Ship is not exploring (state may have changed):', shipId, ship?.state)
+      log.ship.debug('Ship is not solving (state may have changed):', fmt.shortId(shipId), ship?.state)
       return false
     }
 
@@ -1052,18 +1181,18 @@ function createShipStore() {
       }
 
       const error = await response.json()
-      console.error('Leave exploration failed:', error.error || error)
+      log.ship.error('Leave exploration failed:', error.error || error)
       return false
     } catch (error) {
-      console.error('Failed to leave exploration:', error)
+      log.ship.error('Failed to leave exploration:', error)
       return false
     }
   }
 
   const updateSpendingRate = async (shipId: string, pointsPerMin: number): Promise<boolean> => {
     const ship = state.userShips.find(s => s.id === shipId)
-    if (!ship || ship.state !== 'exploring' || !ship.currentSynapseId) {
-      console.error('Ship is not exploring:', shipId)
+    if (!ship || ship.state !== 'solving' || !ship.currentSynapseId) {
+      log.ship.error('Ship is not solving:', fmt.shortId(shipId))
       return false
     }
 
@@ -1087,7 +1216,7 @@ function createShipStore() {
 
       return false
     } catch (error) {
-      console.error('Failed to update spending rate:', error)
+      log.ship.error('Failed to update spending rate:', error)
       return false
     }
   }
@@ -1115,7 +1244,7 @@ function createShipStore() {
 
       return false
     } catch (error) {
-      console.error('Failed to toggle autopilot:', error)
+      log.ship.error('Failed to toggle autopilot:', error)
       return false
     }
   }
@@ -1141,7 +1270,7 @@ function createShipStore() {
 
       return false
     } catch (error) {
-      console.error('Failed to set autopilot preferences:', error)
+      log.ship.error('Failed to set autopilot preferences:', error)
       return false
     }
   }
@@ -1169,7 +1298,7 @@ function createShipStore() {
 
       return false
     } catch (error) {
-      console.error('Failed to equip item:', error)
+      log.ship.error('Failed to equip item:', error)
       return false
     }
   }
@@ -1195,7 +1324,7 @@ function createShipStore() {
 
       return false
     } catch (error) {
-      console.error('Failed to unequip item:', error)
+      log.ship.error('Failed to unequip item:', error)
       return false
     }
   }
@@ -1205,11 +1334,11 @@ function createShipStore() {
   const deployShip = async (shipId: string, targetX: number, targetY: number, targetZ: number): Promise<boolean> => {
     const ship = state.userShips.find(s => s.id === shipId)
     if (!ship) {
-      console.error('Ship not found:', shipId)
+      log.deploy.error('Ship not found:', fmt.shortId(shipId))
       return false
     }
     if (ship.state !== 'idle') {
-      console.error('Ship must be idle to deploy:', ship.state)
+      log.deploy.error('Ship must be idle to deploy:', ship.state)
       return false
     }
 
@@ -1232,10 +1361,10 @@ function createShipStore() {
       }
 
       const error = await response.json()
-      console.error('Deploy failed:', error.error || error)
+      log.deploy.error('Deploy failed:', error.error || error)
       return false
     } catch (error) {
-      console.error('Failed to deploy ship:', error)
+      log.deploy.error('Failed to deploy ship:', error)
       return false
     }
   }
@@ -1243,32 +1372,33 @@ function createShipStore() {
   const deployToSynapse = async (shipId: string, synapseId: string): Promise<boolean> => {
     const synapse = await fetchSynapseDetails(synapseId)
     if (!synapse) {
-      console.error('Synapse not found:', synapseId)
+      log.deploy.error('Synapse not found:', fmt.shortId(synapseId))
       return false
     }
 
     return deployShip(shipId, synapse.positionX, synapse.positionY, synapse.positionZ)
   }
 
-  // Travel to synapse - ship moves to synapse position and auto-starts exploring on arrival
+  // Travel to synapse - ship moves to synapse position and auto-starts solving on arrival
   const travelToSynapse = async (shipId: string, synapseId: string, pointsPerMin?: number): Promise<boolean> => {
     const ship = state.userShips.find(s => s.id === shipId)
     if (!ship) {
-      console.error('[TravelToSynapse] Ship not found:', shipId)
+      log.travel.error('Ship not found:', fmt.shortId(shipId))
       return false
     }
     if (ship.state !== 'idle') {
-      console.error('[TravelToSynapse] Ship must be idle to travel:', ship.state)
+      log.travel.error('Ship must be idle to travel:', ship.state)
       return false
     }
 
-    console.log('[TravelToSynapse] Starting travel: ship', shipId.slice(0, 8), '→ synapse', synapseId.slice(0, 8))
+    log.travel.info('Starting travel: ship', fmt.shortId(shipId), '→ synapse', fmt.shortId(synapseId))
 
-    // Optimistic update with timestamp - set to deploying state
+    // Set ship to deploying state while waiting for server response
     const now = Date.now()
-    const optimisticShip = { ...ship, state: 'deploying' as const, _lastLocalUpdate: now }
     setState(produce((s) => {
-      updateShipInList(s, optimisticShip)
+      s.userShips = safeUserShips(s).map(ss =>
+        ss.id === shipId ? { ...ss, state: 'deploying' as const, _lastLocalUpdate: now } : ss
+      )
       s.explorationTarget = null  // Clear target after travel starts
     }))
 
@@ -1281,27 +1411,61 @@ function createShipStore() {
 
       if (response.ok) {
         const { ship: updatedShip } = await response.json()
+        log.travel.debug('API response:', {
+          state: updatedShip.state,
+          startX: updatedShip.startPositionX,
+          targetX: updatedShip.targetPositionX,
+          travelStartTime: updatedShip.travelStartTime,
+          travelDuration: fmt.ms(updatedShip.travelDuration),
+        })
+
         setState(produce((s) => {
-          // Map server state to client state and preserve travel animation data
-          updateShipInList(s, {
+          // Get current ship state - it may have been updated by WebSocket travel:started
+          const currentShip = safeUserShips(s).find(ss => ss.id === shipId)
+
+          // Prefer WebSocket data (currentShip) if it has animation data, otherwise use API response
+          const hasWebSocketData = currentShip?.travelStartTime && currentShip?.travelDuration
+          const mergedShip = {
             ...updatedShip,
             state: mapServerShipState(updatedShip.state),
             _lastLocalUpdate: now,
+            // Use WebSocket animation data if available, otherwise API response
+            ...(hasWebSocketData ? {
+              startPositionX: currentShip.startPositionX,
+              startPositionY: currentShip.startPositionY,
+              startPositionZ: currentShip.startPositionZ,
+              targetPositionX: currentShip.targetPositionX,
+              targetPositionY: currentShip.targetPositionY,
+              targetPositionZ: currentShip.targetPositionZ,
+              travelStartTime: currentShip.travelStartTime,
+              travelDuration: currentShip.travelDuration,
+            } : {}),
+          }
+
+          log.travel.info('Ship data:', {
+            state: mergedShip.state,
+            startPos: fmt.pos(mergedShip.startPositionX, mergedShip.startPositionY, mergedShip.startPositionZ),
+            targetPos: fmt.pos(mergedShip.targetPositionX, mergedShip.targetPositionY, mergedShip.targetPositionZ),
+            travelStartTime: mergedShip.travelStartTime,
+            travelDuration: fmt.ms(mergedShip.travelDuration),
+            source: hasWebSocketData ? 'websocket' : 'api',
           })
+
+          updateShipInList(s, mergedShip)
         }))
         return true
       }
 
       // Rollback on error
       const error = await response.json()
-      console.error('Travel to synapse failed:', error.error || error)
+      log.travel.error('Travel to synapse failed:', error.error || error)
       toast.error(error.error || 'Failed to travel to synapse')
       setState(produce((s) => {
         updateShipInList(s, ship)  // Revert to original state
       }))
       return false
     } catch (error) {
-      console.error('Failed to travel to synapse:', error)
+      log.travel.error('Failed to travel to synapse:', error)
       toast.error('Failed to travel to synapse')
       // Rollback on error
       setState(produce((s) => {
@@ -1329,13 +1493,8 @@ function createShipStore() {
           s.currentExplorers = []
         }))
       }
-    } catch {
-      // Fallback: update locally
-      setState(produce((s) => {
-        s.userShips = safeUserShips(s).map(ss =>
-          ss.id === shipId ? { ...ss, state: 'idle' as const, currentSynapseId: null } : ss
-        )
-      }))
+    } catch (error) {
+      log.ship.error('Failed to recall ship:', error)
     }
   }
 
@@ -1393,7 +1552,7 @@ function createShipStore() {
         userStore.setCurrentShipCount(safeUserShips(s).length)
       })
     } catch (error) {
-      console.error('Failed to fetch user ships:', error)
+      log.ship.error('Failed to fetch user ships:', error)
       setState({ isLoadingShips: false })
     }
   }
@@ -1403,7 +1562,7 @@ function createShipStore() {
    * Use this to fix stuck/out-of-sync ship states
    */
   const refreshShips = async () => {
-    console.log('[ShipStore] Force refreshing ships from server...')
+    log.ship.info('Force refreshing ships from server...')
     await fetchUserShips()
   }
 
@@ -1414,8 +1573,7 @@ function createShipStore() {
       if (!response.ok) throw new Error('Failed to fetch world state')
 
       const world = await response.json()
-      console.log('[fetchWorldState] Received world data:', world)
-      console.log('[fetchWorldState] Cluster count:', world.synapseClusters?.length)
+      log.ship.debug('fetchWorldState - Received world data, cluster count:', world.synapseClusters?.length)
 
       // Map server clusters to client format and separate by LOD level
       // Server sends 'synapseClusters' with SpaceCluster properties (spaceCount, beingSolvedCount)
@@ -1427,7 +1585,7 @@ function createShipStore() {
       const synapseClustersLod1 = mappedClusters.filter((c: SynapseCluster) => c.lodLevel === 1)
       const synapseClustersLod2 = mappedClusters.filter((c: SynapseCluster) => c.lodLevel === 2)
 
-      console.log('[fetchWorldState] LOD0 clusters:', synapseClustersLod0.length)
+      log.ship.debug('fetchWorldState - LOD0 clusters:', synapseClustersLod0.length)
 
       // Server sends agentClusters (was shipClusters)
       const agentClusters = world.agentClusters || []
@@ -1448,7 +1606,7 @@ function createShipStore() {
         isLoadingWorld: false,
       })
     } catch (error) {
-      console.error('Failed to fetch world state:', error)
+      log.ship.error('Failed to fetch world state:', error)
       setState({ isLoadingWorld: false })
     }
   }
@@ -1465,7 +1623,7 @@ function createShipStore() {
    */
   const fetchBulkSynapses = async (): Promise<boolean> => {
     try {
-      console.log('[ShipStore] Fetching bulk synapses...')
+      log.ship.info('Fetching bulk synapses...')
       const response = await fetch(`${API_URL}/api/synapses/bulk`)
       if (!response.ok) throw new Error('Failed to fetch bulk synapses')
 
@@ -1476,7 +1634,7 @@ function createShipStore() {
       const version = view.getUint8(0)
       const count = view.getUint32(1, true) // little-endian
 
-      console.log(`[ShipStore] Loaded ${count} raw synapses (v${version})`)
+      log.ship.success(`Loaded ${fmt.num(count)} raw synapses (v${version})`)
 
       // Allocate typed arrays
       const positions = new Float32Array(count * 3)
@@ -1503,7 +1661,7 @@ function createShipStore() {
 
       return true
     } catch (error) {
-      console.error('Failed to fetch bulk synapses:', error)
+      log.ship.error('Failed to fetch bulk synapses:', error)
       return false
     }
   }
@@ -1513,7 +1671,10 @@ function createShipStore() {
       const response = await fetch(`${API_URL}/api/synapses/${synapseId}`)
       if (!response.ok) return null
 
-      const synapse = await response.json()
+      const data = await response.json()
+      const synapse = data.synapse  // API returns { synapse: {...} }
+      if (!synapse) return null
+
       // Map server state to client state
       if (synapse.state) {
         synapse.state = mapServerSynapseState(synapse.state)
@@ -1521,7 +1682,7 @@ function createShipStore() {
       setState({ currentExplorationSynapse: synapse })
       return synapse
     } catch (error) {
-      console.error('Failed to fetch synapse details:', error)
+      log.ship.error('Failed to fetch synapse details:', error)
       return null
     }
   }
@@ -1540,7 +1701,7 @@ function createShipStore() {
       setState({ currentExplorationSynapse: synapse })
       return synapse
     } catch (error) {
-      console.error('Failed to fetch synapse by position:', error)
+      log.ship.error('Failed to fetch synapse by position:', error)
       return null
     }
   }
@@ -1555,7 +1716,7 @@ function createShipStore() {
       setState({ currentExplorers: explorers })
       return explorers
     } catch (error) {
-      console.error('Failed to fetch synapse explorers:', error)
+      log.ship.error('Failed to fetch synapse explorers:', error)
       return []
     }
   }
@@ -1666,10 +1827,10 @@ function createShipStore() {
       if (!Array.isArray(ships)) return null
       return ships.find(s => s.id === state.selectedShipId) || null
     },
-    get exploringShips() {
+    get solvingShips() {
       const ships = state.userShips
       if (!Array.isArray(ships)) return []
-      return ships.filter(s => s.state === 'exploring')
+      return ships.filter(s => s.state === 'solving')
     },
     get idleShips() {
       const ships = state.userShips

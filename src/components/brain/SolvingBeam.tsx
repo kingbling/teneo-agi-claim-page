@@ -1,7 +1,7 @@
 /**
  * SolvingBeam - Visualizes the active exploration connection between a ship and a synapse
  *
- * Shows an animated energy beam connecting a ship to the synapse it's exploring.
+ * Shows an animated energy beam connecting a ship to the synapse it's solving.
  * Features:
  * - Dashed line with animated flow toward synapse (energy transfer visual)
  * - Pulsing intensity based on exploration activity
@@ -13,14 +13,100 @@ import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { Ship } from '@/stores/shipStore'
 import { constrainToBrainShape } from './core/brainConstants'
+import { SYNAPSE_CONFIG, type SynapseType } from '@/types/game'
 
 interface SolvingBeamProps {
   ship: Ship
   synapsePosition: { x: number; y: number; z: number }
   isActive: boolean
+  /** Optional synapse type - affects animation speed (longer solves = slower animation) */
+  synapseType?: SynapseType
 }
 
-const BEAM_PARTICLES = 20 // Particles flowing along the beam
+const BEAM_PARTICLES = 30 // Particles flowing along the beam
+
+/**
+ * Calculate animation speed multiplier based on synapse type.
+ * Longer solving times = slower, more gradual animation.
+ * Minor (60min) = fastest, Unique (30 days) = slowest
+ */
+function getAnimationSpeedMultiplier(synapseType: SynapseType | undefined): number {
+  if (!synapseType) return 1.0 // Default speed for minor
+
+  const config = SYNAPSE_CONFIG[synapseType]
+  const etaMinutes = config.etaMinutes
+
+  // Base reference: minor at 60 minutes = 1.0x speed
+  // Scale inversely with sqrt of ETA ratio for perceptible but not extreme differences
+  // minor (60): 1.0, complex (720): 0.29, deep (2880): 0.14, unique (43200): 0.037
+  const baseEta = SYNAPSE_CONFIG.minor.etaMinutes // 60
+  const ratio = baseEta / etaMinutes
+
+  // Use sqrt to make the scaling more gradual
+  // Clamp minimum to 0.1x to keep animation visible
+  return Math.max(0.1, Math.sqrt(ratio))
+}
+
+// Volumetric beam vertex shader
+const BEAM_MESH_VERTEX_SHADER = `
+  varying vec2 vUv;
+  varying float vDistance;
+
+  void main() {
+    vUv = uv;
+    // Use Y coordinate for distance along beam (0 = ship end, 1 = synapse end)
+    vDistance = uv.y;
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`
+
+// Volumetric beam fragment shader
+const BEAM_MESH_FRAGMENT_SHADER = `
+  uniform float uTime;
+  uniform float uIntensity;
+  uniform vec3 uCoreColor;
+  uniform vec3 uOuterColor;
+
+  varying vec2 vUv;
+  varying float vDistance;
+
+  void main() {
+    // Distance from center of beam (UV.x goes from 0-1 across width)
+    float centerDist = abs(vUv.x - 0.5) * 2.0;
+
+    // Core glow (bright white center)
+    float core = 1.0 - smoothstep(0.0, 0.3, centerDist);
+
+    // Outer glow (colored edges)
+    float outer = 1.0 - smoothstep(0.2, 1.0, centerDist);
+
+    // Animated energy flow toward synapse (vDistance = 0 at ship, 1 at synapse)
+    float flowSpeed = 3.0;
+    float flowScale = 8.0;
+    float flow = sin((vDistance * flowScale - uTime * flowSpeed) * 3.14159 * 2.0) * 0.5 + 0.5;
+    flow = smoothstep(0.3, 0.7, flow);
+
+    // Pulsing intensity
+    float pulse = 0.7 + 0.3 * sin(uTime * 2.5);
+
+    // Combine colors: white core, colored outer
+    vec3 coreColor = vec3(1.0, 1.0, 1.0);
+    vec3 color = mix(uOuterColor, coreColor, core * 0.8);
+
+    // Apply flow pattern and intensity
+    float alpha = outer * (0.3 + flow * 0.4) * pulse * uIntensity;
+
+    // Taper toward synapse (narrower at synapse end)
+    float taper = 1.0 - vDistance * 0.3;
+    alpha *= taper;
+
+    // Soft edges
+    alpha *= smoothstep(1.0, 0.7, centerDist);
+
+    gl_FragColor = vec4(color, alpha * 0.6);
+  }
+`
 
 export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
   const { scene } = useThree()
@@ -32,6 +118,11 @@ export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
   let particleSystemRef: THREE.Points | null = null
   let particleMaterialRef: THREE.ShaderMaterial | null = null
   let particleGeometryRef: THREE.BufferGeometry | null = null
+
+  // Volumetric beam mesh
+  let beamMeshRef: THREE.Mesh | null = null
+  let beamMeshGeometryRef: THREE.CylinderGeometry | null = null
+  let beamMeshMaterialRef: THREE.ShaderMaterial | null = null
 
   // Animation state
   const animState = {
@@ -49,10 +140,10 @@ export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
     // Create dashed line material with cyan/teal glow
     materialRef = new THREE.LineDashedMaterial({
       color: 0x00ffff,
-      dashSize: 0.08,
-      gapSize: 0.04,
+      dashSize: 0.02,
+      gapSize: 0.01,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.5,
       depthTest: false,
       depthWrite: false,
     })
@@ -72,6 +163,9 @@ export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
     // Create particle system for flowing energy effect
     createParticleSystem()
 
+    // Create volumetric beam mesh
+    createBeamMesh()
+
     sceneObj.add(beamGroup)
 
     onCleanup(() => {
@@ -82,8 +176,40 @@ export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
       materialRef?.dispose()
       particleGeometryRef?.dispose()
       particleMaterialRef?.dispose()
+      beamMeshGeometryRef?.dispose()
+      beamMeshMaterialRef?.dispose()
     })
   })
+
+  function createBeamMesh() {
+    if (!beamGroup) return
+
+    // Create cylinder geometry for the beam (will be positioned/oriented in update)
+    // Height of 1, will be scaled to match actual beam length
+    beamMeshGeometryRef = new THREE.CylinderGeometry(0.015, 0.025, 1, 8, 1, true)
+
+    // Create shader material for volumetric effect
+    beamMeshMaterialRef = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uIntensity: { value: 0.7 },
+        uCoreColor: { value: new THREE.Color(1.0, 1.0, 1.0) },
+        uOuterColor: { value: new THREE.Color(0.3, 0.95, 1.0) },
+      },
+      vertexShader: BEAM_MESH_VERTEX_SHADER,
+      fragmentShader: BEAM_MESH_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    })
+
+    beamMeshRef = new THREE.Mesh(beamMeshGeometryRef, beamMeshMaterialRef)
+    beamMeshRef.frustumCulled = false
+    beamMeshRef.visible = false
+    beamMeshRef.renderOrder = 158  // Slightly below the line
+    beamGroup.add(beamMeshRef)
+  }
 
   function createParticleSystem() {
     if (!beamGroup) return
@@ -126,9 +252,9 @@ export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
 
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
-          // Size based on intensity and distance
-          gl_PointSize = (4.0 + uIntensity * 2.0) * (80.0 / -mvPosition.z);
-          gl_PointSize = clamp(gl_PointSize, 2.0, 12.0);
+          // Size based on intensity and distance - smaller for subtler effect
+          gl_PointSize = (2.0 + uIntensity * 1.0) * (40.0 / -mvPosition.z);
+          gl_PointSize = clamp(gl_PointSize, 1.0, 6.0);
 
           gl_Position = projectionMatrix * mvPosition;
         }
@@ -162,72 +288,56 @@ export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
     beamGroup.add(particleSystemRef)
   }
 
-  // Update beam when ship or synapse positions change
-  createEffect(() => {
-    if (!lineRef || !geometryRef || !particleGeometryRef) return
+  // Calculate ship's animated orbit position (must match AgentMarkers.tsx orbit logic)
+  function getShipOrbitPosition(ship: Ship, now: number): [number, number, number] {
+    // Get synapse position (target position) - this is where the ship orbits around
+    const [synapseX, synapseY, synapseZ] = constrainToBrainShape(
+      ship.targetPositionX ?? ship.positionX,
+      ship.targetPositionY ?? ship.positionY,
+      ship.targetPositionZ ?? ship.positionZ
+    )
 
+    // Orbit parameters (must match AgentMarkers.tsx)
+    const orbitRadius = 0.15
+    const orbitSpeed = 0.002 + (ship.id.charCodeAt(0) % 10) * 0.0003
+    const orbitPhase = ship.id.charCodeAt(0)
+    const angle = now * orbitSpeed + orbitPhase
+
+    // Calculate orbit position
+    const cx = synapseX + Math.cos(angle) * orbitRadius
+    const cz = synapseZ + Math.sin(angle) * orbitRadius
+    const cy = synapseY + 0.08 + Math.sin(angle * 2) * 0.04
+
+    return [cx, cy, cz]
+  }
+
+  // Handle visibility changes only - position updates happen in useFrame
+  createEffect(() => {
     const active = props.isActive
     const ship = props.ship
     const synapse = props.synapsePosition
 
-    if (!active || !ship || !synapse || ship.state !== 'exploring') {
-      if (lineRef) lineRef.visible = false
-      if (particleSystemRef) particleSystemRef.visible = false
-      return
-    }
+    const shouldShow = active && ship && synapse && ship.state === 'solving'
 
-    // Get ship world position using constrainToBrainShape for consistency
-    const [shipX, shipY, shipZ] = constrainToBrainShape(
-      ship.positionX,
-      ship.positionY,
-      ship.positionZ
-    )
-    const [synapseX, synapseY, synapseZ] = constrainToBrainShape(
-      synapse.x,
-      synapse.y,
-      synapse.z
-    )
-
-    // Update line positions
-    const linePositions = geometryRef.getAttribute('position') as THREE.BufferAttribute
-    linePositions.setXYZ(0, shipX, shipY, shipZ)
-    linePositions.setXYZ(1, synapseX, synapseY, synapseZ)
-    linePositions.needsUpdate = true
-
-    // Compute line distances for dash rendering
-    lineRef.computeLineDistances()
-    lineRef.visible = true
-
-    // Update particle positions along the beam
-    const particlePositions = particleGeometryRef.getAttribute('position') as THREE.BufferAttribute
-    const lifetimes = particleGeometryRef.getAttribute('aLifetime') as THREE.BufferAttribute
-
-    for (let i = 0; i < BEAM_PARTICLES; i++) {
-      // Distribute particles along beam based on their lifetime
-      const t = lifetimes.getX(i)
-      const x = shipX + (synapseX - shipX) * t
-      const y = shipY + (synapseY - shipY) * t
-      const z = shipZ + (synapseZ - shipZ) * t
-      particlePositions.setXYZ(i, x, y, z)
-    }
-    particlePositions.needsUpdate = true
-
-    if (particleSystemRef) {
-      particleSystemRef.visible = true
-    }
+    if (lineRef) lineRef.visible = shouldShow
+    if (particleSystemRef) particleSystemRef.visible = shouldShow
+    if (beamMeshRef) beamMeshRef.visible = shouldShow
   })
 
   // Animate the beam
   useFrame(({ delta }) => {
     if (!lineRef?.visible) return
 
-    animState.time += delta
-    animState.dashOffset += delta * 0.6
+    // Get animation speed based on synapse type (longer solves = slower animation)
+    const speedMult = getAnimationSpeedMultiplier(props.synapseType)
+
+    animState.time += delta * speedMult
+    animState.dashOffset += delta * 0.6 * speedMult
 
     // Update dash animation
     if (materialRef) {
       materialRef.dashOffset = -animState.dashOffset // Negative for flowing toward synapse
-      // Pulse opacity
+      // Pulse opacity - scaled by speed multiplier
       const pulse = 0.5 + Math.sin(animState.time * 3) * 0.2
       materialRef.opacity = pulse
     }
@@ -240,34 +350,63 @@ export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
       particleMaterialRef.uniforms.uIntensity.value = intensity
     }
 
-    // Update particle positions to create flowing effect
-    if (particleGeometryRef && props.ship && props.synapsePosition) {
-      const [shipX, shipY, shipZ] = constrainToBrainShape(
-        props.ship.positionX,
-        props.ship.positionY,
-        props.ship.positionZ
-      )
-      const [synapseX, synapseY, synapseZ] = constrainToBrainShape(
-        props.synapsePosition.x,
-        props.synapsePosition.y,
-        props.synapsePosition.z
-      )
-
-      const particlePositions = particleGeometryRef.getAttribute('position') as THREE.BufferAttribute
-      const lifetimes = particleGeometryRef.getAttribute('aLifetime') as THREE.BufferAttribute
-      const speeds = particleGeometryRef.getAttribute('aSpeed') as THREE.BufferAttribute
-
-      for (let i = 0; i < BEAM_PARTICLES; i++) {
-        // Animate particles flowing toward synapse
-        const speed = speeds.getX(i)
-        const t = (lifetimes.getX(i) + animState.time * speed * 0.3) % 1.0
-        const x = shipX + (synapseX - shipX) * t
-        const y = shipY + (synapseY - shipY) * t
-        const z = shipZ + (synapseZ - shipZ) * t
-        particlePositions.setXYZ(i, x, y, z)
-      }
-      particlePositions.needsUpdate = true
+    // Update volumetric beam uniforms
+    if (beamMeshMaterialRef && beamMeshRef?.visible) {
+      beamMeshMaterialRef.uniforms.uTime.value = animState.time
+      const beamIntensity = 0.6 + Math.sin(animState.time * 2.0) * 0.3
+      beamMeshMaterialRef.uniforms.uIntensity.value = beamIntensity
     }
+
+    // Update all positions every frame (for solving ships with orbit)
+    if (!lineRef?.visible || !props.ship || !props.synapsePosition || props.ship.state !== 'solving') return
+    if (!geometryRef || !particleGeometryRef) return
+
+    const now = Date.now()
+    const [shipX, shipY, shipZ] = getShipOrbitPosition(props.ship, now)
+    const [synapseX, synapseY, synapseZ] = constrainToBrainShape(
+      props.synapsePosition.x,
+      props.synapsePosition.y,
+      props.synapsePosition.z
+    )
+
+    // Update line positions
+    const linePositions = geometryRef.getAttribute('position') as THREE.BufferAttribute
+    linePositions.setXYZ(0, shipX, shipY, shipZ)
+    linePositions.setXYZ(1, synapseX, synapseY, synapseZ)
+    linePositions.needsUpdate = true
+    lineRef.computeLineDistances()
+
+    // Update volumetric beam mesh
+    if (beamMeshRef) {
+      const shipPos = new THREE.Vector3(shipX, shipY, shipZ)
+      const synapsePos = new THREE.Vector3(synapseX, synapseY, synapseZ)
+      const beamLength = shipPos.distanceTo(synapsePos)
+      const midpoint = shipPos.clone().add(synapsePos).multiplyScalar(0.5)
+
+      beamMeshRef.position.copy(midpoint)
+      beamMeshRef.scale.set(1, beamLength, 1)
+
+      const direction = synapsePos.clone().sub(shipPos).normalize()
+      const up = new THREE.Vector3(0, 1, 0)
+      const quaternion = new THREE.Quaternion()
+      quaternion.setFromUnitVectors(up, direction)
+      beamMeshRef.quaternion.copy(quaternion)
+    }
+
+    // Update particle positions
+    const particlePositions = particleGeometryRef.getAttribute('position') as THREE.BufferAttribute
+    const lifetimes = particleGeometryRef.getAttribute('aLifetime') as THREE.BufferAttribute
+    const speeds = particleGeometryRef.getAttribute('aSpeed') as THREE.BufferAttribute
+
+    for (let i = 0; i < BEAM_PARTICLES; i++) {
+      const speed = speeds.getX(i)
+      const t = (lifetimes.getX(i) + animState.time * speed * 0.3) % 1.0
+      const x = shipX + (synapseX - shipX) * t
+      const y = shipY + (synapseY - shipY) * t
+      const z = shipZ + (synapseZ - shipZ) * t
+      particlePositions.setXYZ(i, x, y, z)
+    }
+    particlePositions.needsUpdate = true
   })
 
   return null

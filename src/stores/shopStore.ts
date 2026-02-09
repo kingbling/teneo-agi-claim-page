@@ -6,9 +6,8 @@ import {
   ITEM_DEFINITIONS,
 } from '@/types/game'
 import { userStore } from './userStore'
-
-// API Configuration - empty string means same-origin (App Platform deployment)
-const API_URL = import.meta.env.VITE_API_URL ?? ''
+import { API_URL } from '@/constants/api'
+import { log } from '@/utils/logger'
 
 // ============================================================================
 // MASTERPLAN 2026: SHOP STORE
@@ -171,6 +170,13 @@ function createShopStore() {
 
     try {
       const response = await fetch(`${API_URL}/api/users/${userId}/items`)
+
+      // Handle 404 gracefully - endpoint may not be implemented yet
+      if (response.status === 404) {
+        setState({ userItems: [], isLoadingUserItems: false })
+        return
+      }
+
       if (!response.ok) {
         throw new Error('Failed to fetch user items')
       }
@@ -189,9 +195,9 @@ function createShopStore() {
 
       // Recalculate active effects
       calculateActiveEffects()
-    } catch (error) {
-      console.error('Failed to fetch user items:', error)
-      setState({ isLoadingUserItems: false })
+    } catch {
+      // Silently handle network errors for this optional endpoint
+      setState({ userItems: [], isLoadingUserItems: false })
     }
   }
 
@@ -228,7 +234,7 @@ function createShopStore() {
 
       setState({ shopItems, isLoadingShopItems: false })
     } catch (error) {
-      console.error('Failed to fetch shop items:', error)
+      log.shop.error('Failed to fetch shop items:', error)
       setState({ isLoadingShopItems: false })
     }
   }
@@ -396,7 +402,7 @@ function createShopStore() {
       calculateActiveEffects()
       return true
     } catch (error) {
-      console.error('Failed to activate item:', error)
+      log.shop.error('Failed to activate item:', error)
       return false
     }
   }
@@ -423,7 +429,7 @@ function createShopStore() {
       calculateActiveEffects()
       return true
     } catch (error) {
-      console.error('Failed to deactivate item:', error)
+      log.shop.error('Failed to deactivate item:', error)
       return false
     }
   }

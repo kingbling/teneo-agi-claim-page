@@ -4,6 +4,14 @@
  * Common GLSL code snippets used across brain visualization components.
  */
 
+// Common GLSL snippets for fragment shaders
+// Use these in template literals: `${SOFT_CIRCLE_FALLOFF}...`
+export const SOFT_CIRCLE_FALLOFF = `
+  vec2 center = gl_PointCoord - vec2(0.5);
+  float dist = length(center);
+  float alpha = 1.0 - smoothstep(0.2, 0.5, dist);
+`
+
 // Simple point particle vertex shader
 export const POINT_VERTEX_SHADER = `
   attribute vec3 aColor;
@@ -164,19 +172,9 @@ export const BRAIN_REGION_VERTEX_SHADER = `
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
-    // Depth-based visibility for ship zoom mode
-    if (uIsShipZoom == 1) {
-      // Ship position in view space
-      vec4 shipViewPos = modelViewMatrix * vec4(uShipPosition, 1.0);
-      float shipDepth = shipViewPos.z;
-      float particleDepth = mvPosition.z;
-
-      // Behind = particle further from camera than ship (more negative Z)
-      // Add small offset so particles at same depth as ship are visible
-      vBehindShip = particleDepth < (shipDepth + 0.05) ? 1.0 : 0.0;
-    } else {
-      vBehindShip = 1.0;  // Always visible when not in ship zoom
-    }
+    // Depth-based visibility DISABLED - caused white sphere artifact
+    // Always show all particles
+    vBehindShip = 1.0;
 
     // Distance-based scaling for consistent particle density
     float distScale = 60.0 / max(-mvPosition.z, 1.0);
@@ -188,16 +186,13 @@ export const BRAIN_REGION_VERTEX_SHADER = `
 `
 
 // Region-aware brain particle fragment shader - crisp vibrant dots
-// Supports depth-based visibility when zoomed on ship
+// Supports depth-based visibility when zoomed on ship (soft fade instead of hard cutoff)
 export const BRAIN_REGION_FRAGMENT_SHADER = `
   varying vec3 vColor;
   varying float vHighlight;
   varying float vBehindShip;
 
   void main() {
-    // Discard particles in front of ship when in ship zoom mode
-    if (vBehindShip < 0.5) discard;
-
     vec2 center = gl_PointCoord - vec2(0.5);
     float dist = length(center);
 
@@ -214,6 +209,11 @@ export const BRAIN_REGION_FRAGMENT_SHADER = `
     // Clamp to prevent over-saturation
     finalColor = min(finalColor, vec3(1.5));
 
-    gl_FragColor = vec4(finalColor, 0.85);
+    // Soft fade for particles in front of ship (instead of hard discard)
+    // This prevents the jarring white cutout when zoomed on ship
+    float alpha = 0.85 * vBehindShip;
+    if (alpha < 0.05) discard;
+
+    gl_FragColor = vec4(finalColor, alpha);
   }
 `

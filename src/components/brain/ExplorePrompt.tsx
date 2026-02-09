@@ -5,6 +5,7 @@ import type { Ship, SynapseCluster, Synapse } from '@/stores/shipStore'
 import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG, getSynapseTypeLabel, formatPoints } from '@/types/game'
 import { userStore } from '@/stores'
 import { getDominantSynapseType } from '@/utils/synapseUtils'
+import { log, fmt } from '@/utils/logger'
 
 interface ExplorePromptProps {
   cluster: SynapseCluster
@@ -22,7 +23,7 @@ export const ExplorePrompt: Component<ExplorePromptProps> = (props) => {
 
   // Log when prompt is shown
   onMount(() => {
-    console.log('[ExplorePrompt] Showing explore prompt for ship', props.ship.id.slice(0, 8), 'to synapse', props.synapse?.id?.slice(0, 8))
+    log.brain.info('ExplorePrompt shown - ship:', fmt.shortId(props.ship.id), '→ synapse:', fmt.shortId(props.synapse?.id))
     requestAnimationFrame(() => setIsVisible(true))
   })
 

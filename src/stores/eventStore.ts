@@ -1,8 +1,7 @@
 import { createRoot } from 'solid-js'
 import { createStore, produce } from 'solid-js/store'
-
-// API Configuration - empty string means same-origin (App Platform deployment)
-const API_URL = import.meta.env.VITE_API_URL ?? ''
+import { API_URL } from '@/constants/api'
+import { log } from '@/utils/logger'
 
 // ============================================================================
 // MASTERPLAN 2026: EVENT STORE
@@ -221,7 +220,7 @@ function createEventStore() {
           lastFetchTime: Date.now(),
         })
       } catch (error) {
-        console.error('Failed to fetch active events:', error)
+        log.event.error('Failed to fetch active events:', error)
         setState({
           isLoading: false,
           error: 'Failed to load events',
@@ -242,7 +241,7 @@ function createEventStore() {
 
         setState({ upcomingEvents })
       } catch (error) {
-        console.error('Failed to fetch upcoming events:', error)
+        log.event.error('Failed to fetch upcoming events:', error)
       }
     },
 

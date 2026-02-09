@@ -19,6 +19,72 @@ import (
 	"gorm.io/gorm"
 )
 
+// Grid sizes for LOD cluster computation (must match engine.go recomputeClusters)
+var lodGridSizes = map[int]float64{
+	0: 0.08,
+	1: 0.3,
+	2: 1.0,
+}
+
+// getClusterIDForPosition computes the cluster ID for a given position and LOD level
+func getClusterIDForPosition(x, y, z float64, lodLevel int) string {
+	gridSize := lodGridSizes[lodLevel]
+	gridX := int(x / gridSize)
+	gridY := int(y / gridSize)
+	gridZ := int(z / gridSize)
+	return fmt.Sprintf("%d_%d_%d_%d", lodLevel, gridX, gridY, gridZ)
+}
+
+// updateClusterBeingSolvedCount updates the beingSolvedCount for clusters containing a synapse
+// delta: +1 when exploration starts, -1 when exploration stops
+func updateClusterBeingSolvedCount(database *gorm.DB, posX, posY, posZ float64, delta int) {
+	now := time.Now().UnixMilli()
+
+	// Update cluster counts for all LOD levels
+	for lodLevel := 0; lodLevel <= 2; lodLevel++ {
+		clusterID := getClusterIDForPosition(posX, posY, posZ, lodLevel)
+		database.Model(&models.SpaceCluster{}).
+			Where("id = ?", clusterID).
+			Updates(map[string]interface{}{
+				"being_solved_count": gorm.Expr("MAX(0, being_solved_count + ?)", delta),
+				"updated_at":         now,
+			})
+	}
+}
+
+// broadcastAffectedClusters fetches and broadcasts updated cluster data for a synapse position
+// This enables immediate dashboard updates when exploration starts/stops
+func broadcastAffectedClusters(database *gorm.DB, hub *wshub.Hub, posX, posY, posZ float64) {
+	var clusters []dto.SpaceCluster
+	now := time.Now().UnixMilli()
+
+	// Get updated cluster data for all LOD levels
+	for lodLevel := 0; lodLevel <= 2; lodLevel++ {
+		clusterID := getClusterIDForPosition(posX, posY, posZ, lodLevel)
+		var cluster models.SpaceCluster
+		if err := database.First(&cluster, "id = ?", clusterID).Error; err == nil {
+			clusters = append(clusters, dto.SpaceCluster{
+				ID:               cluster.ID,
+				LODLevel:         cluster.LodLevel,
+				PositionX:        cluster.PositionX,
+				PositionY:        cluster.PositionY,
+				PositionZ:        cluster.PositionZ,
+				SpaceCount:       cluster.SpaceCount,
+				DiscoveredCount:  cluster.DiscoveredCount,
+				BeingSolvedCount: cluster.BeingSolvedCount,
+				UpdatedAt:        cluster.UpdatedAt,
+			})
+		}
+	}
+
+	if len(clusters) > 0 {
+		hub.Broadcast("cluster:update", dto.ClusterUpdateEvent{
+			Clusters:  clusters,
+			Timestamp: now,
+		})
+	}
+}
+
 // GetNearestSynapse finds the nearest synapse to given coordinates
 func GetNearestSynapse(c *fiber.Ctx, database *gorm.DB) error {
 	x := c.QueryFloat("x", 0)
@@ -174,9 +240,14 @@ func ExploreSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 	}
 
 	// Update agent state
+	// Heap-allocate synapse ID to avoid dangling pointer issues
+	sidTarget := new(string)
+	sidCurrent := new(string)
+	*sidTarget = synapseID
+	*sidCurrent = synapseID
 	agent.State = string(dto.AgentSolving)
-	agent.TargetSpaceID = &synapseID
-	agent.CurrentSpaceID = &synapseID
+	agent.TargetSpaceID = sidTarget
+	agent.CurrentSpaceID = sidCurrent
 	agent.PositionX = space.PositionX
 	agent.PositionY = space.PositionY
 	agent.PositionZ = space.PositionZ
@@ -187,9 +258,17 @@ func ExploreSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 	}
 
 	// Update synapse state if needed
+	stateChanged := false
 	if space.State == string(dto.SpaceUndiscovered) {
 		space.State = string(dto.SpaceBeingSolved)
 		db.UpdateSpace(database, space)
+		stateChanged = true
+	}
+
+	// Update cluster counts and broadcast immediately for dashboard sync
+	if stateChanged {
+		updateClusterBeingSolvedCount(database, space.PositionX, space.PositionY, space.PositionZ, 1)
+		broadcastAffectedClusters(database, hub, space.PositionX, space.PositionY, space.PositionZ)
 	}
 
 	// Trigger WebSocket update
@@ -248,13 +327,26 @@ func LeaveSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub) error {
 
 	// Check if synapse has no more explorers
 	remaining, _ := db.GetSynapseExplorerCount(database, synapseID)
+	stateChanged := false
+	var spacePosition struct{ X, Y, Z float64 }
+
 	if remaining == 0 {
 		// Reset synapse state
 		space, _ := db.GetSpace(database, synapseID)
 		if space.State == string(dto.SpaceBeingSolved) {
 			space.State = string(dto.SpaceUndiscovered)
 			db.UpdateSpace(database, space)
+			stateChanged = true
+			spacePosition.X = space.PositionX
+			spacePosition.Y = space.PositionY
+			spacePosition.Z = space.PositionZ
 		}
+	}
+
+	// Update cluster counts and broadcast immediately for dashboard sync
+	if stateChanged {
+		updateClusterBeingSolvedCount(database, spacePosition.X, spacePosition.Y, spacePosition.Z, -1)
+		broadcastAffectedClusters(database, hub, spacePosition.X, spacePosition.Y, spacePosition.Z)
 	}
 
 	// Trigger WebSocket update
@@ -343,8 +435,10 @@ func GetGameConfig(c *fiber.Ctx, cfg *config.Config) error {
 func convertSpaceToSynapseDTO(space *models.Space, explorers []models.SynapseExplorer) dto.Synapse {
 	var currentETAMinutes *float64
 	if space.CurrentEtaMinutes != nil {
-		val := float64(*space.CurrentEtaMinutes)
-		currentETAMinutes = &val
+		// Heap-allocate to avoid dangling pointer to stack variable
+		val := new(float64)
+		*val = float64(*space.CurrentEtaMinutes)
+		currentETAMinutes = val
 	}
 
 	synapseSpace := dto.Space{

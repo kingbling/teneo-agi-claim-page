@@ -7,29 +7,21 @@
 import { createMemo, For, Show } from 'solid-js'
 import { shipStore } from '@/stores/shipStore'
 import type { Ship, ShipStatus } from '@/stores/shipStore'
+import { SHIP_STATUS_COLORS, SHIP_STATUS_ORDER } from '@/constants/colors'
 
 interface ShipStatusLegendProps {
   onShipClick?: (ship: Ship) => void
   selectedShipId?: string | null
 }
 
-// Ship status configuration
-const SHIP_STATUS_CONFIG: Record<ShipStatus, { label: string; color: string; icon: string; description: string }> = {
-  idle: { label: 'Idle', color: 'text-blue-400', icon: '○', description: 'Ready to deploy' },
-  deploying: { label: 'Deploying', color: 'text-cyan-400', icon: '→', description: 'Traveling to synapse' },
-  exploring: { label: 'Exploring', color: 'text-teal-400', icon: '⟳', description: 'Solving synapse' },
-  returning: { label: 'Returning', color: 'text-green-400', icon: '←', description: 'Returning home' },
-}
-
-// Status order for display
-const STATUS_ORDER: ShipStatus[] = ['idle', 'deploying', 'exploring', 'returning']
-
 export function ShipStatusLegend(props: ShipStatusLegendProps) {
-  const userShips = shipStore.userShips
+  // Access userShips inside reactive contexts (memo/JSX) for proper SolidJS reactivity
+  // DO NOT capture as a const outside memo - that breaks reactivity
 
-  // Group ships by status
+  // Group ships by status - reads shipStore.userShips inside memo for tracking
   const shipsByStatus = createMemo(() => {
-    if (!Array.isArray(userShips)) return {}
+    const ships = shipStore.userShips
+    if (!Array.isArray(ships)) return {} as Record<ShipStatus, Ship[]>
 
     const grouped: Record<ShipStatus, Ship[]> = {
       idle: [],
@@ -38,19 +30,20 @@ export function ShipStatusLegend(props: ShipStatusLegendProps) {
       returning: [],
     }
 
-    for (const ship of userShips) {
+    for (const ship of ships) {
       if (grouped[ship.state]) {
         grouped[ship.state].push(ship)
       }
     }
 
     return grouped
-  }, [userShips])
+  })
 
   const totalCount = createMemo(() => {
-    if (!Array.isArray(userShips)) return 0
-    return userShips.length
-  }, [userShips])
+    const ships = shipStore.userShips
+    if (!Array.isArray(ships)) return 0
+    return ships.length
+  })
 
   return (
     <div class="pointer-events-auto">
@@ -63,20 +56,20 @@ export function ShipStatusLegend(props: ShipStatusLegendProps) {
 
       {/* Ship List - Grouped by Status */}
       <div class="mt-2 p-3 rounded-lg bg-black/80 backdrop-blur-sm border border-gray-700 max-h-[400px] overflow-y-auto">
-        <For each={STATUS_ORDER}>
+        <For each={SHIP_STATUS_ORDER}>
           {(status) => {
             const ships = () => shipsByStatus()[status] || []
-            const statusConfig = SHIP_STATUS_CONFIG[status]
+            const statusConfig = SHIP_STATUS_COLORS[status]
 
             return (
               <Show when={ships().length > 0}>
                 <div class="mb-3">
                   {/* Status Header */}
                   <div class="flex items-center gap-2 mb-2">
-                    <span class={statusConfig.color}>
+                    <span class={statusConfig.textClass}>
                       {statusConfig.icon}
                     </span>
-                    <span class={`text-xs font-medium ${statusConfig.color}`}>
+                    <span class={`text-xs font-medium ${statusConfig.textClass}`}>
                       {statusConfig.label}
                     </span>
                     <span class="text-xs text-gray-500">• {ships().length}</span>
@@ -111,7 +104,7 @@ export function ShipStatusLegend(props: ShipStatusLegendProps) {
                             {/* Ship Details */}
                             <div class="flex items-center gap-2 text-xs text-gray-500">
                               <span>{ship.shipType || 'neuron'}</span>
-                              <Show when={ship.state === 'exploring' && ship.currentPointsPerMin}>
+                              <Show when={ship.state === 'solving' && ship.currentPointsPerMin}>
                                 <span>• {ship.currentPointsPerMin} pts/min</span>
                               </Show>
                             </div>

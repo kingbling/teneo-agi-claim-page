@@ -1,24 +1,11 @@
 import { createSignal, Show, For, createMemo } from 'solid-js'
 import { ChevronDown, ChevronUp, Zap, Compass, Filter, Lock } from 'lucide-solid'
-import { shipStore, userStore, type SynapseCluster } from '@/stores/shipStore'
+import { shipStore, userStore, type SynapseCluster } from '@/stores'
 import type { SynapseType, UserLevel } from '@/types/game'
 import * as THREE from 'three'
 import { constrainToBrainShape } from '../brain/core/brainConstants'
 import { getDominantSynapseType, isSynapseTypeLocked } from '@/utils/synapseUtils'
-
-// Synapse types in order for filter buttons
-const SYNAPSE_TYPES: SynapseType[] = ['minor', 'complex', 'deep', 'core', 'rare', 'legendary', 'unique']
-
-// Type colors for badges
-const TYPE_COLORS: Record<SynapseType, { bg: string; text: string }> = {
-  minor: { bg: 'bg-blue-500/20', text: 'text-blue-400' },
-  complex: { bg: 'bg-purple-500/20', text: 'text-purple-400' },
-  deep: { bg: 'bg-teal-500/20', text: 'text-teal-400' },
-  core: { bg: 'bg-yellow-500/20', text: 'text-yellow-400' },
-  rare: { bg: 'bg-red-500/20', text: 'text-red-400' },
-  legendary: { bg: 'bg-pink-500/20', text: 'text-pink-400' },
-  unique: { bg: 'bg-amber-400/20', text: 'text-amber-300' },
-}
+import { SYNAPSE_COLORS, SYNAPSE_TYPE_ORDER } from '@/constants/colors'
 
 interface SynapseListPanelProps {
   onNavigate: (cluster: SynapseCluster, position: THREE.Vector3) => void
@@ -53,7 +40,6 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
       })
     }
 
-    console.log('[SynapseListPanel] LOD0 clusters:', result.length)
     return result
   })
 
@@ -153,7 +139,7 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
               >
                 All
               </button>
-              <For each={SYNAPSE_TYPES}>
+              <For each={SYNAPSE_TYPE_ORDER}>
                 {(type) => (
                   <button
                     onClick={(e) => {
@@ -162,7 +148,7 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
                     }}
                     class={`px-2 py-0.5 rounded text-[10px] capitalize transition-colors ${
                       props.filterType === type
-                        ? `${TYPE_COLORS[type].bg} ${TYPE_COLORS[type].text} border border-current/50`
+                        ? `${SYNAPSE_COLORS[type].tw.bg} ${SYNAPSE_COLORS[type].tw.text} border border-current/50`
                         : 'bg-gray-700/50 text-gray-400 border border-gray-600/50 hover:bg-gray-700'
                     }`}
                   >
@@ -201,7 +187,7 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
               <For each={filteredClusters().slice(0, 50)}>
                 {(cluster) => {
                   const dominantType = getDominantSynapseType(cluster.typeCounts)
-                  const typeColor = TYPE_COLORS[dominantType]
+                  const typeColor = SYNAPSE_COLORS[dominantType].tw
                   const status = getStatusStyle(cluster)
                   const progress = cluster.synapseCount > 0
                     ? Math.round((cluster.discoveredCount / cluster.synapseCount) * 100)

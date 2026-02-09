@@ -17,6 +17,100 @@ import (
 	"gorm.io/gorm"
 )
 
+// TravelParams contains the calculated parameters for starting travel
+type TravelParams struct {
+	Distance       float64
+	TravelCost     float64
+	TravelDuration int64
+	StartTime      int64
+}
+
+// calculateDistance computes 3D Euclidean distance between two points
+func calculateDistance(x1, y1, z1, x2, y2, z2 float64) float64 {
+	dx := x2 - x1
+	dy := y2 - y1
+	dz := z2 - z1
+	return math.Sqrt(dx*dx + dy*dy + dz*dz)
+}
+
+// calculateTravelParams computes travel cost, duration and timing
+func calculateTravelParams(distance float64, cfg *config.Config) TravelParams {
+	// Calculate travel cost
+	travelCost := math.Max(distance*cfg.TravelCostPerUnit, cfg.TravelCostMinimum)
+
+	// Game time travel, scaled by time multiplier
+	gameDuration := distance * cfg.TravelTimePerUnit
+	travelDuration := int64(gameDuration / cfg.TimeMultiplier)
+	if travelDuration < 2000 {
+		travelDuration = 2000
+	}
+
+	return TravelParams{
+		Distance:       distance,
+		TravelCost:     travelCost,
+		TravelDuration: travelDuration,
+		StartTime:      time.Now().UnixMilli(),
+	}
+}
+
+// setAgentTravelState updates an agent's state for traveling to a target
+// IMPORTANT: All pointer fields must be heap-allocated to avoid dangling pointers
+func setAgentTravelState(agent *models.Agent, synapseID string, targetX, targetY, targetZ float64, params TravelParams) {
+	agent.State = string(dto.AgentTraveling)
+
+	// Heap-allocate synapse ID (function param would become dangling)
+	sid := new(string)
+	*sid = synapseID
+	agent.TargetSpaceID = sid
+
+	// Heap-allocate start positions (copying from agent's current position)
+	startPosX := new(float64)
+	startPosY := new(float64)
+	startPosZ := new(float64)
+	*startPosX = agent.PositionX
+	*startPosY = agent.PositionY
+	*startPosZ = agent.PositionZ
+	agent.StartPositionX = startPosX
+	agent.StartPositionY = startPosY
+	agent.StartPositionZ = startPosZ
+
+	// Heap-allocate target positions (function params would become dangling)
+	tgtX := new(float64)
+	tgtY := new(float64)
+	tgtZ := new(float64)
+	*tgtX = targetX
+	*tgtY = targetY
+	*tgtZ = targetZ
+	agent.TargetX = tgtX
+	agent.TargetY = tgtY
+	agent.TargetZ = tgtZ
+
+	// Heap-allocate travel timing (struct fields would become dangling)
+	startTime := new(int64)
+	duration := new(int64)
+	*startTime = params.StartTime
+	*duration = params.TravelDuration
+	agent.TravelStartTime = startTime
+	agent.TravelDuration = duration
+}
+
+// broadcastTravelStarted sends the travel:started WebSocket event
+func broadcastTravelStarted(hub *wshub.Hub, agent *models.Agent, space *models.Space, params TravelParams) {
+	hub.SendToUser(agent.OwnerID, dto.ServerMessageTypeTravelStarted, dto.TravelStartedEvent{
+		ShipID:          agent.ID,
+		StartPositionX:  *agent.StartPositionX,
+		StartPositionY:  *agent.StartPositionY,
+		StartPositionZ:  *agent.StartPositionZ,
+		TargetPositionX: space.PositionX,
+		TargetPositionY: space.PositionY,
+		TargetPositionZ: space.PositionZ,
+		TravelStartTime: params.StartTime,
+		TravelDuration:  params.TravelDuration,
+		TravelCost:      params.TravelCost,
+		TargetSynapseID: space.ID,
+	})
+}
+
 // convertAgentToDTO converts a models.Agent to ShipDTO
 func convertAgentToDTO(agent models.Agent) dto.ShipDTO {
 	// Default to "neuron" if ShipType is empty (backwards compatibility)
@@ -212,14 +306,10 @@ func DeployShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *config.Con
 			return c.Status(400).JSON(fiber.Map{"error": "Synapse is already being explored"})
 		}
 
-		// Calculate travel distance and duration
-		dx := space.PositionX - agent.PositionX
-		dy := space.PositionY - agent.PositionY
-		dz := space.PositionZ - agent.PositionZ
-		distance := math.Sqrt(dx*dx + dy*dy + dz*dz)
-
-		// Calculate travel cost
-		travelCost := math.Max(distance*cfg.TravelCostPerUnit, cfg.TravelCostMinimum)
+		// Calculate travel parameters using helpers
+		distance := calculateDistance(agent.PositionX, agent.PositionY, agent.PositionZ,
+			space.PositionX, space.PositionY, space.PositionZ)
+		params := calculateTravelParams(distance, cfg)
 
 		// Get user and check points balance
 		user, err := db.GetUser(database, agent.OwnerID)
@@ -227,67 +317,35 @@ func DeployShip(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *config.Con
 			return c.Status(404).JSON(fiber.Map{"error": "User not found"})
 		}
 
-		if user.Points < travelCost {
+		if user.Points < params.TravelCost {
 			return c.Status(400).JSON(fiber.Map{
 				"error":     "Insufficient points for travel",
-				"required":  travelCost,
+				"required":  params.TravelCost,
 				"available": user.Points,
 			})
 		}
 
 		// Deduct travel cost from user's points
-		if err := db.DecrementUserPoints(database, agent.OwnerID, travelCost); err != nil {
+		if err := db.DecrementUserPoints(database, agent.OwnerID, params.TravelCost); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct travel cost"})
 		}
 
-		// Game time travel, scaled by time multiplier
-		gameDuration := distance * cfg.TravelTimePerUnit
-		travelDuration := int64(gameDuration / cfg.TimeMultiplier)
-		if travelDuration < 2000 {
-			travelDuration = 2000
-		}
-		now := time.Now().UnixMilli()
-
-		// Update agent to traveling state
-		agent.State = string(dto.AgentTraveling)
-		agent.TargetSpaceID = &req.SynapseID
-		startPosX := agent.PositionX
-		startPosY := agent.PositionY
-		startPosZ := agent.PositionZ
-		agent.StartPositionX = &startPosX
-		agent.StartPositionY = &startPosY
-		agent.StartPositionZ = &startPosZ
-		agent.TargetX = &space.PositionX
-		agent.TargetY = &space.PositionY
-		agent.TargetZ = &space.PositionZ
-		agent.TravelStartTime = &now
-		agent.TravelDuration = &travelDuration
+		// Update agent to traveling state using helper
+		setAgentTravelState(agent, req.SynapseID, space.PositionX, space.PositionY, space.PositionZ, params)
 
 		if err := db.UpdateAgent(database, agent); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to deploy ship"})
 		}
 
-		// Broadcast travel:started event with all interpolation data
-		hub.SendToUser(agent.OwnerID, dto.ServerMessageTypeTravelStarted, dto.TravelStartedEvent{
-			ShipID:          agent.ID,
-			StartPositionX:  startPosX,
-			StartPositionY:  startPosY,
-			StartPositionZ:  startPosZ,
-			TargetPositionX: space.PositionX,
-			TargetPositionY: space.PositionY,
-			TargetPositionZ: space.PositionZ,
-			TravelStartTime: now,
-			TravelDuration:  travelDuration,
-			TravelCost:      travelCost,
-			TargetSynapseID: req.SynapseID,
-		})
+		// Broadcast travel:started event
+		broadcastTravelStarted(hub, agent, space, params)
 
 		return c.JSON(fiber.Map{
 			"success":          true,
 			"ship":             convertAgentToDTO(*agent),
-			"travelDuration":   travelDuration,
-			"travelCost":       travelCost,
-			"estimatedArrival": now + travelDuration,
+			"travelDuration":   params.TravelDuration,
+			"travelCost":       params.TravelCost,
+			"estimatedArrival": params.StartTime + params.TravelDuration,
 		})
 	}
 
@@ -401,14 +459,10 @@ func TravelToSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *confi
 		return c.Status(400).JSON(fiber.Map{"error": "Synapse is already being explored"})
 	}
 
-	// Calculate travel distance and duration
-	dx := space.PositionX - agent.PositionX
-	dy := space.PositionY - agent.PositionY
-	dz := space.PositionZ - agent.PositionZ
-	distance := math.Sqrt(dx*dx + dy*dy + dz*dz)
-
-	// Calculate travel cost
-	travelCost := math.Max(distance*cfg.TravelCostPerUnit, cfg.TravelCostMinimum)
+	// Calculate travel parameters using helpers
+	distance := calculateDistance(agent.PositionX, agent.PositionY, agent.PositionZ,
+		space.PositionX, space.PositionY, space.PositionZ)
+	params := calculateTravelParams(distance, cfg)
 
 	// Get user and check points balance
 	user, err := db.GetUser(database, agent.OwnerID)
@@ -416,45 +470,23 @@ func TravelToSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *confi
 		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
 	}
 
-	if user.Points < travelCost {
+	if user.Points < params.TravelCost {
 		return c.Status(400).JSON(fiber.Map{
-			"error":         "Insufficient points for travel",
-			"required":      travelCost,
-			"available":     user.Points,
+			"error":     "Insufficient points for travel",
+			"required":  params.TravelCost,
+			"available": user.Points,
 		})
 	}
 
 	// Deduct travel cost from user's points
-	if err := db.DecrementUserPoints(database, agent.OwnerID, travelCost); err != nil {
+	if err := db.DecrementUserPoints(database, agent.OwnerID, params.TravelCost); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct travel cost"})
 	}
 
-	// Game time travel, scaled by time multiplier
-	gameDuration := distance * cfg.TravelTimePerUnit
-	travelDuration := int64(gameDuration / cfg.TimeMultiplier)
-	if travelDuration < 2000 {
-		travelDuration = 2000
-	}
-	now := time.Now().UnixMilli()
+	// Update agent to traveling state using helper
+	setAgentTravelState(agent, req.SynapseID, space.PositionX, space.PositionY, space.PositionZ, params)
 
-	// Update agent to traveling state
-	agent.State = string(dto.AgentTraveling)
-	agent.TargetSpaceID = &req.SynapseID
-
-	startPosX := agent.PositionX
-	startPosY := agent.PositionY
-	startPosZ := agent.PositionZ
-	agent.StartPositionX = &startPosX
-	agent.StartPositionY = &startPosY
-	agent.StartPositionZ = &startPosZ
-
-	agent.TargetX = &space.PositionX
-	agent.TargetY = &space.PositionY
-	agent.TargetZ = &space.PositionZ
-
-	agent.TravelStartTime = &now
-	agent.TravelDuration = &travelDuration
-
+	// Set points per minute if provided
 	if req.PointsPerMin > 0 {
 		agent.CurrentPointsPerMin = int(req.PointsPerMin)
 	} else if agent.CurrentPointsPerMin == 0 {
@@ -465,27 +497,15 @@ func TravelToSynapse(c *fiber.Ctx, database *gorm.DB, hub *wshub.Hub, cfg *confi
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to start travel"})
 	}
 
-	// Broadcast travel:started event with all interpolation data
-	hub.SendToUser(agent.OwnerID, dto.ServerMessageTypeTravelStarted, dto.TravelStartedEvent{
-		ShipID:          agent.ID,
-		StartPositionX:  startPosX,
-		StartPositionY:  startPosY,
-		StartPositionZ:  startPosZ,
-		TargetPositionX: space.PositionX,
-		TargetPositionY: space.PositionY,
-		TargetPositionZ: space.PositionZ,
-		TravelStartTime: now,
-		TravelDuration:  travelDuration,
-		TravelCost:      travelCost,
-		TargetSynapseID: req.SynapseID,
-	})
+	// Broadcast travel:started event
+	broadcastTravelStarted(hub, agent, space, params)
 
 	return c.JSON(fiber.Map{
 		"success":          true,
 		"ship":             convertAgentToDTO(*agent),
-		"travelDuration":   travelDuration,
-		"travelCost":       travelCost,
-		"estimatedArrival": now + travelDuration,
+		"travelDuration":   params.TravelDuration,
+		"travelCost":       params.TravelCost,
+		"estimatedArrival": params.StartTime + params.TravelDuration,
 	})
 }
 

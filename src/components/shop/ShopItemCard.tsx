@@ -3,17 +3,9 @@ import { Zap, Clover, TrendingUp, Radar, EyeOff, Check, Clock, Coins } from 'luc
 import type { ShopItem } from '@/stores/shopStore'
 import { formatDuration, getRemainingTime } from '@/stores/shopStore'
 import { cn } from '@/lib/utils'
+import { ITEM_COLORS } from '@/constants/colors'
 
 type CSSProperties = JSX.CSSProperties & { [key: string]: string | number | undefined }
-
-// Clean color system using brand colors
-const ITEM_COLORS: Record<string, { accent: string; bg: string }> = {
-  speed_boost: { accent: '#75e6ea', bg: 'rgba(117, 230, 234, 0.1)' },
-  luck_charm: { accent: '#41cba4', bg: 'rgba(65, 203, 164, 0.1)' },
-  xp_amplifier: { accent: '#a855f7', bg: 'rgba(168, 85, 247, 0.1)' },
-  radar: { accent: '#397bff', bg: 'rgba(57, 123, 255, 0.1)' },
-  cloak: { accent: '#94a3b8', bg: 'rgba(148, 163, 184, 0.1)' },
-}
 
 function ItemIcon(props: { itemType: string; class?: string }) {
   switch (props.itemType) {

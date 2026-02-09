@@ -29,12 +29,6 @@ export const ANIMATION_SPEEDS = {
   agentPulse: 2,              // Pulse frequency multiplier
 } as const
 
-// Trance mode
-export const TRANCE_CONFIG = {
-  timeScale: 0.05,  // 20x slowdown (1/20 = 0.05)
-  normalScale: 1.0,
-} as const
-
 // Colors by tier/state
 export const TIER_COLORS = {
   common: { r: 0.4, g: 0.5, b: 0.6 },
@@ -96,10 +90,11 @@ export const SHIP_ZOOM_CONFIG = {
 
 // Ship follow configuration - for smooth camera tracking during ship movement
 export const SHIP_FOLLOW_CONFIG = {
-  followLerpSpeed: 2.5,          // How fast camera follows ship (lower = smoother, more cinematic)
+  followLerpSpeed: 1.2,          // How fast camera follows ship (lower = smoother, ship appears to move ahead)
   followOffset: [0.7, 0.25, 0.5] as const,  // Camera offset while following [x, y, z]
   initialZoomDuration: 800,      // Initial zoom animation duration ms
 } as const
+
 
 // LOD thresholds (camera distance)
 export const LOD_THRESHOLDS = {
@@ -122,19 +117,19 @@ export const LOD_PARTICLE_COUNTS = {
 
 // Ship marker rendering
 export const SHIP_MARKER_CONFIG = {
-  pointSize: 6.0,              // Base point size
-  distanceScale: 80.0,         // Distance-based scaling divisor
-  minPointSize: 2.0,           // Minimum clamped point size
-  maxPointSize: 12.0,          // Maximum clamped point size
+  pointSize: 25.0,             // Base point size (increased for visibility)
+  distanceScale: 60.0,         // Distance-based scaling divisor
+  minPointSize: 15.0,          // Minimum clamped point size (increased)
+  maxPointSize: 40.0,          // Maximum clamped point size (increased)
 } as const
 
 // Ship state pulse animations (frequency in Hz, amplitude as multiplier)
+// Ship state pulse animations - matches ShipStatus type: 'idle' | 'solving' | 'deploying' | 'returning'
 export const SHIP_STATE_PULSE = {
   idle: { frequency: 1.0, amplitude: 0.1 },       // Subtle breathing
-  searching: { frequency: 2.5, amplitude: 0.18 }, // Wandering pulse
-  exploring: { frequency: 3.0, amplitude: 0.2 },  // Active pulsing
-  deploying: { frequency: 5.0, amplitude: 0.25 }, // Rapid pulse
-  returning: { frequency: 2.0, amplitude: 0.15 }, // Gentle pulse
+  solving: { frequency: 1.5, amplitude: 0.1 },    // Working at synapse (orbiting)
+  deploying: { frequency: 5.0, amplitude: 0.25 }, // Rapid pulse (moving)
+  returning: { frequency: 2.0, amplitude: 0.15 }, // Gentle pulse (moving)
 } as const
 
 // Ship marker shape (diamond)
@@ -160,12 +155,11 @@ export const SHIP_ENGINE_CONFIG = {
   activeColor: [1.0, 0.5, 0.1], // Orange for active
 } as const
 
-// Ship state colors (RGB values for shader)
-export const SHIP_STATE_COLORS = {
-  idle: [0.6, 0.7, 0.85],       // Blue-gray for visibility
-  searching: [0.87, 0.53, 0.87], // Magenta/purple - actively searching
-  exploring: [0.0, 0.87, 0.87],  // Bright cyan
-  deploying: [0.87, 0.67, 0.0],  // Bright orange
+// Ship state colors (RGB values for shader) - keyed by ShipStatus
+export const SHIP_STATE_COLORS: Record<'idle' | 'solving' | 'deploying' | 'returning', readonly [number, number, number]> = {
+  idle: [1.0, 0.9, 0.2],       // Bright yellow/gold for visibility
+  solving: [0.0, 0.87, 0.87],  // Bright cyan (ship at synapse)
+  deploying: [0.87, 0.67, 0.0],  // Bright orange (traveling)
   returning: [0.53, 0.87, 0.53], // Bright green
 } as const
 

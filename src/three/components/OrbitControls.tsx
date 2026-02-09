@@ -8,6 +8,7 @@
 import { onMount, onCleanup, createEffect } from 'solid-js'
 import { OrbitControls as ThreeOrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useThree, useFrame } from '../hooks'
+import { log } from '@/utils/logger'
 
 interface OrbitControlsProps {
   enableDamping?: boolean
@@ -36,7 +37,7 @@ export function OrbitControls(props: OrbitControlsProps) {
     const renderer = gl()
 
     if (!cam || !renderer) {
-      console.warn('OrbitControls: Camera or renderer not available')
+      log.three.warn('OrbitControls: Camera or renderer not available')
       return
     }
 

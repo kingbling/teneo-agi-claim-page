@@ -1,6 +1,9 @@
 // Portal Masterplan 2026 - Game Types
 // Single USDC-based Level System (5 Levels)
 
+// Import SYNAPSE_TYPE_ORDER for use in functions below
+import { SYNAPSE_TYPE_ORDER } from '@/constants/colors'
+
 // ============================================================================
 // SYNAPSE TYPES (7 Types)
 // ============================================================================
@@ -86,11 +89,6 @@ export const SYNAPSE_CONFIG: Record<SynapseType, SynapseTypeConfig> = {
     unlockUserLevel: 4,      // $100+ USDC (Captain)
   },
 }
-
-// Synapse type order for sorting (least rare to most rare)
-export const SYNAPSE_TYPE_ORDER: SynapseType[] = [
-  'minor', 'complex', 'deep', 'core', 'rare', 'legendary', 'unique'
-]
 
 // ============================================================================
 // USER LEVELS (5 Levels Based on USDC Spent - Masterplan 2026)
@@ -197,23 +195,17 @@ export const ITEM_DEFINITIONS: Record<ItemType, ItemDefinition> = {
 
 // ============================================================================
 // COLORS AND VISUAL CONSTANTS
+// Re-export from centralized colors module
 // ============================================================================
 
-export interface RGBColor {
-  r: number
-  g: number
-  b: number
-}
+export { SYNAPSE_COLORS, rgbToRgb, rgbToRgba, getSynapseRgbColor, SYNAPSE_TYPE_ORDER } from '@/constants/colors'
+export type { RGBColor, SynapseColorConfig } from '@/constants/colors'
 
-export const SYNAPSE_TYPE_COLORS: Record<SynapseType, RGBColor> = {
-  minor:     { r: 0.5, g: 0.7, b: 1.0 },  // Brighter blue
-  complex:   { r: 0.7, g: 0.5, b: 1.0 },  // Brighter purple
-  deep:      { r: 0.4, g: 1.0, b: 0.7 },  // Brighter teal
-  core:      { r: 1.0, g: 0.85, b: 0.1 }, // Rich gold
-  rare:      { r: 1.0, g: 0.4, b: 0.5 },  // Vibrant coral
-  legendary: { r: 1.0, g: 0.5, b: 1.0 },  // Hot magenta
-  unique:    { r: 1.0, g: 1.0, b: 0.3 },  // Brilliant yellow
-}
+// Legacy export for backwards compatibility - maps to SYNAPSE_COLORS.rgb
+import { SYNAPSE_COLORS } from '@/constants/colors'
+export const SYNAPSE_TYPE_COLORS = Object.fromEntries(
+  Object.entries(SYNAPSE_COLORS).map(([k, v]) => [k, v.rgb])
+) as Record<SynapseType, { r: number; g: number; b: number }>
 
 export const USER_LEVEL_COLORS: Record<UserLevel, string> = {
   1: '#6B7280',  // Gray

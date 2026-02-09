@@ -71,6 +71,9 @@ func main() {
 	engine.OnTravelPositions = func(batch dto.TravelPositionBatch) {
 		hub.Broadcast("travel:position", batch)
 	}
+	engine.OnClusterUpdate = func(event dto.ClusterUpdateEvent) {
+		hub.Broadcast("cluster:update", event)
+	}
 
 	// Start engine in background
 	go engine.Start()
