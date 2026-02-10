@@ -75,7 +75,7 @@ func Load() *Config {
 
 		AmbientShipsMin:    getEnvInt("AMBIENT_SHIPS_MIN", 5),
 		AmbientShipsMax:    getEnvInt("AMBIENT_SHIPS_MAX", 15),
-		AmbientSpeedFactor: getEnvFloat("AMBIENT_SPEED_FACTOR", 0.8),
+		AmbientSpeedFactor: getEnvFloat("AMBIENT_SPEED_FACTOR", 8),
 	}
 }
 

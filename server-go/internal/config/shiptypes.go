@@ -12,10 +12,14 @@ const (
 	ShipTypeSynapse ShipType = "synapse"
 	// ShipTypeDendrite - Sleek scout with long needle fuselage, minimal fins, single large engine
 	ShipTypeDendrite ShipType = "dendrite"
+	// ShipTypeAxon - Signal carrier with elongated body
+	ShipTypeAxon ShipType = "axon"
+	// ShipTypeCortex - Command vessel with broad structure
+	ShipTypeCortex ShipType = "cortex"
 )
 
 // AllShipTypes contains all valid ship types
-var AllShipTypes = []ShipType{ShipTypeNeuron, ShipTypeSynapse, ShipTypeDendrite}
+var AllShipTypes = []ShipType{ShipTypeNeuron, ShipTypeSynapse, ShipTypeDendrite, ShipTypeAxon, ShipTypeCortex}
 
 // RandomShipType returns a randomly selected ship type
 func RandomShipType() ShipType {

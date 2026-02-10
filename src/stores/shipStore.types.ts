@@ -39,7 +39,7 @@ export function mapServerShipState(serverState: string): ShipStatus {
 export type ShipStatus = 'idle' | 'solving' | 'deploying' | 'returning'
 
 // Ship Type (visual style)
-export type ShipType = 'neuron' | 'synapse' | 'dendrite'
+export type ShipType = 'neuron' | 'synapse' | 'dendrite' | 'axon' | 'cortex'
 
 // Equipped Item on a Ship
 export interface EquippedItem {
@@ -293,11 +293,21 @@ export interface TravelPositionBatch {
 // World Ship (ambient + other users, broadcast via world:ships)
 export interface WorldShip {
   id: string
+  tp?: string  // shipType: 'neuron' | 'synapse' | 'dendrite' | 'axon' | 'cortex'
   x: number
   y: number
   z: number
   r: number   // rotationY
   s: number   // 0=traveling, 1=idle
+  // Trajectory for client-side interpolation (only when traveling)
+  sx?: number  // startX
+  sy?: number  // startY
+  sz?: number  // startZ
+  tx?: number  // targetX
+  ty?: number  // targetY
+  tz?: number  // targetZ
+  ts?: number  // travelStart (unix ms)
+  td?: number  // travelDuration (ms)
 }
 
 // Server Messages

@@ -215,11 +215,21 @@ type ClusterUpdateEvent struct {
 // Uses compact field names for bandwidth efficiency
 type WorldShipUpdate struct {
 	ID        string  `json:"id"`
+	ShipType  string  `json:"tp,omitempty"`
 	PositionX float64 `json:"x"`
 	PositionY float64 `json:"y"`
 	PositionZ float64 `json:"z"`
 	RotationY float64 `json:"r"`
 	State     int     `json:"s"` // 0=traveling, 1=idle
+	// Trajectory data for client-side interpolation (only when traveling)
+	StartX         float64 `json:"sx,omitempty"`
+	StartY         float64 `json:"sy,omitempty"`
+	StartZ         float64 `json:"sz,omitempty"`
+	TargetX        float64 `json:"tx,omitempty"`
+	TargetY        float64 `json:"ty,omitempty"`
+	TargetZ        float64 `json:"tz,omitempty"`
+	TravelStart    int64   `json:"ts,omitempty"`
+	TravelDuration int64   `json:"td,omitempty"`
 }
 
 // WorldShipsBatch batches multiple world ship updates

@@ -16,7 +16,8 @@ import (
 
 // AmbientShip represents a virtual ship flying between synapses
 type AmbientShip struct {
-	ID string
+	ID       string
+	ShipType config.ShipType
 
 	// Current position (interpolated)
 	CurrentX, CurrentY, CurrentZ float64
@@ -96,6 +97,7 @@ func (am *AmbientManager) Init() {
 
 		ship := &AmbientShip{
 			ID:             fmt.Sprintf("ambient-%d", i),
+			ShipType:       config.RandomShipType(),
 			StartX:         start.PositionX,
 			StartY:         start.PositionY,
 			StartZ:         start.PositionZ,
@@ -112,7 +114,7 @@ func (am *AmbientManager) Init() {
 	log.Printf("[Ambient] Initialized %d ambient ships", len(am.ships))
 }
 
-// Tick updates all ambient ships and returns position updates for traveling ships
+// Tick updates all ambient ships and returns position updates
 func (am *AmbientManager) Tick(now int64) []dto.WorldShipUpdate {
 	am.mu.Lock()
 	defer am.mu.Unlock()
@@ -132,6 +134,15 @@ func (am *AmbientManager) Tick(now int64) []dto.WorldShipUpdate {
 				ship.CurrentY = ship.TargetY
 				ship.CurrentZ = ship.TargetZ
 				ship.IdleUntil = now + int64(2000+rand.Intn(3000))
+
+				updates = append(updates, dto.WorldShipUpdate{
+					ID:        ship.ID,
+					ShipType:  string(ship.ShipType),
+					PositionX: ship.CurrentX,
+					PositionY: ship.CurrentY,
+					PositionZ: ship.CurrentZ,
+					State:     1,
+				})
 			} else {
 				// Interpolate position
 				ship.CurrentX = ship.StartX + (ship.TargetX-ship.StartX)*progress
@@ -144,12 +155,21 @@ func (am *AmbientManager) Tick(now int64) []dto.WorldShipUpdate {
 				rotationY := math.Atan2(dx, -dz)
 
 				updates = append(updates, dto.WorldShipUpdate{
-					ID:        ship.ID,
-					PositionX: ship.CurrentX,
-					PositionY: ship.CurrentY,
-					PositionZ: ship.CurrentZ,
-					RotationY: rotationY,
-					State:     0,
+					ID:             ship.ID,
+					ShipType:       string(ship.ShipType),
+					PositionX:      ship.CurrentX,
+					PositionY:      ship.CurrentY,
+					PositionZ:      ship.CurrentZ,
+					RotationY:      rotationY,
+					State:          0,
+					StartX:         ship.StartX,
+					StartY:         ship.StartY,
+					StartZ:         ship.StartZ,
+					TargetX:        ship.TargetX,
+					TargetY:        ship.TargetY,
+					TargetZ:        ship.TargetZ,
+					TravelStart:    ship.TravelStart,
+					TravelDuration: ship.TravelDuration,
 				})
 			}
 
@@ -223,6 +243,7 @@ func (am *AmbientManager) AdjustCount(realTravelingCount int) {
 		idx := len(am.ships)
 		ship := &AmbientShip{
 			ID:        fmt.Sprintf("ambient-%d", idx),
+			ShipType:  config.RandomShipType(),
 			State:     1, // start idle
 			IdleUntil: now,
 		}

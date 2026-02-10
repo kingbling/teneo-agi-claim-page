@@ -1,40 +1,46 @@
 /**
  * Shared Ship Model Loading
  *
- * Cached GLB model loading for InstancedMesh rendering
+ * Cached GLB model loading per ship type for InstancedMesh rendering.
+ * Each ship type (neuron, synapse, dendrite) has its own cached model.
  */
 
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { log } from '@/utils/logger'
+import type { ShipType } from '@/stores/shipStore.types'
 
-// Cached GLB model
-let cachedModel: THREE.Group | null = null
-let modelLoadPromise: Promise<THREE.Group> | null = null
+const ALL_SHIP_TYPES: ShipType[] = ['neuron', 'synapse', 'dendrite', 'axon', 'cortex']
+
+// Per-type cached models
+const cachedModels = new Map<ShipType, THREE.Group>()
+const loadPromises = new Map<ShipType, Promise<THREE.Group>>()
 
 /**
- * Loads the ship GLB model with caching
- * First call loads the model, subsequent calls return clones from cache
+ * Loads a ship GLB model for a specific ship type with caching.
+ * First call loads the model, subsequent calls return clones from cache.
  */
-export async function loadShipModel(): Promise<THREE.Group> {
-  if (cachedModel) {
-    return cloneModelWithMaterials(cachedModel)
+export async function loadShipModel(type: ShipType = 'neuron'): Promise<THREE.Group> {
+  const cached = cachedModels.get(type)
+  if (cached) {
+    return cloneModelWithMaterials(cached)
   }
 
-  if (modelLoadPromise) {
-    await modelLoadPromise
-    return cloneModelWithMaterials(cachedModel!)
+  const existing = loadPromises.get(type)
+  if (existing) {
+    await existing
+    return cloneModelWithMaterials(cachedModels.get(type)!)
   }
 
-  modelLoadPromise = new Promise((resolve, reject) => {
+  const promise = new Promise<THREE.Group>((resolve, reject) => {
     const loader = new GLTFLoader()
     loader.load(
-      '/models/ship.glb',
+      `/models/${type}.glb`,
       (gltf) => {
-        cachedModel = gltf.scene
+        const model = gltf.scene
 
         // Fix colorSpace for Three.js r150+ compatibility
-        cachedModel.traverse((child) => {
+        model.traverse((child) => {
           if (child instanceof THREE.Mesh && child.material) {
             const materials = Array.isArray(child.material) ? child.material : [child.material]
             for (const mat of materials) {
@@ -49,18 +55,40 @@ export async function loadShipModel(): Promise<THREE.Group> {
           }
         })
 
-        log.three.success('Ship model loaded successfully')
-        resolve(cloneModelWithMaterials(cachedModel))
+        cachedModels.set(type, model)
+        log.three.success(`Ship model loaded: ${type}`)
+        resolve(cloneModelWithMaterials(model))
       },
       undefined,
       (error) => {
-        log.three.error('Failed to load ship model:', error)
+        log.three.error(`Failed to load ship model (${type}):`, error)
         reject(error)
       }
     )
   })
 
-  return modelLoadPromise
+  loadPromises.set(type, promise)
+  return promise
+}
+
+/**
+ * Preloads all ship type models in parallel.
+ * Returns a map of ShipType → model clone.
+ */
+export async function loadAllShipModels(): Promise<Map<ShipType, THREE.Group>> {
+  const results = await Promise.allSettled(
+    ALL_SHIP_TYPES.map(async (type) => {
+      const model = await loadShipModel(type)
+      return [type, model] as const
+    })
+  )
+  const map = new Map<ShipType, THREE.Group>()
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      map.set(result.value[0], result.value[1])
+    }
+  }
+  return map
 }
 
 /**

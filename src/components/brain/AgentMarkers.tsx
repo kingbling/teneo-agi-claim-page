@@ -1,20 +1,20 @@
 /**
  * AgentMarkers - InstancedMesh Ship Renderer
  *
- * Renders ALL ships (user + world) using InstancedMesh with the GLB model.
- * Single draw call per sub-mesh for high performance.
- * Handles click detection, selection ring, tooltips, and animations.
+ * Renders ALL ships (user + world) using per-type InstancedMesh groups.
+ * Each ship type (neuron, synapse, dendrite) gets its own set of instanced meshes
+ * for distinct 3D models. Handles click detection, selection ring, tooltips, and animations.
  */
 
 import { onMount, onCleanup, createEffect, createMemo, createSignal, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
-import { loadShipModel } from '@/three/useShipModel'
+import { loadAllShipModels } from '@/three/useShipModel'
 import {
   SELECTION_RING_VERTEX_SHADER,
   SELECTION_RING_FRAGMENT_SHADER,
 } from './shaders/shipShaders'
-import { shipStore, type Ship, type ShipCluster, type ShipStatus, type WorldShip } from '@/stores/shipStore'
+import { shipStore, type Ship, type ShipCluster, type ShipStatus, type ShipType, type WorldShip } from '@/stores/shipStore'
 import { computeOrbitPosition } from '@/utils/orbitHelper'
 
 interface ShipMarkersProps {
@@ -26,14 +26,20 @@ interface ShipMarkersProps {
 }
 
 const SHIP_SCALE = 0.08
-const MAX_SHIPS = 300  // user ships + world ships combined
+const MAX_SHIPS_PER_TYPE = 150
+const ALL_TYPES: ShipType[] = ['neuron', 'synapse', 'dendrite', 'axon', 'cortex']
+
+interface TypeMeshGroup {
+  meshes: THREE.InstancedMesh[]
+  count: number
+}
 
 export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
   const threeContext = useThree()
   const { scene, gl, camera } = threeContext
 
-  // InstancedMesh objects (one per sub-mesh in the GLB)
-  let instancedMeshes: THREE.InstancedMesh[] = []
+  // Per-type InstancedMesh groups
+  const typeMeshGroups = new Map<string, TypeMeshGroup>()
   let shipGroup: THREE.Group | null = null
 
   // Selection ring
@@ -57,7 +63,7 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
   const renderedPositions = new Map<string, THREE.Vector3>()
   const shipStateTracker = new Map<string, ShipStatus>()
   const worldShipRendered = new Map<string, THREE.Vector3>()
-  const worldShipPrevPos = new Map<string, THREE.Vector3>()
+  const worldShipTrajectory = new Map<string, AnimationCache>()
 
   // Cache deploy animation parameters to prevent glitches during server updates
   interface AnimationCache {
@@ -138,6 +144,38 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     return ships
   }
 
+  // Extract sub-meshes from a loaded model and create InstancedMeshes
+  const createMeshGroupFromModel = (model: THREE.Group): THREE.InstancedMesh[] => {
+    const meshInfos: { geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[] }[] = []
+    model.traverse(child => {
+      if (child instanceof THREE.Mesh) {
+        const mats = Array.isArray(child.material) ? child.material : [child.material]
+        for (const mat of mats) {
+          if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
+            if (mat.map) {
+              mat.emissiveMap = mat.map
+              mat.emissive = new THREE.Color(1, 1, 1)
+              mat.emissiveIntensity = 0.6
+            } else {
+              mat.emissive = mat.color.clone()
+              mat.emissiveIntensity = 0.3
+            }
+          }
+        }
+        meshInfos.push({ geometry: child.geometry, material: child.material })
+      }
+    })
+
+    return meshInfos.map(({ geometry, material }) => {
+      const im = new THREE.InstancedMesh(geometry, material, MAX_SHIPS_PER_TYPE)
+      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+      im.frustumCulled = false
+      im.count = 0
+      im.renderOrder = 100
+      return im
+    })
+  }
+
   onMount(async () => {
     const sceneObj = scene()
     const renderer = gl()
@@ -145,36 +183,21 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
 
     raycaster = new THREE.Raycaster()
 
-    // Load GLB model and extract sub-meshes
-    const baseModel = await loadShipModel()
-    const meshInfos: { geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[] }[] = []
-    baseModel.traverse(child => {
-      if (child instanceof THREE.Mesh) {
-        // Subtle emissive so ships are visible without per-instance lights
-        const mats = Array.isArray(child.material) ? child.material : [child.material]
-        for (const mat of mats) {
-          if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
-            mat.emissive = mat.color.clone()
-            mat.emissiveIntensity = 0.15
-          }
-        }
-        meshInfos.push({ geometry: child.geometry, material: child.material })
-      }
-    })
+    // Load all ship type models in parallel
+    const models = await loadAllShipModels()
 
-    // Create InstancedMesh for each sub-mesh in the GLB
     shipGroup = new THREE.Group()
-    instancedMeshes = meshInfos.map(({ geometry, material }) => {
-      const im = new THREE.InstancedMesh(geometry, material, MAX_SHIPS)
-      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-      im.frustumCulled = false
-      im.count = 0
-      im.renderOrder = 100
-      return im
-    })
-    instancedMeshes.forEach(im => shipGroup!.add(im))
 
-    // Directional lights to illuminate all ship instances (replaces per-ship point lights)
+    // Create per-type InstancedMesh groups
+    for (const type of ALL_TYPES) {
+      const model = models.get(type)
+      if (!model) continue
+      const meshes = createMeshGroupFromModel(model)
+      typeMeshGroups.set(type, { meshes, count: 0 })
+      meshes.forEach(im => shipGroup!.add(im))
+    }
+
+    // Directional lights to illuminate all ship instances
     const keyLight = new THREE.DirectionalLight(0xffffff, 3)
     keyLight.position.set(1, 1.5, -1)
     shipGroup.add(keyLight)
@@ -240,9 +263,9 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       canvas.removeEventListener('pointerup', handlePointerUp)
 
       if (shipGroup && sceneObj) sceneObj.remove(shipGroup)
-      instancedMeshes.forEach(im => {
-        im.dispose()
-      })
+      for (const group of typeMeshGroups.values()) {
+        group.meshes.forEach(im => im.dispose())
+      }
 
       if (selectionRingMesh && sceneObj) sceneObj.remove(selectionRingMesh)
       selectionRingGeometry?.dispose()
@@ -251,6 +274,16 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       document.body.style.cursor = 'auto'
     })
   })
+
+  // Helper: assign a matrix to the correct type group
+  const assignToTypeGroup = (type: string) => {
+    const group = typeMeshGroups.get(type) || typeMeshGroups.get('neuron')
+    if (!group) return
+    const idx = group.count
+    if (idx >= MAX_SHIPS_PER_TYPE) return
+    group.meshes.forEach(im => im.setMatrixAt(idx, _matrix))
+    group.count++
+  }
 
   // === STANDALONE ANIMATION LOOP ===
   let animFrameId: number | null = null
@@ -262,16 +295,19 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
 
     if (selectionRingMaterial) selectionRingMaterial.uniforms.uTime.value = elapsedTime
 
-    if (instancedMeshes.length === 0) {
+    if (typeMeshGroups.size === 0) {
       animFrameId = requestAnimationFrame(runAnimation)
       return
+    }
+
+    // Reset all type group counts
+    for (const group of typeMeshGroups.values()) {
+      group.count = 0
     }
 
     // Read fresh data from store each frame
     const worldShips: WorldShip[] = shipStore.worldShips || []
     const visibleUser = getVisibleUserShips()
-
-    let instanceIdx = 0
 
     // Ensure userShipPositions array is properly sized
     while (userShipPositions.length < visibleUser.length) {
@@ -280,7 +316,7 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     userShipPositions.length = visibleUser.length
 
     // === RENDER USER SHIPS ===
-    for (let i = 0; i < visibleUser.length && instanceIdx < MAX_SHIPS; i++) {
+    for (let i = 0; i < visibleUser.length; i++) {
       const ship = visibleUser[i]
       let x = ship.positionX, y = ship.positionY, z = ship.positionZ
       let rotY = shipRotations.get(ship.id) ?? 0
@@ -391,70 +427,91 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       shipRotations.set(ship.id, rotY)
       userShipPositions[i].set(x, y, z)
 
-      // Set instance matrix
+      // Set instance matrix and assign to correct type group
       _pos.set(x, y, z)
       _euler.set(0, rotY, 0)
       _quat.setFromEuler(_euler)
       _matrix.compose(_pos, _quat, _scale)
-      instancedMeshes.forEach(im => im.setMatrixAt(instanceIdx, _matrix))
-
-      instanceIdx++
+      assignToTypeGroup(ship.shipType)
     }
 
     // === RENDER WORLD SHIPS ===
-    const WORLD_LERP = 0.12
-    for (let i = 0; i < worldShips.length && instanceIdx < MAX_SHIPS; i++) {
+    for (let i = 0; i < worldShips.length; i++) {
       const ws = worldShips[i]
-
-      // Smooth position interpolation
-      let rendered = worldShipRendered.get(ws.id)
-      if (!rendered) {
-        rendered = new THREE.Vector3(ws.x, ws.y, ws.z)
-        worldShipRendered.set(ws.id, rendered)
-      } else {
-        rendered.x += (ws.x - rendered.x) * WORLD_LERP
-        rendered.y += (ws.y - rendered.y) * WORLD_LERP
-        rendered.z += (ws.z - rendered.z) * WORLD_LERP
-      }
-
-      // Compute rotation from velocity
-      const prev = worldShipPrevPos.get(ws.id)
+      let x: number, y: number, z: number
       let rotY = shipRotations.get('w_' + ws.id) ?? 0
-      if (prev) {
-        const vx = rendered.x - prev.x
-        const vz = rendered.z - prev.z
-        if (vx * vx + vz * vz > 0.00001) {
-          const targetRotY = Math.atan2(vx, -vz)
+
+      if (ws.s === 0 && ws.ts && ws.td && ws.td > 0) {
+        // Traveling: cache trajectory, then interpolate locally using time
+        const cached = worldShipTrajectory.get(ws.id)
+        if (!cached || cached.startTime !== ws.ts) {
+          worldShipTrajectory.set(ws.id, {
+            startX: ws.sx ?? ws.x, startY: ws.sy ?? ws.y, startZ: ws.sz ?? ws.z,
+            targetX: ws.tx ?? ws.x, targetY: ws.ty ?? ws.y, targetZ: ws.tz ?? ws.z,
+            startTime: ws.ts, duration: ws.td,
+          })
+        }
+
+        const traj = worldShipTrajectory.get(ws.id)!
+        const progress = Math.min(Math.max((now - traj.startTime) / traj.duration, 0), 1)
+        x = traj.startX + (traj.targetX - traj.startX) * progress
+        y = traj.startY + (traj.targetY - traj.startY) * progress
+        z = traj.startZ + (traj.targetZ - traj.startZ) * progress
+
+        // Face travel direction
+        const dx = traj.targetX - x
+        const dz = traj.targetZ - z
+        if (dx * dx + dz * dz > 0.0001) {
+          const targetRotY = Math.atan2(dx, -dz)
           let deltaAngle = targetRotY - rotY
           deltaAngle = ((deltaAngle + Math.PI) % (Math.PI * 2)) - Math.PI
           if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2
           rotY += deltaAngle * 0.15
         }
+      } else {
+        // Idle: server position with gentle hover
+        x = ws.x
+        y = ws.y
+        z = ws.z
+        const idlePhase = ws.id.charCodeAt(ws.id.length - 1)
+        y += Math.sin(now * 0.001 + idlePhase) * 0.02
+        worldShipTrajectory.delete(ws.id)
       }
-      worldShipPrevPos.set(ws.id, new THREE.Vector3(rendered.x, rendered.y, rendered.z))
+
+      // Smooth rendered position to avoid hard jumps on data changes
+      let rendered = worldShipRendered.get(ws.id)
+      if (!rendered) {
+        rendered = new THREE.Vector3(x, y, z)
+        worldShipRendered.set(ws.id, rendered)
+      } else {
+        rendered.x += (x - rendered.x) * 0.2
+        rendered.y += (y - rendered.y) * 0.2
+        rendered.z += (z - rendered.z) * 0.2
+      }
+
       shipRotations.set('w_' + ws.id, rotY)
 
       _pos.set(rendered.x, rendered.y, rendered.z)
       _euler.set(0, rotY, 0)
       _quat.setFromEuler(_euler)
       _matrix.compose(_pos, _quat, _scale)
-      instancedMeshes.forEach(im => im.setMatrixAt(instanceIdx, _matrix))
-
-      instanceIdx++
+      assignToTypeGroup(ws.tp || 'neuron')
     }
 
     // Update instance counts and trigger GPU upload
-    instancedMeshes.forEach(im => {
-      im.count = instanceIdx
-      im.instanceMatrix.needsUpdate = true
-    })
+    for (const group of typeMeshGroups.values()) {
+      group.meshes.forEach(im => {
+        im.count = group.count
+        im.instanceMatrix.needsUpdate = true
+      })
+    }
 
     // Clean up stale world ship tracking data
     const currentWorldIds = new Set(worldShips.map(s => s.id))
     for (const id of worldShipRendered.keys()) {
       if (!currentWorldIds.has(id)) {
         worldShipRendered.delete(id)
-        worldShipPrevPos.delete(id)
+        worldShipTrajectory.delete(id)
         shipRotations.delete('w_' + id)
       }
     }
