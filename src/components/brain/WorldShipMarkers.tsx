@@ -1,58 +1,26 @@
 import { onMount, onCleanup, createEffect, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree } from '@/three/hooks'
-import { constrainToBrainShape } from './core/brainConstants'
+import { constrainToBrainShape, WORLD_SHIP_CONFIG } from './core/brainConstants'
+import { WORLD_SHIP_VERTEX_SHADER, WORLD_SHIP_FRAGMENT_SHADER } from './shaders/worldShipShaders'
 import { shipStore, type WorldShip } from '@/stores/shipStore'
 
 /**
- * WorldShipMarkers renders ambient + other-user ships as subtle semi-transparent points.
- * Visually distinct from the user's own ships: smaller, muted blue, lower opacity.
+ * WorldShipMarkers renders ambient + other-user ships as warm white-gold diamond markers.
+ * Visually distinct from user's own ships and from the blue synapse cloud.
  * Non-interactive (no click handling, raycaster, tooltips).
+ *
+ * Features:
+ * - Distance-based point size clamping (visible at all zoom levels)
+ * - Velocity tracking for directional streak effect
+ * - Fade-out over ~1s when ships go idle (instead of instant vanish)
+ * - NormalBlending for visibility against bright areas
  */
 
-const WORLD_SHIP_COLOR = new Float32Array([0.4, 0.6, 0.9]) // Muted blue
-const POINT_SIZE = 16
-const MAX_WORLD_SHIPS = 50
-
-// Inline vertex shader
-const VERTEX_SHADER = `
-  uniform float uTime;
-  attribute float aAlpha;
-  varying float vAlpha;
-
-  void main() {
-    vAlpha = aAlpha;
-    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-
-    // Gentle pulse
-    float pulse = 1.0 + sin(uTime * 2.0 + position.x * 10.0) * 0.1;
-
-    gl_PointSize = ${POINT_SIZE.toFixed(1)} * pulse * (300.0 / -mvPosition.z);
-    gl_Position = projectionMatrix * mvPosition;
-  }
-`
-
-// Inline fragment shader
-const FRAGMENT_SHADER = `
-  uniform vec3 uColor;
-  varying float vAlpha;
-
-  void main() {
-    // Circular point with soft edges
-    vec2 center = gl_PointCoord - vec2(0.5);
-    float dist = length(center);
-    if (dist > 0.5) discard;
-
-    // Soft glow falloff
-    float alpha = smoothstep(0.5, 0.15, dist) * vAlpha;
-
-    gl_FragColor = vec4(uColor, alpha);
-  }
-`
+const MAX_WORLD_SHIPS = 100
 
 export const WorldShipMarkers: Component = () => {
-  const threeContext = useThree()
-  const { scene } = threeContext
+  const { scene } = useThree()
 
   let pointsObject: THREE.Points | null = null
   let geometry: THREE.BufferGeometry | null = null
@@ -61,51 +29,79 @@ export const WorldShipMarkers: Component = () => {
 
   // Smooth position interpolation
   const renderedPositions = new Map<string, THREE.Vector3>()
+  // Previous positions for velocity computation
+  const prevPositions = new Map<string, THREE.Vector3>()
+  // Fade-out tracking: maps ship ID → { alpha, fading }
+  const fadeState = new Map<string, { alpha: number; fading: boolean; x: number; y: number; z: number }>()
+
   const LERP_FACTOR = 0.12
+  const FADE_OUT_SPEED = 1.0 / WORLD_SHIP_CONFIG.fadeOutDuration // alpha per second
 
   onMount(() => {
+    const sceneObj = scene()
+    if (!sceneObj) return
+
     // Create geometry with pre-allocated buffers
     geometry = new THREE.BufferGeometry()
     const positions = new Float32Array(MAX_WORLD_SHIPS * 3)
     const alphas = new Float32Array(MAX_WORLD_SHIPS)
+    const velocities = new Float32Array(MAX_WORLD_SHIPS * 3)
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
     geometry.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1))
+    geometry.setAttribute('aVelocity', new THREE.BufferAttribute(velocities, 3))
 
-    // Create material
     material = new THREE.ShaderMaterial({
-      vertexShader: VERTEX_SHADER,
-      fragmentShader: FRAGMENT_SHADER,
+      vertexShader: WORLD_SHIP_VERTEX_SHADER,
+      fragmentShader: WORLD_SHIP_FRAGMENT_SHADER,
       uniforms: {
         uTime: { value: 0 },
-        uColor: { value: new THREE.Color(WORLD_SHIP_COLOR[0], WORLD_SHIP_COLOR[1], WORLD_SHIP_COLOR[2]) },
+        uColor: { value: new THREE.Color(
+          WORLD_SHIP_CONFIG.color[0],
+          WORLD_SHIP_CONFIG.color[1],
+          WORLD_SHIP_CONFIG.color[2],
+        ) },
       },
       transparent: true,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
     })
 
     pointsObject = new THREE.Points(geometry, material)
     pointsObject.frustumCulled = false
-    scene.add(pointsObject)
+    sceneObj.add(pointsObject)
 
-    // Animation loop
+    let lastTime = performance.now()
+
     const animate = () => {
       animFrameId = requestAnimationFrame(animate)
       if (!material || !geometry) return
 
-      material.uniforms.uTime.value = performance.now() / 1000
+      const now = performance.now()
+      const dt = (now - lastTime) / 1000 // seconds
+      lastTime = now
 
-      // Get world ships from store
+      material.uniforms.uTime.value = now / 1000
+
       const worldShips: WorldShip[] = shipStore.worldShips || []
       const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
       const alphaAttr = geometry.getAttribute('aAlpha') as THREE.BufferAttribute
+      const velAttr = geometry.getAttribute('aVelocity') as THREE.BufferAttribute
 
-      const count = Math.min(worldShips.length, MAX_WORLD_SHIPS)
+      // Build set of current ship IDs
+      const currentIds = new Set(worldShips.map(s => s.id))
 
-      for (let i = 0; i < count; i++) {
+      // Mark ships that disappeared as fading
+      for (const [id, state] of fadeState) {
+        if (!currentIds.has(id) && !state.fading) {
+          state.fading = true
+        }
+      }
+
+      // Process active ships
+      let writeIdx = 0
+
+      for (let i = 0; i < worldShips.length && writeIdx < MAX_WORLD_SHIPS; i++) {
         const ship = worldShips[i]
-
-        // Constrain to brain shape
         const [cx, cy, cz] = constrainToBrainShape(ship.x, ship.y, ship.z)
 
         // Smooth interpolation
@@ -119,19 +115,75 @@ export const WorldShipMarkers: Component = () => {
           rendered.z += (cz - rendered.z) * LERP_FACTOR
         }
 
-        posAttr.setXYZ(i, rendered.x, rendered.y, rendered.z)
-        alphaAttr.setX(i, ship.s === 0 ? 0.4 : 0.15) // traveling = brighter, idle = dim
+        // Compute velocity from previous position
+        const prev = prevPositions.get(ship.id)
+        let vx = 0, vy = 0, vz = 0
+        if (prev) {
+          vx = rendered.x - prev.x
+          vy = rendered.y - prev.y
+          vz = rendered.z - prev.z
+        }
+        prevPositions.set(ship.id, new THREE.Vector3(rendered.x, rendered.y, rendered.z))
+
+        // Target alpha: traveling = 0.7, idle = 0.4
+        const targetAlpha = ship.s === 0 ? 0.7 : 0.4
+
+        // Update fade state
+        let fs = fadeState.get(ship.id)
+        if (!fs) {
+          fs = { alpha: targetAlpha, fading: false, x: rendered.x, y: rendered.y, z: rendered.z }
+          fadeState.set(ship.id, fs)
+        } else {
+          fs.fading = false
+          // Smoothly approach target alpha
+          fs.alpha += (targetAlpha - fs.alpha) * 0.1
+          fs.x = rendered.x
+          fs.y = rendered.y
+          fs.z = rendered.z
+        }
+
+        posAttr.setXYZ(writeIdx, rendered.x, rendered.y, rendered.z)
+        alphaAttr.setX(writeIdx, fs.alpha)
+        velAttr.setXYZ(writeIdx, vx, vy, vz)
+        writeIdx++
+      }
+
+      // Process fading-out ships (recently disappeared)
+      const toRemove: string[] = []
+      for (const [id, state] of fadeState) {
+        if (!state.fading) continue
+        if (writeIdx >= MAX_WORLD_SHIPS) break
+
+        state.alpha -= FADE_OUT_SPEED * dt
+        if (state.alpha <= 0) {
+          toRemove.push(id)
+          continue
+        }
+
+        posAttr.setXYZ(writeIdx, state.x, state.y, state.z)
+        alphaAttr.setX(writeIdx, state.alpha)
+        velAttr.setXYZ(writeIdx, 0, 0, 0)
+        writeIdx++
+      }
+
+      // Clean up fully faded ships
+      for (const id of toRemove) {
+        fadeState.delete(id)
+        renderedPositions.delete(id)
+        prevPositions.delete(id)
       }
 
       // Zero out remaining slots
-      for (let i = count; i < MAX_WORLD_SHIPS; i++) {
+      for (let i = writeIdx; i < MAX_WORLD_SHIPS; i++) {
         posAttr.setXYZ(i, 0, 0, 0)
         alphaAttr.setX(i, 0)
+        velAttr.setXYZ(i, 0, 0, 0)
       }
 
       posAttr.needsUpdate = true
       alphaAttr.needsUpdate = true
-      geometry.setDrawRange(0, count)
+      velAttr.needsUpdate = true
+      geometry.setDrawRange(0, writeIdx)
     }
 
     animate()
@@ -141,9 +193,11 @@ export const WorldShipMarkers: Component = () => {
   createEffect(() => {
     const worldShips: WorldShip[] = shipStore.worldShips || []
     const currentIds = new Set(worldShips.map(s => s.id))
+    // Only clean up positions for ships that have fully faded
     for (const id of renderedPositions.keys()) {
-      if (!currentIds.has(id)) {
+      if (!currentIds.has(id) && !fadeState.has(id)) {
         renderedPositions.delete(id)
+        prevPositions.delete(id)
       }
     }
   })
@@ -152,12 +206,15 @@ export const WorldShipMarkers: Component = () => {
     if (animFrameId !== null) {
       cancelAnimationFrame(animFrameId)
     }
-    if (pointsObject && scene) {
-      scene.remove(pointsObject)
+    const sceneObj = scene()
+    if (pointsObject && sceneObj) {
+      sceneObj.remove(pointsObject)
     }
     geometry?.dispose()
     material?.dispose()
     renderedPositions.clear()
+    prevPositions.clear()
+    fadeState.clear()
   })
 
   return null

@@ -155,6 +155,16 @@ export const SHIP_ENGINE_CONFIG = {
   activeColor: [1.0, 0.5, 0.1], // Orange for active
 } as const
 
+// World ship (ambient / other-user) marker rendering
+export const WORLD_SHIP_CONFIG = {
+  pointSize: 20.0,               // Base point size
+  distanceScale: 65.0,           // Distance-based scaling divisor
+  minPointSize: 12.0,            // Minimum clamped point size
+  maxPointSize: 35.0,            // Maximum clamped point size
+  color: [0.9, 0.85, 0.7] as const, // Warm white-gold (contrasts with blue synapse cloud)
+  fadeOutDuration: 1.0,          // Seconds to fade out when going idle
+} as const
+
 // Ship state colors (RGB values for shader) - keyed by ShipStatus
 export const SHIP_STATE_COLORS: Record<'idle' | 'solving' | 'deploying' | 'returning', readonly [number, number, number]> = {
   idle: [1.0, 0.9, 0.2],       // Bright yellow/gold for visibility

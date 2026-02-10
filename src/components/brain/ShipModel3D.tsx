@@ -238,31 +238,48 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
       freshShip.travelDuration > 0
 
     if (hasAnimationData) {
-      const elapsed = now - freshShip.travelStartTime!
-      const progress = Math.min(Math.max(elapsed / freshShip.travelDuration!, 0), 1)
+      // Check if server has streamed a travel:position update yet
+      // (positionX will differ from startPositionX once the first update arrives)
+      const hasServerPosition =
+        freshShip.positionX !== freshShip.startPositionX! ||
+        freshShip.positionZ !== (freshShip.startPositionZ ?? 0)
 
-      // Linear interpolation from start to target
-      const startX = freshShip.startPositionX!
-      const startY = freshShip.startPositionY ?? 0
-      const startZ = freshShip.startPositionZ ?? 0
-      const targetX = freshShip.targetPositionX!
-      const targetY = freshShip.targetPositionY ?? 0
-      const targetZ = freshShip.targetPositionZ ?? 0
+      let rawX: number, rawY: number, rawZ: number
 
-      const interpX = startX + (targetX - startX) * progress
-      const interpY = startY + (targetY - startY) * progress
-      const interpZ = startZ + (targetZ - startZ) * progress
+      if (hasServerPosition) {
+        // PRIMARY: Use server-streamed position (updated every ~100ms via travel:position)
+        rawX = freshShip.positionX
+        rawY = freshShip.positionY
+        rawZ = freshShip.positionZ
+      } else {
+        // FALLBACK: Local interpolation before first travel:position arrives
+        const elapsed = now - freshShip.travelStartTime!
+        const progress = Math.min(Math.max(elapsed / freshShip.travelDuration!, 0), 1)
 
-      const [cx, cy, cz] = constrainToBrainShape(interpX, interpY, interpZ)
-      shipGroup.position.set(cx, cy, cz)
+        const startX = freshShip.startPositionX!
+        const startY = freshShip.startPositionY ?? 0
+        const startZ = freshShip.startPositionZ ?? 0
+        const targetX = freshShip.targetPositionX!
+        const targetY = freshShip.targetPositionY ?? 0
+        const targetZ = freshShip.targetPositionZ ?? 0
 
-      // Calculate rotation to face target
-      const dx = targetX - startX
-      const dz = targetZ - startZ
-      if (Math.abs(dx) > 0.001 || Math.abs(dz) > 0.001) {
-        const targetRotationY = Math.atan2(dx, -dz)
-        shipGroup.rotation.y = targetRotationY
+        rawX = startX + (targetX - startX) * progress
+        rawY = startY + (targetY - startY) * progress
+        rawZ = startZ + (targetZ - startZ) * progress
       }
+
+      const [cx, cy, cz] = constrainToBrainShape(rawX, rawY, rawZ)
+      // Lerp toward target position to smooth 100ms server tick jumps
+      shipGroup.position.lerp(new THREE.Vector3(cx, cy, cz), 0.25)
+
+      // Use server-provided rotation (set by travel:position or travel:started)
+      const serverRotY = freshShip.rotationY ?? 0
+      // Angular lerp with wrapping to handle -π/π boundary
+      let deltaAngle = serverRotY - shipGroup.rotation.y
+      // Normalize to [-π, π]
+      deltaAngle = ((deltaAngle + Math.PI) % (Math.PI * 2)) - Math.PI
+      if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2
+      shipGroup.rotation.y += deltaAngle * 0.15
     } else if (freshShip.state === 'idle') {
       // === IDLE ANIMATION: Gentle hover/breathing motion ===
       const pos = getShipWorldPosition(freshShip)
