@@ -11,6 +11,7 @@ interface SynapseNetworkProps {
   userLevel?: UserLevel  // For showing locked connections (Masterplan 2026: USDC-based level)
   shipPosition?: THREE.Vector3 | null  // Ship world position when zoomed
   isShipZoom?: boolean  // Enable depth-based visibility
+  lodLevel?: number  // Skip network building at LOD 0 (too many clusters, visual clutter)
 }
 
 interface DiscoveredNode {
@@ -326,8 +327,9 @@ export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
   let sparkleOffsets: Float32Array | null = null
 
 
-  // Build network
+  // Build network (skip at LOD 0 — too many clusters, visual clutter)
   const networkData = createMemo(() => {
+    if (props.lodLevel === 0) return { nodes: [] as DiscoveredNode[], connections: [] as Connection[] }
     const userLevel = props.userLevel ?? 1 as UserLevel
     return buildNetwork(props.synapseClusters, userLevel)
   })

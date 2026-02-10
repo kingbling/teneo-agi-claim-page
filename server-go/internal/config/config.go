@@ -79,6 +79,14 @@ func Load() *Config {
 	}
 }
 
+// LODGridSizes defines grid sizes for LOD cluster computation.
+// Used by both simulation/engine.go and handlers/synapses.go.
+var LODGridSizes = map[int]float64{
+	0: 0.15, // ~2,500 clusters for detailed view
+	1: 0.3,  // ~200 clusters for medium view
+	2: 1.0,  // ~8 clusters for far view
+}
+
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

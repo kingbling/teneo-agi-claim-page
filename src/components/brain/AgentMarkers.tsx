@@ -1,239 +1,198 @@
+/**
+ * AgentMarkers - InstancedMesh Ship Renderer
+ *
+ * Renders ALL ships (user + world) using InstancedMesh with the GLB model.
+ * Single draw call per sub-mesh for high performance.
+ * Handles click detection, selection ring, tooltips, and animations.
+ */
+
 import { onMount, onCleanup, createEffect, createMemo, createSignal, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
+import { loadShipModel } from '@/three/useShipModel'
 import {
-  SHIP_MARKER_CONFIG,
-  SHIP_STATE_COLORS,
-} from './core/brainConstants'
-import {
-  SHIP_VERTEX_SHADER,
-  SHIP_FRAGMENT_SHADER,
   SELECTION_RING_VERTEX_SHADER,
   SELECTION_RING_FRAGMENT_SHADER,
 } from './shaders/shipShaders'
-import { shipStore, type Ship, type ShipCluster, type ShipStatus } from '@/stores/shipStore'
+import { shipStore, type Ship, type ShipCluster, type ShipStatus, type WorldShip } from '@/stores/shipStore'
+import { computeOrbitPosition } from '@/utils/orbitHelper'
 
 interface ShipMarkersProps {
   userShips: Ship[]
   shipClusters?: ShipCluster[]
   onShipClick?: (ship: Ship) => void
   showIdleShips?: boolean
-  selectedShipId?: string | null  // ID of selected ship for highlight ring
-  hideSelectedShipParticle?: boolean  // Hide the selected ship's particle when 3D model is visible
-  hideAllUserParticles?: boolean  // Hide all user ship particles (3D models replace them)
+  selectedShipId?: string | null
 }
 
-// State-based colors (imported from brainConstants for consistency)
-const STATE_COLORS = SHIP_STATE_COLORS
+const SHIP_SCALE = 0.08
+const MAX_SHIPS = 300  // user ships + world ships combined
 
 export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
   const threeContext = useThree()
   const { scene, gl, camera } = threeContext
 
-  // Points object for ship markers
-  let pointsObject: THREE.Points | null = null
-  let geometry: THREE.BufferGeometry | null = null
-  let material: THREE.ShaderMaterial | null = null
+  // InstancedMesh objects (one per sub-mesh in the GLB)
+  let instancedMeshes: THREE.InstancedMesh[] = []
+  let shipGroup: THREE.Group | null = null
 
-  // Selection ring for selected ship
+  // Selection ring
   let selectionRingMesh: THREE.Mesh | null = null
   let selectionRingGeometry: THREE.RingGeometry | null = null
   let selectionRingMaterial: THREE.ShaderMaterial | null = null
 
-  // Raycaster for click detection
+  // Raycaster for click detection (user ships only)
   let raycaster: THREE.Raycaster | null = null
   const pointer = new THREE.Vector2()
 
-  // Track drag state
+  // Drag state
   let pointerDownPos: { x: number; y: number } | null = null
   let isDragging = false
   const DRAG_THRESHOLD = 5
 
-  // Ship positions for raycasting
-  let shipPositions: THREE.Vector3[] = []
+  // Ship positions for raycasting (user ships only)
+  let userShipPositions: THREE.Vector3[] = []
 
-  // Smooth position interpolation - tracks rendered position per ship for smooth movement
+  // Smooth position interpolation
   const renderedPositions = new Map<string, THREE.Vector3>()
-
-  // Track ship states for force-update detection
   const shipStateTracker = new Map<string, ShipStatus>()
+  const worldShipRendered = new Map<string, THREE.Vector3>()
+  const worldShipPrevPos = new Map<string, THREE.Vector3>()
 
-  // Cache animation parameters to prevent glitches during server updates
+  // Cache deploy animation parameters to prevent glitches during server updates
   interface AnimationCache {
-    startX: number
-    startY: number
-    startZ: number
-    targetX: number
-    targetY: number
-    targetZ: number
-    startTime: number
-    duration: number
+    startX: number; startY: number; startZ: number
+    targetX: number; targetY: number; targetZ: number
+    startTime: number; duration: number
   }
   const deployAnimationCache = new Map<string, AnimationCache>()
 
-  // Selection ring tracking — only update when ship or position changes
+  // Rotation tracking per ship
+  const shipRotations = new Map<string, number>()
+
+  // Selection ring tracking
   let prevSelectedShipId: string | null = null
   const prevSelectedPos = new THREE.Vector3()
 
-  // Hover state signal for tooltip
+  // Hover state
   const [hoveredShipId, setHoveredShipId] = createSignal<string | null>(null)
   const [tooltipPosition, setTooltipPosition] = createSignal<{ x: number; y: number } | null>(null)
 
-  // Track ship state changes for animation triggers
+  // Model loaded signal
+  const [modelReady, setModelReady] = createSignal(false)
 
-  // Get ships DIRECTLY from store - props may be stale due to SolidJS reactivity issues
-  // The store is the source of truth for ship state and positions
-  const visibleShips = createMemo(() => {
-    // Read directly from store, not props
-    const allShips = shipStore.userShips
-    if (!allShips || !Array.isArray(allShips)) {
-      return []
-    }
+  // Temp objects for matrix computation (allocated once, reused per frame)
+  const _matrix = new THREE.Matrix4()
+  const _quat = new THREE.Quaternion()
+  const _pos = new THREE.Vector3()
+  const _scale = new THREE.Vector3(SHIP_SCALE, SHIP_SCALE, SHIP_SCALE)
+  const _euler = new THREE.Euler()
 
-    let ships = [...allShips] // Copy to avoid mutating store
-
-    // Filter idle ships if not shown (but always keep selected ship and deploying ships)
-    if (!props.showIdleShips) {
-      ships = ships.filter(s => {
-        // Always show selected ship
-        if (s.id === props.selectedShipId) return true
-        // Always show deploying ships (they're in motion)
-        if (s.state === 'deploying') return true
-        // Filter out idle ships
-        return s.state !== 'idle'
-      })
-    }
-
-    return ships
-  })
-
-  // Pre-allocated buffers — sized to max capacity, use setDrawRange for active count
-  const MAX_SHIPS = 200
-  const preAllocPositions = new Float32Array(MAX_SHIPS * 3)
-  const preAllocColors = new Float32Array(MAX_SHIPS * 3)
-  const preAllocSizes = new Float32Array(MAX_SHIPS)
-  const preAllocStates = new Float32Array(MAX_SHIPS)
-
-  // State map (constant, avoid recreating per-ship)
-  const STATE_MAP: Record<ShipStatus, number> = {
-    idle: 0,
-    solving: 1,
-    deploying: 3,
-    returning: 4
-  }
-
-  // Compute buffer data from ships — writes into pre-allocated buffers
-  const computeBufferData = createMemo(() => {
-    const ships = visibleShips()
-    if (ships.length === 0) {
-      return null
-    }
-
-    const count = Math.min(ships.length, MAX_SHIPS)
-
-    // Reuse shipPositions Vector3 pool
-    while (shipPositions.length < count) {
-      shipPositions.push(new THREE.Vector3())
-    }
-    shipPositions.length = count
-
-    for (let i = 0; i < count; i++) {
-      const ship = ships[i]
-      preAllocPositions[i * 3] = ship.positionX
-      preAllocPositions[i * 3 + 1] = ship.positionY
-      preAllocPositions[i * 3 + 2] = ship.positionZ
-      shipPositions[i].set(ship.positionX, ship.positionY, ship.positionZ)
-
-      const color = STATE_COLORS[ship.state]
-      preAllocColors[i * 3] = color[0]
-      preAllocColors[i * 3 + 1] = color[1]
-      preAllocColors[i * 3 + 2] = color[2]
-
-      preAllocSizes[i] = SHIP_MARKER_CONFIG.pointSize
-      preAllocStates[i] = STATE_MAP[ship.state]
-    }
-
-    return { count }
-  })
-
-  // Find closest ship to pointer for hover/click
+  // Find closest user ship to pointer for hover/click
   const findClosestShip = (): Ship | null => {
     const cam = camera()
-    const ships = visibleShips()
-    if (!raycaster || !cam || ships.length === 0 || shipPositions.length === 0) return null
+    const ships = shipStore.userShips
+    if (!raycaster || !cam || !ships?.length || !userShipPositions.length) return null
 
-    const threshold = 0.2  // Distance threshold for detection
+    const threshold = 0.2
     raycaster.setFromCamera(pointer, cam)
 
     let closestIndex: number | null = null
     let closestDist = threshold
 
-    shipPositions.forEach((pos, i) => {
-      const dist = raycaster!.ray.distanceToPoint(pos)
+    for (let i = 0; i < userShipPositions.length; i++) {
+      if (!userShipPositions[i]) continue
+      const dist = raycaster.ray.distanceToPoint(userShipPositions[i])
       if (dist < closestDist) {
         closestDist = dist
         closestIndex = i
       }
-    })
+    }
 
     if (closestIndex !== null) {
-      return ships[closestIndex] || null
+      // Map back to filtered user ships
+      const visible = getVisibleUserShips()
+      return visible[closestIndex] || null
     }
     return null
   }
 
-  // Handle click on ship
   const handleClick = () => {
     if (isDragging) return
-
     const ship = findClosestShip()
-    if (ship && props.onShipClick) {
-      props.onShipClick(ship)
-    }
+    if (ship && props.onShipClick) props.onShipClick(ship)
   }
 
-  // NOTE: Animation is handled entirely by useFrame below
-  // No separate requestAnimationFrame loop needed - useFrame handles all position updates
+  // Helper to filter visible user ships (used in animation loop, not reactive)
+  const getVisibleUserShips = (): Ship[] => {
+    const allShips = shipStore.userShips
+    if (!allShips || !Array.isArray(allShips)) return []
+    let ships = [...allShips]
+    if (!props.showIdleShips) {
+      ships = ships.filter(s => {
+        if (s.id === props.selectedShipId) return true
+        if (s.state === 'deploying') return true
+        return s.state !== 'idle'
+      })
+    }
+    return ships
+  }
 
-  onMount(() => {
+  onMount(async () => {
     const sceneObj = scene()
     const renderer = gl()
+    if (!sceneObj || !renderer) return
 
-    if (!sceneObj || !renderer) {
-      return
-    }
-
-
-    // Initialize raycaster
     raycaster = new THREE.Raycaster()
 
-    // Create geometry
-    geometry = new THREE.BufferGeometry()
-
-    // Create shader material
-    material = new THREE.ShaderMaterial({
-      uniforms: {
-        uTime: { value: 0 },
-      },
-      vertexShader: SHIP_VERTEX_SHADER,
-      fragmentShader: SHIP_FRAGMENT_SHADER,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.NormalBlending,  // NormalBlending so ships stand out from glow
+    // Load GLB model and extract sub-meshes
+    const baseModel = await loadShipModel()
+    const meshInfos: { geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[] }[] = []
+    baseModel.traverse(child => {
+      if (child instanceof THREE.Mesh) {
+        // Subtle emissive so ships are visible without per-instance lights
+        const mats = Array.isArray(child.material) ? child.material : [child.material]
+        for (const mat of mats) {
+          if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
+            mat.emissive = mat.color.clone()
+            mat.emissiveIntensity = 0.15
+          }
+        }
+        meshInfos.push({ geometry: child.geometry, material: child.material })
+      }
     })
 
-    // Create points object
-    pointsObject = new THREE.Points(geometry, material)
-    pointsObject.frustumCulled = false
-    pointsObject.renderOrder = 100  // Render above other effects
-    sceneObj.add(pointsObject)
+    // Create InstancedMesh for each sub-mesh in the GLB
+    shipGroup = new THREE.Group()
+    instancedMeshes = meshInfos.map(({ geometry, material }) => {
+      const im = new THREE.InstancedMesh(geometry, material, MAX_SHIPS)
+      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+      im.frustumCulled = false
+      im.count = 0
+      im.renderOrder = 100
+      return im
+    })
+    instancedMeshes.forEach(im => shipGroup!.add(im))
 
-    // Create selection ring for highlighting selected ship
+    // Directional lights to illuminate all ship instances (replaces per-ship point lights)
+    const keyLight = new THREE.DirectionalLight(0xffffff, 3)
+    keyLight.position.set(1, 1.5, -1)
+    shipGroup.add(keyLight)
+
+    const fillLight = new THREE.DirectionalLight(0xaaccff, 1.2)
+    fillLight.position.set(-1, 0.3, 0.5)
+    shipGroup.add(fillLight)
+
+    const rimLight = new THREE.DirectionalLight(0x88ddff, 0.8)
+    rimLight.position.set(0, -0.5, 1)
+    shipGroup.add(rimLight)
+
+    sceneObj.add(shipGroup)
+
+    // Selection ring
     selectionRingGeometry = new THREE.RingGeometry(0.06, 0.1, 32)
     selectionRingMaterial = new THREE.ShaderMaterial({
-      uniforms: {
-        uTime: { value: 0 },
-      },
+      uniforms: { uTime: { value: 0 } },
       vertexShader: SELECTION_RING_VERTEX_SHADER,
       fragmentShader: SELECTION_RING_FRAGMENT_SHADER,
       transparent: true,
@@ -241,16 +200,13 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       side: THREE.DoubleSide,
       blending: THREE.AdditiveBlending,
     })
-
     selectionRingMesh = new THREE.Mesh(selectionRingGeometry, selectionRingMaterial)
-    selectionRingMesh.rotation.x = -Math.PI / 2  // Horizontal ring
-    selectionRingMesh.visible = false  // Hidden until a ship is selected
-    selectionRingMesh.renderOrder = 110  // Above ships
+    selectionRingMesh.rotation.x = -Math.PI / 2
+    selectionRingMesh.visible = false
+    selectionRingMesh.renderOrder = 110
     sceneObj.add(selectionRingMesh)
 
-    // Debug sphere removed - was for debugging ship animation
-
-    // Animation is handled by the standalone animation loop below
+    setModelReady(true)
 
     // Canvas event listeners
     const canvas = renderer.domElement
@@ -259,25 +215,18 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       pointerDownPos = { x: e.clientX, y: e.clientY }
       isDragging = false
     }
-
     const handlePointerMove = (e: PointerEvent) => {
       const rect = canvas.getBoundingClientRect()
       pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
       pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
-
       if (pointerDownPos) {
         const dx = e.clientX - pointerDownPos.x
         const dy = e.clientY - pointerDownPos.y
-        if (Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD) {
-          isDragging = true
-        }
+        if (Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD) isDragging = true
       }
     }
-
     const handlePointerUp = () => {
-      if (!isDragging) {
-        handleClick()
-      }
+      if (!isDragging) handleClick()
       pointerDownPos = null
     }
 
@@ -290,16 +239,12 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       canvas.removeEventListener('pointermove', handlePointerMove)
       canvas.removeEventListener('pointerup', handlePointerUp)
 
-      if (pointsObject && sceneObj) {
-        sceneObj.remove(pointsObject)
-      }
-      geometry?.dispose()
-      material?.dispose()
+      if (shipGroup && sceneObj) sceneObj.remove(shipGroup)
+      instancedMeshes.forEach(im => {
+        im.dispose()
+      })
 
-      // Clean up selection ring
-      if (selectionRingMesh && sceneObj) {
-        sceneObj.remove(selectionRingMesh)
-      }
+      if (selectionRingMesh && sceneObj) sceneObj.remove(selectionRingMesh)
       selectionRingGeometry?.dispose()
       selectionRingMaterial?.dispose()
 
@@ -307,281 +252,222 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     })
   })
 
-  // Update geometry structure when ships change (add/remove/reorder)
-  // Uses pre-allocated buffers with setDrawRange instead of recreating
-  let lastShipIds: string[] = []
-  let buffersInitialized = false
-  createEffect(() => {
-    const data = computeBufferData()
-    const ships = visibleShips()
-
-    if (!geometry || !data) {
-      if (geometry) {
-        geometry.setDrawRange(0, 0)
-      }
-      lastShipIds = []
-      return
-    }
-
-    // Initialize buffer attributes once (pre-allocated to MAX_SHIPS)
-    if (!buffersInitialized) {
-      const posAttr = new THREE.BufferAttribute(preAllocPositions, 3)
-      posAttr.setUsage(THREE.DynamicDrawUsage)
-      geometry.setAttribute('position', posAttr)
-
-      const colorAttr = new THREE.BufferAttribute(preAllocColors, 3)
-      colorAttr.setUsage(THREE.DynamicDrawUsage)
-      geometry.setAttribute('aColor', colorAttr)
-
-      const sizeAttr = new THREE.BufferAttribute(preAllocSizes, 1)
-      sizeAttr.setUsage(THREE.DynamicDrawUsage)
-      geometry.setAttribute('aSize', sizeAttr)
-
-      const stateAttr = new THREE.BufferAttribute(preAllocStates, 1)
-      stateAttr.setUsage(THREE.DynamicDrawUsage)
-      geometry.setAttribute('aState', stateAttr)
-
-      buffersInitialized = true
-    }
-
-    // Check if ship ID SET changed (count or which IDs)
-    const currentIds = ships.map(s => s.id)
-    const currentIdSet = new Set(currentIds)
-    const lastIdSet = new Set(lastShipIds)
-    const idsChanged = currentIds.length !== lastShipIds.length ||
-      currentIds.some(id => !lastIdSet.has(id)) ||
-      lastShipIds.some(id => !currentIdSet.has(id))
-
-    // Update draw range to match active ship count
-    geometry.setDrawRange(0, data.count)
-
-    if (idsChanged) {
-      // Mark all attributes for upload
-      const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
-      const colorAttr = geometry.getAttribute('aColor') as THREE.BufferAttribute
-      const sizeAttr = geometry.getAttribute('aSize') as THREE.BufferAttribute
-      const stateAttr = geometry.getAttribute('aState') as THREE.BufferAttribute
-      if (posAttr) posAttr.needsUpdate = true
-      if (colorAttr) colorAttr.needsUpdate = true
-      if (sizeAttr) sizeAttr.needsUpdate = true
-      if (stateAttr) stateAttr.needsUpdate = true
-
-      // Initialize rendered positions for new ships
-      ships.forEach(ship => {
-        if (!renderedPositions.has(ship.id)) {
-          renderedPositions.set(ship.id, new THREE.Vector3(ship.positionX, ship.positionY, ship.positionZ))
-        }
-      })
-
-      // Clean up old ship positions and state tracking
-      for (const id of renderedPositions.keys()) {
-        if (!currentIdSet.has(id)) {
-          renderedPositions.delete(id)
-        }
-      }
-      for (const id of shipStateTracker.keys()) {
-        if (!currentIdSet.has(id)) {
-          shipStateTracker.delete(id)
-        }
-      }
-
-      lastShipIds = currentIds
-    }
-  })
-
   // === STANDALONE ANIMATION LOOP ===
-  // Bypasses useFrame entirely - runs its own requestAnimationFrame
-  // FIX: useFrame callbacks weren't reliably being called, so we animate directly
-  let animationFrameId: number | null = null
+  let animFrameId: number | null = null
   const animStartTime = Date.now()
 
-  const runStandaloneAnimation = () => {
+  const runAnimation = () => {
     const now = Date.now()
     const elapsedTime = (now - animStartTime) / 1000
 
-    // Update shader time uniforms
-    if (material) material.uniforms.uTime.value = elapsedTime
     if (selectionRingMaterial) selectionRingMaterial.uniforms.uTime.value = elapsedTime
 
-    // Read FRESH data from store each frame
-    const allShips = shipStore.userShips
-
-    if (!geometry || !allShips || !Array.isArray(allShips) || lastShipIds.length === 0) {
-      animationFrameId = requestAnimationFrame(runStandaloneAnimation)
+    if (instancedMeshes.length === 0) {
+      animFrameId = requestAnimationFrame(runAnimation)
       return
     }
 
-    const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute
-    const stateAttr = geometry.getAttribute('aState') as THREE.BufferAttribute
-    const colorAttr = geometry.getAttribute('aColor') as THREE.BufferAttribute
-    const sizeAttr = geometry.getAttribute('aSize') as THREE.BufferAttribute
-    if (!posAttr) {
-      animationFrameId = requestAnimationFrame(runStandaloneAnimation)
-      return
+    // Read fresh data from store each frame
+    const worldShips: WorldShip[] = shipStore.worldShips || []
+    const visibleUser = getVisibleUserShips()
+
+    let instanceIdx = 0
+
+    // Ensure userShipPositions array is properly sized
+    while (userShipPositions.length < visibleUser.length) {
+      userShipPositions.push(new THREE.Vector3())
     }
+    userShipPositions.length = visibleUser.length
 
-    const updateCount = Math.min(posAttr.count, lastShipIds.length)
-    let positionChanged = false
-    let stateChanged = false
-    let sizeChanged = false
+    // === RENDER USER SHIPS ===
+    for (let i = 0; i < visibleUser.length && instanceIdx < MAX_SHIPS; i++) {
+      const ship = visibleUser[i]
+      let x = ship.positionX, y = ship.positionY, z = ship.positionZ
+      let rotY = shipRotations.get(ship.id) ?? 0
 
-    for (let i = 0; i < updateCount; i++) {
-      const shipId = lastShipIds[i]
-      const ship = allShips.find(s => s.id === shipId)
-      if (!ship) continue
-
-      // === CLIENT-SIDE INTERPOLATION FOR SMOOTH ANIMATION ===
-      let x = ship.positionX
-      let y = ship.positionY
-      let z = ship.positionZ
-
-      // Check if ship has valid animation data from server
-      const hasServerAnimData = ship.state === 'deploying' &&
+      // Deploy animation with cached parameters
+      const hasAnimData = ship.state === 'deploying' &&
         ship.startPositionX !== undefined &&
         ship.targetPositionX !== undefined &&
         ship.travelStartTime !== undefined &&
         ship.travelDuration !== undefined &&
         ship.travelDuration > 0
 
-      // Cache animation data when ship starts deploying (prevents glitches from server updates)
-      if (hasServerAnimData) {
-        // Only update cache if this is new animation data (different start time or not cached)
-        const cached = deployAnimationCache.get(shipId)
+      if (hasAnimData) {
+        const cached = deployAnimationCache.get(ship.id)
         if (!cached || cached.startTime !== ship.travelStartTime) {
-          deployAnimationCache.set(shipId, {
-            startX: ship.startPositionX!,
-            startY: ship.startPositionY ?? 0,
-            startZ: ship.startPositionZ ?? 0,
-            targetX: ship.targetPositionX!,
-            targetY: ship.targetPositionY ?? 0,
-            targetZ: ship.targetPositionZ ?? 0,
-            startTime: ship.travelStartTime!,
-            duration: ship.travelDuration!,
+          deployAnimationCache.set(ship.id, {
+            startX: ship.startPositionX!, startY: ship.startPositionY ?? 0, startZ: ship.startPositionZ ?? 0,
+            targetX: ship.targetPositionX!, targetY: ship.targetPositionY ?? 0, targetZ: ship.targetPositionZ ?? 0,
+            startTime: ship.travelStartTime!, duration: ship.travelDuration!,
           })
         }
       }
 
-      // Use cached animation data for interpolation (immune to server update glitches)
-      const animCache = deployAnimationCache.get(shipId)
+      const animCache = deployAnimationCache.get(ship.id)
       if (ship.state === 'deploying' && animCache) {
         const elapsed = now - animCache.startTime
         const progress = Math.min(Math.max(elapsed / animCache.duration, 0), 1)
-
-        // Linear interpolation from start to target
         x = animCache.startX + (animCache.targetX - animCache.startX) * progress
         y = animCache.startY + (animCache.targetY - animCache.startY) * progress
         z = animCache.startZ + (animCache.targetZ - animCache.startZ) * progress
+
+        // Face travel direction
+        const dirX = animCache.targetX - x
+        const dirZ = animCache.targetZ - z
+        if (dirX * dirX + dirZ * dirZ > 0.0001) {
+          const targetRotY = Math.atan2(dirX, -dirZ)
+          let deltaAngle = targetRotY - rotY
+          deltaAngle = ((deltaAngle + Math.PI) % (Math.PI * 2)) - Math.PI
+          if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2
+          rotY += deltaAngle * 0.15
+        }
       } else if (ship.state !== 'deploying') {
-        // Clear cache when no longer deploying
-        deployAnimationCache.delete(shipId)
+        deployAnimationCache.delete(ship.id)
       }
 
-      let cx = x, cy = y, cz = z
-
-      // === IDLE ANIMATION: Gentle hover/breathing motion ===
+      // Idle animation: gentle hover + rotation wobble
       if (ship.state === 'idle') {
-        // Subtle vertical oscillation - "breathing" hover
-        // Amplitude: ~0.02 units (subtle), Period: ~6 seconds (slow, calm)
-        // Phase offset based on ship ID so ships don't sync
         const idlePhase = ship.id.charCodeAt(0) + ship.id.charCodeAt(ship.id.length - 1)
-        const idleOffset = Math.sin(now * 0.001 + idlePhase) * 0.02
-        cy += idleOffset
+        y += Math.sin(now * 0.001 + idlePhase) * 0.02
+        rotY = (ship.rotationY ?? 0) + Math.sin(now * 0.0008 + idlePhase * 0.5) * 0.05
       }
 
-      // === SOLVING ANIMATION: Orbit around target synapse ===
+      // Solving orbit animation
       if (ship.state === 'solving' && ship.targetPositionX !== undefined) {
-        // Orbit in XZ plane around synapse position
-        const orbitRadius = 0.15  // Increased for visibility
-        // Vary orbit speed slightly based on ship ID for visual interest
+        const [ox, oy, oz] = computeOrbitPosition({
+          shipId: ship.id,
+          centerX: ship.targetPositionX, centerY: ship.targetPositionY ?? 0, centerZ: ship.targetPositionZ ?? 0,
+          radius: 0.15, now,
+        })
+        x = ox; y = oy; z = oz
+
+        // Face orbit tangent direction
         const orbitSpeed = 0.0005 + (ship.id.charCodeAt(0) % 10) * 0.0001
         const orbitPhase = ship.id.charCodeAt(0)
         const angle = now * orbitSpeed + orbitPhase
-
-        // Get synapse position (target position)
-        const synapseX = ship.targetPositionX
-        const synapseY = ship.targetPositionY ?? 0
-        const synapseZ = ship.targetPositionZ ?? 0
-
-        // Orbit around synapse with hover offset above
-        cx = synapseX + Math.cos(angle) * orbitRadius
-        cz = synapseZ + Math.sin(angle) * orbitRadius
-        cy = synapseY + 0.08
+        rotY = -(angle + Math.PI / 2)
       }
 
-      // === SMOOTH POSITION JUMPS ===
-      // Detect state transitions for tighter smoothing
-      const prevState = shipStateTracker.get(shipId)
+      // Returning: face movement direction
+      if (ship.state === 'returning') {
+        const lastPos = renderedPositions.get(ship.id)
+        if (lastPos) {
+          const moveDirX = x - lastPos.x
+          const moveDirZ = z - lastPos.z
+          if (moveDirX * moveDirX + moveDirZ * moveDirZ > 0.00001) {
+            const targetRotY = Math.atan2(moveDirX, -moveDirZ)
+            let deltaAngle = targetRotY - rotY
+            deltaAngle = ((deltaAngle + Math.PI) % (Math.PI * 2)) - Math.PI
+            if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2
+            rotY += deltaAngle * 0.15
+          }
+        }
+      }
+
+      // Smooth position jumps during state transitions
+      const prevState = shipStateTracker.get(ship.id)
       const isTransition = prevState !== undefined && prevState !== ship.state
-      shipStateTracker.set(shipId, ship.state)
+      shipStateTracker.set(ship.id, ship.state)
 
-      const lastPos = renderedPositions.get(shipId)
+      const lastPos = renderedPositions.get(ship.id)
       if (lastPos) {
-        const jumpDist = Math.sqrt(
-          (cx - lastPos.x) ** 2 + (cy - lastPos.y) ** 2 + (cz - lastPos.z) ** 2
-        )
-        // Tighter threshold and slower lerp during state transitions (e.g. deploying→solving)
-        // to smooth the orbit position pop. Normal movement uses looser values.
-        const maxNormalJump = isTransition ? 0.02 : 0.05
+        const jumpDist = Math.sqrt((x - lastPos.x) ** 2 + (y - lastPos.y) ** 2 + (z - lastPos.z) ** 2)
+        const maxJump = isTransition ? 0.02 : 0.05
         const lerpFactor = isTransition ? 0.15 : 0.3
-        if (jumpDist > maxNormalJump) {
-          cx = lastPos.x + (cx - lastPos.x) * lerpFactor
-          cy = lastPos.y + (cy - lastPos.y) * lerpFactor
-          cz = lastPos.z + (cz - lastPos.z) * lerpFactor
+        if (jumpDist > maxJump) {
+          x = lastPos.x + (x - lastPos.x) * lerpFactor
+          y = lastPos.y + (y - lastPos.y) * lerpFactor
+          z = lastPos.z + (z - lastPos.z) * lerpFactor
         }
       }
 
-      posAttr.setXYZ(i, cx, cy, cz)
-      positionChanged = true
+      if (!renderedPositions.has(ship.id)) {
+        renderedPositions.set(ship.id, new THREE.Vector3(x, y, z))
+      } else {
+        renderedPositions.get(ship.id)!.set(x, y, z)
+      }
 
-      // Hide particles when 3D models replace them
-      if (sizeAttr) {
-        const shouldHide = props.hideAllUserParticles || (props.hideSelectedShipParticle && shipId === props.selectedShipId)
-        const currentSize = sizeAttr.getX(i)
-        if (shouldHide && currentSize !== 0) {
-          sizeAttr.setX(i, 0)
-          sizeChanged = true
-        } else if (!shouldHide && currentSize === 0) {
-          sizeAttr.setX(i, SHIP_MARKER_CONFIG.pointSize)
-          sizeChanged = true
+      shipRotations.set(ship.id, rotY)
+      userShipPositions[i].set(x, y, z)
+
+      // Set instance matrix
+      _pos.set(x, y, z)
+      _euler.set(0, rotY, 0)
+      _quat.setFromEuler(_euler)
+      _matrix.compose(_pos, _quat, _scale)
+      instancedMeshes.forEach(im => im.setMatrixAt(instanceIdx, _matrix))
+
+      instanceIdx++
+    }
+
+    // === RENDER WORLD SHIPS ===
+    const WORLD_LERP = 0.12
+    for (let i = 0; i < worldShips.length && instanceIdx < MAX_SHIPS; i++) {
+      const ws = worldShips[i]
+
+      // Smooth position interpolation
+      let rendered = worldShipRendered.get(ws.id)
+      if (!rendered) {
+        rendered = new THREE.Vector3(ws.x, ws.y, ws.z)
+        worldShipRendered.set(ws.id, rendered)
+      } else {
+        rendered.x += (ws.x - rendered.x) * WORLD_LERP
+        rendered.y += (ws.y - rendered.y) * WORLD_LERP
+        rendered.z += (ws.z - rendered.z) * WORLD_LERP
+      }
+
+      // Compute rotation from velocity
+      const prev = worldShipPrevPos.get(ws.id)
+      let rotY = shipRotations.get('w_' + ws.id) ?? 0
+      if (prev) {
+        const vx = rendered.x - prev.x
+        const vz = rendered.z - prev.z
+        if (vx * vx + vz * vz > 0.00001) {
+          const targetRotY = Math.atan2(vx, -vz)
+          let deltaAngle = targetRotY - rotY
+          deltaAngle = ((deltaAngle + Math.PI) % (Math.PI * 2)) - Math.PI
+          if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2
+          rotY += deltaAngle * 0.15
         }
       }
+      worldShipPrevPos.set(ws.id, new THREE.Vector3(rendered.x, rendered.y, rendered.z))
+      shipRotations.set('w_' + ws.id, rotY)
 
-      // Update raycasting position
-      if (shipPositions[i]) {
-        shipPositions[i].set(cx, cy, cz)
+      _pos.set(rendered.x, rendered.y, rendered.z)
+      _euler.set(0, rotY, 0)
+      _quat.setFromEuler(_euler)
+      _matrix.compose(_pos, _quat, _scale)
+      instancedMeshes.forEach(im => im.setMatrixAt(instanceIdx, _matrix))
+
+      instanceIdx++
+    }
+
+    // Update instance counts and trigger GPU upload
+    instancedMeshes.forEach(im => {
+      im.count = instanceIdx
+      im.instanceMatrix.needsUpdate = true
+    })
+
+    // Clean up stale world ship tracking data
+    const currentWorldIds = new Set(worldShips.map(s => s.id))
+    for (const id of worldShipRendered.keys()) {
+      if (!currentWorldIds.has(id)) {
+        worldShipRendered.delete(id)
+        worldShipPrevPos.delete(id)
+        shipRotations.delete('w_' + id)
       }
-
-      // Update state attribute for shader
-      const newState = STATE_MAP[ship.state]
-      if (stateAttr.getX(i) !== newState) {
-        stateAttr.setX(i, newState)
-        const color = ship.state === 'deploying' ? [1.0, 0.0, 1.0] : STATE_COLORS[ship.state]
-        colorAttr.setXYZ(i, color[0], color[1], color[2])
-        stateChanged = true
-      }
     }
 
-    // Trigger GPU upload
-    if (positionChanged) {
-      posAttr.needsUpdate = true
-    }
-    if (stateChanged) {
-      stateAttr.needsUpdate = true
-      colorAttr.needsUpdate = true
-    }
-    if (sizeChanged && sizeAttr) {
-      sizeAttr.needsUpdate = true
-    }
-
-    // Update selection ring — only when ship ID changes or position moves
+    // Update selection ring
     if (selectionRingMesh && props.selectedShipId) {
-      const idx = lastShipIds.indexOf(props.selectedShipId)
-      if (idx >= 0 && shipPositions[idx]) {
+      const idx = visibleUser.findIndex(s => s.id === props.selectedShipId)
+      if (idx >= 0 && userShipPositions[idx]) {
         const idChanged = prevSelectedShipId !== props.selectedShipId
-        const posChanged = !prevSelectedPos.equals(shipPositions[idx])
+        const posChanged = !prevSelectedPos.equals(userShipPositions[idx])
         if (idChanged || posChanged) {
-          selectionRingMesh.position.copy(shipPositions[idx])
-          prevSelectedPos.copy(shipPositions[idx])
+          selectionRingMesh.position.copy(userShipPositions[idx])
+          prevSelectedPos.copy(userShipPositions[idx])
           prevSelectedShipId = props.selectedShipId
         }
         selectionRingMesh.visible = true
@@ -593,43 +479,41 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       prevSelectedShipId = null
     }
 
-    animationFrameId = requestAnimationFrame(runStandaloneAnimation)
+    animFrameId = requestAnimationFrame(runAnimation)
   }
 
-  // Start standalone animation loop on mount
+  // Start animation loop once model is ready
   createEffect(() => {
-    // Start after geometry is ready
-    if (geometry && !animationFrameId) {
-      animationFrameId = requestAnimationFrame(runStandaloneAnimation)
+    if (modelReady() && !animFrameId) {
+      animFrameId = requestAnimationFrame(runAnimation)
     }
   })
 
   onCleanup(() => {
-    if (animationFrameId) {
-      cancelAnimationFrame(animationFrameId)
-      animationFrameId = null
+    if (animFrameId) {
+      cancelAnimationFrame(animFrameId)
+      animFrameId = null
     }
   })
 
-  // Keep useFrame for hover detection and tooltip (these need camera access)
+  // Hover detection via useFrame (needs camera access)
   useFrame(({ camera: cam }) => {
-    // Hover detection
-    const renderer = gl()
     const hovered = findClosestShip()
     if (hovered?.id !== hoveredShipId()) {
       setHoveredShipId(hovered?.id || null)
       document.body.style.cursor = hovered ? 'pointer' : 'auto'
     }
 
-    // Tooltip position - use lastShipIds for buffer index lookup
+    const renderer = gl()
     if (hovered && renderer) {
-      const idx = lastShipIds.indexOf(hovered.id)
-      if (idx >= 0 && shipPositions[idx]) {
-        const pos = shipPositions[idx].clone().project(cam)
+      const visible = getVisibleUserShips()
+      const idx = visible.findIndex(s => s.id === hovered.id)
+      if (idx >= 0 && userShipPositions[idx]) {
+        const pos = userShipPositions[idx].clone().project(cam)
         const rect = renderer.domElement.getBoundingClientRect()
         setTooltipPosition({
           x: (pos.x * 0.5 + 0.5) * rect.width + rect.left,
-          y: (-pos.y * 0.5 + 0.5) * rect.height + rect.top
+          y: (-pos.y * 0.5 + 0.5) * rect.height + rect.top,
         })
       }
     } else {
@@ -637,14 +521,12 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     }
   })
 
-  // Get hovered ship for tooltip
   const hoveredShip = createMemo(() => {
     const id = hoveredShipId()
-    const ships = visibleShips()
-    return id ? ships.find(s => s.id === id) || null : null
+    const ships = shipStore.userShips
+    return id && ships ? ships.find(s => s.id === id) || null : null
   })
 
-  // Return tooltip JSX
   return (
     <>
       {hoveredShip() && tooltipPosition() && (
@@ -680,4 +562,3 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     </>
   )
 }
-

@@ -64,12 +64,8 @@ type Engine struct {
 	OnWorldShipsUpdate    func(dto.WorldShipsBatch) // Broadcast ambient + other-user ship positions
 }
 
-// Grid sizes for LOD cluster computation (must match handlers/synapses.go)
-var lodGridSizes = map[int]float64{
-	0: 0.08,
-	1: 0.3,
-	2: 1.0,
-}
+// lodGridSizes references the shared config for LOD cluster computation
+var lodGridSizes = config.LODGridSizes
 
 // --- pgtype.UUID conversion helpers ---
 
@@ -1072,15 +1068,7 @@ func (e *Engine) recomputeClusters() {
 	// Recompute space clusters at 3 LOD levels
 	// Grid sizes tuned to show more visible markers at close zoom
 	for lodLevel := 0; lodLevel <= 2; lodLevel++ {
-		var gridSize float64
-		switch lodLevel {
-		case 0:
-			gridSize = 0.08 // ~15,000 clusters for detailed view
-		case 1:
-			gridSize = 0.3 // ~200 clusters for medium view
-		default:
-			gridSize = 1.0 // ~8 clusters for far view
-		}
+		gridSize := lodGridSizes[lodLevel]
 		if err := e.store.Queries.InsertSpaceClusters(ctx, generated.InsertSpaceClustersParams{
 			Column1: int32(lodLevel),
 			Column2: gridSize,

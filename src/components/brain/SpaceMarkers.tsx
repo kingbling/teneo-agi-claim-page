@@ -93,6 +93,10 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
   // Track ALL cluster positions for raycasting (not filtered by frustum)
   let allClusterPositions: THREE.Vector3[] = []
 
+  // Spatial grid for O(1) cluster raycasting (cell size 0.3)
+  const CLUSTER_GRID_CELL_SIZE = 0.3
+  let clusterSpatialGrid: Map<string, number[]> = new Map()
+
   // Track cluster positions for raycasting
   let clusterPositions: THREE.Vector3[] = []
 
@@ -132,7 +136,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
   const [hoveredIndex, setHoveredIndex] = createSignal<number | null>(null)
   const [tooltipPosition, setTooltipPosition] = createSignal<{ x: number; y: number } | null>(null)
 
-  // Build ALL cluster positions for raycasting (always all clusters, not filtered)
+  // Build ALL cluster positions + spatial grid for raycasting (always all clusters, not filtered)
   // Reuses existing Vector3 objects when possible to reduce GC pressure
   createEffect(() => {
     const clusters = props.clusters
@@ -142,9 +146,20 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     }
     allClusterPositions.length = clusters.length
 
+    // Rebuild spatial grid
+    const grid = new Map<string, number[]>()
+    const cellSize = CLUSTER_GRID_CELL_SIZE
+
     clusters.forEach((cluster, i) => {
       allClusterPositions[i].set(cluster.positionX, cluster.positionY, cluster.positionZ)
+
+      const key = `${Math.floor(cluster.positionX / cellSize)},${Math.floor(cluster.positionY / cellSize)},${Math.floor(cluster.positionZ / cellSize)}`
+      let cell = grid.get(key)
+      if (!cell) { cell = []; grid.set(key, cell) }
+      cell.push(i)
     })
+
+    clusterSpatialGrid = grid
   })
 
   // Filter clusters by frustum culling (only render visible clusters)
@@ -468,7 +483,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
       return null
     }
 
-    // Cluster mode: iterate ALL clusters (not just visible) for edge interaction
+    // Cluster mode: use spatial grid for O(1) lookup instead of iterating all clusters
     if (allClusterPositions.length === 0) return null
 
     let closestAnyIdx: number | null = null
@@ -482,22 +497,36 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
       currentHoverDist = raycaster!.ray.distanceToPoint(allClusterPositions[currentHoveredIndex])
     }
 
-    allClusterPositions.forEach((pos, i) => {
-      // Skip filtered-out clusters (can't hover/select them)
-      if (filteredAttrBuffer && filteredAttrBuffer[i] > 0.5) {
-        return
-      }
+    // Project ray onto brain center plane to find search origin
+    const brainCenter = new THREE.Vector3(0, 0.1, 0)
+    const rayToBrain = raycaster!.ray.closestPointToPoint(brainCenter, _tempPos)
+    const cellSize = CLUSTER_GRID_CELL_SIZE
+    const cx = Math.floor(rayToBrain.x / cellSize)
+    const cy = Math.floor(rayToBrain.y / cellSize)
+    const cz = Math.floor(rayToBrain.z / cellSize)
 
-      const dist = raycaster!.ray.distanceToPoint(pos)
-      if (dist < closestAnyDist) {
-        closestAnyDist = dist
-        closestAnyIdx = i
+    // Search neighborhood: radius depends on threshold / cell size
+    const searchRadius = Math.ceil(baseThreshold / cellSize) + 1
+    for (let dx = -searchRadius; dx <= searchRadius; dx++) {
+      for (let dy = -searchRadius; dy <= searchRadius; dy++) {
+        for (let dz = -searchRadius; dz <= searchRadius; dz++) {
+          const cell = clusterSpatialGrid.get(`${cx + dx},${cy + dy},${cz + dz}`)
+          if (!cell) continue
+          for (const i of cell) {
+            if (filteredAttrBuffer && filteredAttrBuffer[i] > 0.5) continue
+            const dist = raycaster!.ray.distanceToPoint(allClusterPositions[i])
+            if (dist < closestAnyDist) {
+              closestAnyDist = dist
+              closestAnyIdx = i
+            }
+            if (isActionable(i) && dist < closestActionableDist) {
+              closestActionableDist = dist
+              closestActionableIdx = i
+            }
+          }
+        }
       }
-      if (isActionable(i) && dist < closestActionableDist) {
-        closestActionableDist = dist
-        closestActionableIdx = i
-      }
-    })
+    }
 
     const closestIndex = pickBest(closestAnyIdx, closestAnyDist, closestActionableIdx, closestActionableDist)
 
@@ -700,23 +729,51 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     if (!clusterData) return
 
     // clusterPositions already updated in geometryData memo
+    const count = props.clusters.length
+    const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
 
-    // Initialize hovered attribute buffer (all zeros = not hovered)
-    hoveredAttrBuffer = new Float32Array(props.clusters.length)
+    // Reuse existing buffers when count matches (update in-place)
+    if (posAttr && posAttr.count === count && hoveredAttrBuffer?.length === count) {
+      ;(posAttr.array as Float32Array).set(clusterData.positions)
+      posAttr.needsUpdate = true
+
+      const colorAttr = geometry.getAttribute('aColor') as THREE.BufferAttribute
+      ;(colorAttr.array as Float32Array).set(clusterData.colors)
+      colorAttr.needsUpdate = true
+
+      const sizeAttr = geometry.getAttribute('aSize') as THREE.BufferAttribute
+      ;(sizeAttr.array as Float32Array).set(clusterData.sizes)
+      sizeAttr.needsUpdate = true
+
+      const stateAttr = geometry.getAttribute('aState') as THREE.BufferAttribute
+      ;(stateAttr.array as Float32Array).set(clusterData.states)
+      stateAttr.needsUpdate = true
+
+      const typeAttr = geometry.getAttribute('aSynapseType') as THREE.BufferAttribute
+      ;(typeAttr.array as Float32Array).set(clusterData.synapseTypes)
+      typeAttr.needsUpdate = true
+
+      const progressAttr = geometry.getAttribute('aProgress') as THREE.BufferAttribute
+      ;(progressAttr.array as Float32Array).set(clusterData.progress)
+      progressAttr.needsUpdate = true
+
+      geometry.computeBoundingSphere()
+      return
+    }
+
+    // Count changed — allocate new buffers
+    hoveredAttrBuffer = new Float32Array(count)
     hoveredAttr = new THREE.BufferAttribute(hoveredAttrBuffer, 1)
-    hoveredAttr.setUsage(THREE.DynamicDrawUsage)  // Will be updated frequently
+    hoveredAttr.setUsage(THREE.DynamicDrawUsage)
 
-    // Initialize filtered attribute buffer (all zeros = not filtered)
-    filteredAttrBuffer = new Float32Array(props.clusters.length)
+    filteredAttrBuffer = new Float32Array(count)
     filteredAttr = new THREE.BufferAttribute(filteredAttrBuffer, 1)
-    filteredAttr.setUsage(THREE.DynamicDrawUsage)  // Will be updated when filter changes
+    filteredAttr.setUsage(THREE.DynamicDrawUsage)
 
-    // Initialize actionable attribute buffer (all zeros = not actionable)
-    actionableAttrBuffer = new Float32Array(props.clusters.length)
+    actionableAttrBuffer = new Float32Array(count)
     actionableAttr = new THREE.BufferAttribute(actionableAttrBuffer, 1)
-    actionableAttr.setUsage(THREE.DynamicDrawUsage)  // Will be updated when user state changes
+    actionableAttr.setUsage(THREE.DynamicDrawUsage)
 
-    // Update geometry attributes
     geometry.setAttribute('position', new THREE.BufferAttribute(clusterData.positions, 3))
     geometry.setAttribute('aColor', new THREE.BufferAttribute(clusterData.colors, 3))
     geometry.setAttribute('aSize', new THREE.BufferAttribute(clusterData.sizes, 1))

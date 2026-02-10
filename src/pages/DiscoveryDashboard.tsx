@@ -5,7 +5,7 @@
  * Uses vanilla Three.js integration layer instead of React Three Fiber.
  */
 
-import { type Component, createSignal, createMemo, createEffect, onMount, onCleanup, Show } from 'solid-js'
+import { type Component, createSignal, createMemo, onMount, onCleanup, Show } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import * as THREE from 'three'
 import { ThreeCanvas } from '@/three'
@@ -16,7 +16,7 @@ import { CreateShipDialog } from '@/components/ships/CreateShipDialog'
 import { ShipDetailPanel } from '@/components/ships/ShipDetailPanel'
 import { ExplorePrompt } from '@/components/brain/ExplorePrompt'
 import { RegionLegend } from '@/components/dashboard/RegionLegend'
-import type { RegionCamera, CameraUpdate } from '@/components/dashboard/BrainSceneMinimal'
+import type { CameraUpdate } from '@/components/dashboard/BrainSceneMinimal'
 import { shipStore, userStore, uiStore } from '@/stores'
 import type { Ship, SynapseCluster } from '@/stores'
 import { useWebSocketConnection } from '@/hooks'
@@ -61,25 +61,12 @@ export const DiscoveryDashboard: Component = () => {
   // Zoom info for LOD management
   const [zoomInfo, setZoomInfo] = createSignal({ distance: 5, lod: 1 })
 
-  // Zoom target for camera animations
-  const [zoomTarget, setZoomTarget] = createSignal<THREE.Vector3 | null>(null)
-
   // Region selection state
   const [selectedRegionIndex, setSelectedRegionIndex] = createSignal<number>(-1)
   const [highlightIntensity, setHighlightIntensity] = createSignal(0)
 
   // Ship deployment dialog state
   const [deployTarget, setDeployTarget] = createSignal<{ cluster: SynapseCluster; position: THREE.Vector3 } | null>(null)
-
-  // Pending deploy (waiting for zoom to complete)
-  const [pendingDeploy, setPendingDeploy] = createSignal<{ cluster: SynapseCluster; position: THREE.Vector3 } | null>(null)
-
-  // Zoom animation state
-  const [isZooming, setIsZooming] = createSignal(false)
-  let zoomTimeoutId: ReturnType<typeof setTimeout> | null = null
-
-  // Ship zoom state - triggers close zoom for ship inspection
-  const [isShipZoom, setIsShipZoom] = createSignal(false)
 
   // Camera position for minimap
   const [cameraPosition, setCameraPosition] = createSignal({ x: 0, y: 0, z: 5 })
@@ -100,28 +87,20 @@ export const DiscoveryDashboard: Component = () => {
     setCameraTarget(update.target)
   }
 
-  // Handle minimap navigation
-  const handleMinimapNavigate = (x: number, y: number, z: number) => {
-    setZoomTarget(new THREE.Vector3(x, y, z))
-  }
-
   // WebSocket connection - automatically connects on mount
   const { isConnected } = useWebSocketConnection()
 
-  // Compute regionCamera from selectedRegionIndex
-  const regionCamera = createMemo((): RegionCamera | null => {
-    const idx = selectedRegionIndex()
-    if (idx < 0 || idx >= FUNCTIONAL_BRAIN_REGIONS.length) return null
-    const region = FUNCTIONAL_BRAIN_REGIONS[idx]
-    return {
-      position: region.cameraPosition as [number, number, number],
-      target: region.cameraTarget as [number, number, number],
-    }
+  // Select LOD-appropriate clusters based on camera distance
+  const lodClusters = createMemo(() => {
+    const lod = zoomInfo().lod
+    if (lod === 0) return shipStore.synapseClustersLod0   // ~2,500 close-up detail
+    if (lod === 1) return shipStore.synapseClustersLod1   // ~200 for medium view
+    return shipStore.synapseClustersLod2                    // ~8 for far view
   })
 
   // Filter synapse clusters by selected region
   const filteredSynapseClusters = createMemo(() =>
-    filterByRegion(shipStore.synapseClusters, selectedRegionIndex())
+    filterByRegion(lodClusters(), selectedRegionIndex())
   )
 
   // Keyboard handler for region navigation and shortcuts
@@ -152,11 +131,8 @@ export const DiscoveryDashboard: Component = () => {
         setHighlightIntensity(0)
         setPanels('showHelp', false)
         setDeployTarget(null)
-        setPendingDeploy(null)
-        setIsZooming(false)
-        setIsShipZoom(false)
-        setExplorePromptData(null)  // Clear explore prompt
-        shipStore.selectShip(null)  // Deselect ship
+        setExplorePromptData(null)
+        shipStore.selectShip(null)
         return
       }
 
@@ -166,12 +142,10 @@ export const DiscoveryDashboard: Component = () => {
         return
       }
 
-      // R for reset camera (clear zoom target and region)
+      // R for reset (clear region selection)
       if (key === 'r') {
-        setZoomTarget(null)
         setSelectedRegionIndex(-1)
         setHighlightIntensity(0)
-        setIsShipZoom(false)
         return
       }
     }
@@ -179,15 +153,10 @@ export const DiscoveryDashboard: Component = () => {
     window.addEventListener('keydown', handleKeyDown)
     onCleanup(() => {
       window.removeEventListener('keydown', handleKeyDown)
-      // Clean up any pending zoom timeout
-      if (zoomTimeoutId) {
-        clearTimeout(zoomTimeoutId)
-        zoomTimeoutId = null
-      }
     })
   })
 
-  // Handle space/synapse click - zoom camera first, then show deploy dialog or set exploration target
+  // Handle space/synapse click - show deploy dialog or explore prompt immediately
   const handleSpaceClick = (cluster: unknown, position: THREE.Vector3) => {
     // If already showing a dialog, close it first
     if (deployTarget()) {
@@ -197,17 +166,12 @@ export const DiscoveryDashboard: Component = () => {
     // Check if we have a selected idle ship - if so, show explore prompt for travel
     const selectedShip = shipStore.selectedShip
     if (selectedShip && selectedShip.state === 'idle') {
-      // Use cluster position to find nearest synapse
       const clusterData = cluster as SynapseCluster
       shipStore.setExplorationTargetByPosition(
         clusterData.positionX,
         clusterData.positionY,
         clusterData.positionZ
       )
-      // Exit ship zoom and zoom to the synapse
-      setIsShipZoom(false)
-      setZoomTarget(position.clone())
-      // Show explore prompt near the synapse
       setExplorePromptData({
         cluster: clusterData,
         worldPosition: position.clone(),
@@ -215,43 +179,17 @@ export const DiscoveryDashboard: Component = () => {
       return
     }
 
-    // Clear ship zoom mode and selection when clicking a space (for deploy flow)
-    setIsShipZoom(false)
+    // No ship selected — show deploy dialog
     shipStore.selectShip(null)
-
-    // Store the pending deploy target
-    const target = { cluster, position: position.clone() }
-    setPendingDeploy(target)
-
-    // Start zoom animation
-    setZoomTarget(position.clone())
-    setIsZooming(true)
-
-    // Clear any existing zoom timeout
-    if (zoomTimeoutId) {
-      clearTimeout(zoomTimeoutId)
-    }
-
-    // Show dialog after zoom animation (delay ~800ms for smooth experience)
-    zoomTimeoutId = setTimeout(() => {
-      zoomTimeoutId = null
-      setIsZooming(false)
-      // Only show dialog if this is still the pending target
-      const pending = pendingDeploy()
-      if (pending && pending.cluster === cluster) {
-        setDeployTarget(target)
-        setPendingDeploy(null)
-      }
-    }, 800)
+    setDeployTarget({ cluster: cluster as SynapseCluster, position: position.clone() })
   }
 
-  // Handle synapse list navigation - just zoom to location without deploy dialog
-  const handleSynapseListNavigate = (cluster: unknown, position: THREE.Vector3) => {
-    setZoomTarget(position.clone())
-    setIsShipZoom(false)
+  // Handle synapse list navigation (no-op for now, camera stays centered)
+  const handleSynapseListNavigate = (_cluster: unknown, _position: THREE.Vector3) => {
+    // Camera always orbits brain center — no zoom animation needed
   }
 
-  // Handle ship click - zoom camera to ship position with close zoom
+  // Handle ship click - just select the ship
   const handleShipClick = (ship: Ship) => {
     log.dashboard.info('Ship clicked:', {
       id: fmt.shortId(ship.id),
@@ -259,64 +197,8 @@ export const DiscoveryDashboard: Component = () => {
       state: ship.state,
       position: fmt.pos(ship.positionX, ship.positionY, ship.positionZ),
     })
-
-    // Select the ship (enables selection ring, fetches synapse details)
     shipStore.selectShip(ship.id)
-
-    const pos = new THREE.Vector3(ship.positionX, ship.positionY, ship.positionZ)
-    log.dashboard.debug('Setting zoom target to:', fmt.pos(pos.x, pos.y, pos.z))
-    setZoomTarget(pos)
-    setIsShipZoom(true)  // Enable close zoom for ship inspection
   }
-
-  // Memoized selected ship — only recomputes when the specific ship's data changes,
-  // not when ANY ship in the array updates
-  const followShip = createMemo(() => {
-    const id = shipStore.selectedShipId
-    if (!id) return null
-    return shipStore.selectedShip
-  })
-
-  // Camera follow effect - follow selected ship during intentional travel only
-  // Does NOT follow during searching (wandering) to avoid constant jerky camera movement
-  createEffect(() => {
-    const ship = followShip()
-    if (!ship || !isShipZoom()) return
-
-    // Only follow during intentional travel states, NOT searching (wandering)
-    const isIntentionalTravel = ship.state === 'deploying' || ship.state === 'returning'
-    const isSolving = ship.state === 'solving'
-
-    if (isIntentionalTravel || isSolving) {
-      let posX = ship.positionX
-      let posY = ship.positionY
-      let posZ = ship.positionZ
-
-      const hasAnimationData = ship.state === 'deploying' &&
-        ship.startPositionX !== undefined &&
-        ship.targetPositionX !== undefined &&
-        ship.travelStartTime !== undefined &&
-        ship.travelDuration !== undefined &&
-        ship.travelDuration > 0
-
-      if (hasAnimationData) {
-        const now = Date.now()
-        const elapsed = now - ship.travelStartTime!
-        const progress = Math.min(Math.max(elapsed / ship.travelDuration!, 0), 1)
-
-        posX = ship.startPositionX! + (ship.targetPositionX! - ship.startPositionX!) * progress
-        posY = (ship.startPositionY ?? 0) + ((ship.targetPositionY ?? 0) - (ship.startPositionY ?? 0)) * progress
-        posZ = (ship.startPositionZ ?? 0) + ((ship.targetPositionZ ?? 0) - (ship.startPositionZ ?? 0)) * progress
-      } else if (isSolving && ship.targetPositionX !== undefined) {
-        posX = ship.targetPositionX
-        posY = ship.targetPositionY ?? posY
-        posZ = ship.targetPositionZ ?? posZ
-      }
-
-      const pos = new THREE.Vector3(posX, posY, posZ)
-      setZoomTarget(pos)
-    }
-  })
 
   // Login handler - called when user successfully authenticates
   const handleLogin = () => {
@@ -357,18 +239,14 @@ export const DiscoveryDashboard: Component = () => {
           agentClusters={shipStore.shipClusters}
           userAgents={shipStore.userShips}
           recentDiscoveries={shipStore.recentDiscoveries}
-          zoomTarget={zoomTarget()}
           setZoomInfo={setZoomInfo}
           onSpaceClick={handleSpaceClick}
           onAgentClick={handleShipClick}
-          regionCamera={regionCamera()}
           selectedRegionIndex={selectedRegionIndex()}
           highlightIntensity={highlightIntensity()}
           onCameraUpdate={handleCameraUpdate}
           showIdleShips={uiStore.showIdleShips}
           selectedShipId={shipStore.selectedShipId}
-          isShipZoom={isShipZoom()}
-          onExitShipZoom={() => setIsShipZoom(false)}
           synapseTypeFilter={synapseTypeFilter() === 'all' ? null : synapseTypeFilter()}
           explorationTarget={shipStore.explorationTarget}
         />
@@ -385,14 +263,9 @@ export const DiscoveryDashboard: Component = () => {
               if (ship && target) {
                 const config = SYNAPSE_CONFIG[target.synapseType]
                 const pointsPerMin = Math.floor(config.maxPerMin / 2) || 50
-                // Use travelToSynapse - ship will travel to synapse and auto-start solving on arrival
                 const success = await shipStore.travelToSynapse(ship.id, target.id, pointsPerMin)
                 if (success) {
                   setExplorePromptData(null)
-                  // Re-enable ship zoom mode to follow ship during deployment
-                  setIsShipZoom(true)
-                  const pos = new THREE.Vector3(ship.positionX, ship.positionY, ship.positionZ)
-                  setZoomTarget(pos)
                 }
               }
             }}
@@ -461,18 +334,6 @@ export const DiscoveryDashboard: Component = () => {
           </div>
         </div>
       </div>
-
-      {/* Zoom indicator */}
-      <Show when={isZooming()}>
-        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-40">
-          <div class="px-4 py-2 rounded-lg bg-black/70 backdrop-blur-sm border border-teal-500/50">
-            <p class="text-sm text-teal-400 flex items-center gap-2">
-              <span class="w-2 h-2 bg-teal-400 rounded-full animate-pulse" />
-              Focusing...
-            </p>
-          </div>
-        </div>
-      </Show>
 
       {/* Help Overlay */}
       <Show when={panels.showHelp}>
@@ -617,9 +478,7 @@ export const DiscoveryDashboard: Component = () => {
                           const success = await shipStore.travelToSynapse(ship.id, synapse.id, pointsPerMin)
                           if (success) {
                             setDeployTarget(null)
-                            // Select the ship and enable ship zoom to follow travel
                             shipStore.selectShip(ship.id)
-                            setIsShipZoom(true)
                           }
                         }
                       }
@@ -658,14 +517,13 @@ export const DiscoveryDashboard: Component = () => {
           }}
         />
 
-        {/* Minimap */}
+        {/* Minimap (display-only) */}
         <BrainMinimap
           cameraPosition={cameraPosition()}
           cameraTarget={cameraTarget()}
           selectedRegionIndex={selectedRegionIndex()}
           isExpanded={panels.minimapExpanded}
           onToggle={() => setPanels('minimapExpanded', !panels.minimapExpanded)}
-          onNavigate={handleMinimapNavigate}
         />
 
         {/* Quality Settings */}

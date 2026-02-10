@@ -57,9 +57,9 @@ export const SYNAPSE_VERTEX_SHADER = `
 
     // State-based animation: 0=undiscovered, 1=exploring, 2=discovered
     if (aState < 0.5) {
-      // Undiscovered: subtle breathing
-      pulse = 1.0 + sin(uTime * 1.5 + position.x * 4.0) * 0.05;
-      sizeMultiplier = 0.9;
+      // Undiscovered: small crisp dots with subtle breathing
+      pulse = 1.0 + sin(uTime * 1.5 + position.x * 4.0) * 0.04;
+      sizeMultiplier = 0.55;
     } else if (aState < 1.5) {
       // Being explored: gentle pulsing
       pulse = 1.0 + sin(uTime * 3.0 + position.y * 4.0) * 0.1;
@@ -93,7 +93,9 @@ export const SYNAPSE_VERTEX_SHADER = `
 
     // HOVER EFFECT: Scale up when hovered with dramatic pulsation
     if (aHovered > 0.5) {
-      sizeMultiplier *= 2.5;  // Make hovered synapse much larger
+      // Larger hover boost for undiscovered (small base) vs others
+      float hoverScale = aState < 0.5 ? 5.0 : 2.5;
+      sizeMultiplier *= hoverScale;
       // Strong breathing pulse: oscillates between 0.7x and 1.3x
       pulse *= 0.85 + sin(uTime * 4.0) * 0.35;
     }
@@ -167,13 +169,14 @@ export const SYNAPSE_FRAGMENT_SHADER = `
 
     // State-based visual treatment
     if (vState < 0.5) {
-      // Undiscovered: muted, mysterious, inviting exploration
-      finalColor *= 0.6;
-      finalColor = mix(finalColor, vec3(0.3, 0.4, 0.55), 0.3);
-      alpha *= 0.7;
-      // Soft glow core
-      float dimCore = smoothstep(0.15, 0.0, dist) * 0.3;
-      finalColor += dimCore * vec3(0.5, 0.55, 0.7);
+      // Undiscovered: crisp small dots — tight core, fast falloff
+      finalColor *= 0.45;
+      finalColor = mix(finalColor, vec3(0.35, 0.45, 0.65), 0.25);
+      // Sharp falloff — visible but not blurry
+      alpha *= smoothstep(0.35, 0.08, dist) * 0.8;
+      // Bright compact core for contrast against dark background
+      float dimCore = smoothstep(0.1, 0.0, dist) * 0.55;
+      finalColor += dimCore * vec3(0.65, 0.7, 0.9);
     } else if (vState < 1.5) {
       // Being explored/solved: DRAMATICALLY ENHANCED with bright pulsing glow
       finalColor = mix(finalColor, vec3(1.0, 0.85, 0.3), 0.5);
@@ -289,39 +292,38 @@ export const SYNAPSE_FRAGMENT_SHADER = `
 
     // NON-ACTIONABLE DIMMING: When actionable synapses exist, dim non-actionable ones
     // Creates figure/ground contrast so solvable synapses pop
-    if (uHasActionable > 0.5 && vActionable < 0.5 && vFiltered < 0.5) {
+    if (uHasActionable > 0.5 && vActionable < 0.5 && vFiltered < 0.5 && vHovered < 0.5) {
       float gray = dot(finalColor, vec3(0.299, 0.587, 0.114));
-      finalColor = mix(finalColor, vec3(gray), 0.15);  // 15% desaturation
-      finalColor *= 0.8;  // 20% brightness reduction
-      alpha *= 0.85;      // 15% alpha reduction
+      finalColor = mix(finalColor, vec3(gray), 0.6);   // 60% desaturation
+      finalColor *= 0.25;  // 75% brightness reduction
+      alpha *= 0.35;       // 65% alpha reduction
     }
 
     // HOVER HIGHLIGHT: Dramatic pulsating glow when hovered
     if (vHovered > 0.5) {
-      // Animated pulse for the entire effect
       float hoverPulse = 0.7 + 0.3 * sin(uTime * 4.0);
 
-      // Brighten the whole synapse significantly
-      finalColor *= 1.6;
+      // Reset color to base — undo any prior dimming (non-actionable, state)
+      finalColor = vColor * 1.2;
 
-      // Animated expanding ring - pulses outward
-      float ringPhase = fract(uTime * 0.8);  // 0.8 = speed of expansion
-      float ringCenter = 0.25 + ringPhase * 0.35;  // Ring expands from 0.25 to 0.6
-      float ringWidth = 0.08 * (1.0 - ringPhase * 0.5);  // Ring gets thinner as it expands
-      float expandingRing = smoothstep(ringCenter - ringWidth, ringCenter, dist)
-                          * smoothstep(ringCenter + ringWidth, ringCenter, dist);
-      expandingRing *= (1.0 - ringPhase);  // Fade out as it expands
-      finalColor += expandingRing * vec3(0.3, 1.0, 1.0) * 2.0;
-
-      // Static bright cyan outer ring (always visible)
-      float hoverRing = smoothstep(0.32, 0.38, dist) * smoothstep(0.48, 0.40, dist);
-      finalColor += hoverRing * vec3(0.4, 1.0, 1.0) * hoverPulse * 2.0;
-
-      // Bright white core glow
-      float hoverCore = smoothstep(0.2, 0.0, dist) * 0.8 * hoverPulse;
+      // Bright white core
+      float hoverCore = smoothstep(0.15, 0.0, dist) * 0.9 * hoverPulse;
       finalColor += hoverCore * vec3(1.0, 1.0, 1.0);
 
-      // Ensure full visibility
+      // Visible outer ring — acts as the "bounding box" indicator
+      float hoverRing = smoothstep(0.34, 0.38, dist) * smoothstep(0.48, 0.42, dist);
+      finalColor += hoverRing * vec3(0.4, 1.0, 1.0) * hoverPulse * 1.5;
+
+      // Animated expanding ring
+      float ringPhase = fract(uTime * 0.8);
+      float ringCenter = 0.25 + ringPhase * 0.35;
+      float ringWidth = 0.08 * (1.0 - ringPhase * 0.5);
+      float expandingRing = smoothstep(ringCenter - ringWidth, ringCenter, dist)
+                          * smoothstep(ringCenter + ringWidth, ringCenter, dist);
+      expandingRing *= (1.0 - ringPhase);
+      finalColor += expandingRing * vec3(0.3, 1.0, 1.0) * 1.5;
+
+      // Full visibility
       alpha = 1.0;
     }
 

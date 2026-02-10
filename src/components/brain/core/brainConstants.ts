@@ -78,24 +78,6 @@ export const CAMERA_CONFIG = {
   maxDistance: 5,
 } as const
 
-// Ship zoom configuration - for close-up ship inspection
-export const SHIP_ZOOM_CONFIG = {
-  closeZoomDistance: 0.5,        // Camera offset when zooming to ship
-  modelVisibleThreshold: 1.0,    // Show 3D model when camera < this distance
-  transitionZone: 0.3,           // Opacity blend range
-  zoomOffset: [0.7, 0.25, 0.5] as const,  // Camera offset from ship position [x, y, z] - zoomed out more
-  animationDuration: 800,        // Zoom animation ms
-  minDistanceOverride: 0.3,      // Temporary minDistance during ship zoom
-} as const
-
-// Ship follow configuration - for smooth camera tracking during ship movement
-export const SHIP_FOLLOW_CONFIG = {
-  followLerpSpeed: 1.2,          // How fast camera follows ship (lower = smoother, ship appears to move ahead)
-  followOffset: [0.7, 0.25, 0.5] as const,  // Camera offset while following [x, y, z]
-  initialZoomDuration: 800,      // Initial zoom animation duration ms
-} as const
-
-
 // LOD thresholds (camera distance)
 export const LOD_THRESHOLDS = {
   lod0: 2.5,  // Close view
@@ -110,68 +92,6 @@ export const LOD_PARTICLE_COUNTS = {
   lod2: 4000,    // Far view (reduced from 5000)
 } as const
 
-// ============================================================================
-// SHIP MARKER SHADER CONSTANTS
-// Extracted from AgentMarkers.tsx for maintainability
-// ============================================================================
-
-// Ship marker rendering
-export const SHIP_MARKER_CONFIG = {
-  pointSize: 25.0,             // Base point size (increased for visibility)
-  distanceScale: 60.0,         // Distance-based scaling divisor
-  minPointSize: 15.0,          // Minimum clamped point size (increased)
-  maxPointSize: 40.0,          // Maximum clamped point size (increased)
-} as const
-
-// Ship state pulse animations (frequency in Hz, amplitude as multiplier)
-// Ship state pulse animations - matches ShipStatus type: 'idle' | 'solving' | 'deploying' | 'returning'
-export const SHIP_STATE_PULSE = {
-  idle: { frequency: 1.0, amplitude: 0.1 },       // Subtle breathing
-  solving: { frequency: 1.5, amplitude: 0.1 },    // Working at synapse (orbiting)
-  deploying: { frequency: 5.0, amplitude: 0.25 }, // Rapid pulse (moving)
-  returning: { frequency: 2.0, amplitude: 0.15 }, // Gentle pulse (moving)
-} as const
-
-// Ship marker shape (diamond)
-export const SHIP_SHAPE_CONFIG = {
-  coreInner: 0.2,              // Core smoothstep start
-  coreOuter: 0.28,             // Core smoothstep end
-  glowInner: 0.25,             // Glow smoothstep start
-  glowOuter: 0.5,              // Glow smoothstep end
-  coreBrightness: 1.3,         // Core color multiplier
-  glowBrightness: 0.7,         // Glow color multiplier
-} as const
-
-// Ship engine glow
-export const SHIP_ENGINE_CONFIG = {
-  radius: 0.12,                // Engine glow radius
-  idleIntensity: 0.25,         // Idle engine brightness
-  activeIntensity: 0.6,        // Active engine brightness
-  idleFlickerFreq: 1.5,        // Idle flicker frequency
-  activeFlickerFreq: 10.0,     // Active flicker frequency
-  idleFlickerAmp: 0.2,         // Idle flicker amplitude
-  activeFlickerAmp: 0.3,       // Active flicker amplitude
-  idleColor: [0.4, 0.7, 1.0],  // Soft cyan for idle
-  activeColor: [1.0, 0.5, 0.1], // Orange for active
-} as const
-
-// World ship (ambient / other-user) marker rendering
-export const WORLD_SHIP_CONFIG = {
-  pointSize: 20.0,               // Base point size
-  distanceScale: 65.0,           // Distance-based scaling divisor
-  minPointSize: 12.0,            // Minimum clamped point size
-  maxPointSize: 35.0,            // Maximum clamped point size
-  color: [0.9, 0.85, 0.7] as const, // Warm white-gold (contrasts with blue synapse cloud)
-  fadeOutDuration: 1.0,          // Seconds to fade out when going idle
-} as const
-
-// Ship state colors (RGB values for shader) - keyed by ShipStatus
-export const SHIP_STATE_COLORS: Record<'idle' | 'solving' | 'deploying' | 'returning', readonly [number, number, number]> = {
-  idle: [1.0, 0.9, 0.2],       // Bright yellow/gold for visibility
-  solving: [0.0, 0.87, 0.87],  // Bright cyan (ship at synapse)
-  deploying: [0.87, 0.67, 0.0],  // Bright orange (traveling)
-  returning: [0.53, 0.87, 0.53], // Bright green
-} as const
 
 /**
  * Constrain positions to be INSIDE the brain volume

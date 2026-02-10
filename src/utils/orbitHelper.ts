@@ -1,6 +1,6 @@
 /**
  * Shared orbit position calculation for ships orbiting synapses.
- * Used by AgentMarkers, SolvingBeam, and ShipModel3D.
+ * Used by AgentMarkers and SolvingBeam.
  */
 
 export interface OrbitParams {

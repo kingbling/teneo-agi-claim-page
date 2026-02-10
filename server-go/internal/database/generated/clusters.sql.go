@@ -152,9 +152,9 @@ INSERT INTO space_clusters (id, lod_level, position_x, position_y, position_z, s
 SELECT
     format('%s_%s_%s_%s', $1::int, FLOOR(position_x/$2::float)::int, FLOOR(position_y/$2::float)::int, FLOOR(position_z/$2::float)::int),
     $1::int,
-    ROUND(AVG(position_x)::numeric, 2)::float,
-    ROUND(AVG(position_y)::numeric, 2)::float,
-    ROUND(AVG(position_z)::numeric, 2)::float,
+    ROUND((AVG(position_x) + (hashtext(format('x%s_%s_%s', FLOOR(position_x/$2::float)::int, FLOOR(position_y/$2::float)::int, FLOOR(position_z/$2::float)::int))::bigint % 1000) / 1000.0 * $2 * 0.45)::numeric, 4)::float,
+    ROUND((AVG(position_y) + (hashtext(format('y%s_%s_%s', FLOOR(position_x/$2::float)::int, FLOOR(position_y/$2::float)::int, FLOOR(position_z/$2::float)::int))::bigint % 1000) / 1000.0 * $2 * 0.45)::numeric, 4)::float,
+    ROUND((AVG(position_z) + (hashtext(format('z%s_%s_%s', FLOOR(position_x/$2::float)::int, FLOOR(position_y/$2::float)::int, FLOOR(position_z/$2::float)::int))::bigint % 1000) / 1000.0 * $2 * 0.45)::numeric, 4)::float,
     COUNT(*)::int,
     COUNT(*) FILTER (WHERE state = 'discovered')::int,
     COUNT(*) FILTER (WHERE state = 'being_solved')::int,
@@ -169,6 +169,9 @@ type InsertSpaceClustersParams struct {
 	Column3 int64   `json:"column_3"`
 }
 
+// Jitter: with ~2500 synapses per cell, AVG converges to cell center (grid look).
+// Deterministic offset via hashtext on cell coords — same cell always gets same jitter,
+// so clusters don't jump on every recompute (unlike random()).
 func (q *Queries) InsertSpaceClusters(ctx context.Context, arg InsertSpaceClustersParams) error {
 	_, err := q.db.Exec(ctx, insertSpaceClusters, arg.Column1, arg.Column2, arg.Column3)
 	return err

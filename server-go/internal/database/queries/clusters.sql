@@ -27,13 +27,16 @@ DELETE FROM space_clusters;
 DELETE FROM agent_clusters;
 
 -- name: InsertSpaceClusters :exec
+-- Jitter: with ~2500 synapses per cell, AVG converges to cell center (grid look).
+-- Deterministic offset via hashtext on cell coords — same cell always gets same jitter,
+-- so clusters don't jump on every recompute (unlike random()).
 INSERT INTO space_clusters (id, lod_level, position_x, position_y, position_z, space_count, discovered_count, being_solved_count, updated_at)
 SELECT
     format('%s_%s_%s_%s', $1::int, FLOOR(position_x/$2::float)::int, FLOOR(position_y/$2::float)::int, FLOOR(position_z/$2::float)::int),
     $1::int,
-    ROUND(AVG(position_x)::numeric, 2)::float,
-    ROUND(AVG(position_y)::numeric, 2)::float,
-    ROUND(AVG(position_z)::numeric, 2)::float,
+    ROUND((AVG(position_x) + (hashtext(format('x%s_%s_%s', FLOOR(position_x/$2::float)::int, FLOOR(position_y/$2::float)::int, FLOOR(position_z/$2::float)::int))::bigint % 1000) / 1000.0 * $2 * 0.45)::numeric, 4)::float,
+    ROUND((AVG(position_y) + (hashtext(format('y%s_%s_%s', FLOOR(position_x/$2::float)::int, FLOOR(position_y/$2::float)::int, FLOOR(position_z/$2::float)::int))::bigint % 1000) / 1000.0 * $2 * 0.45)::numeric, 4)::float,
+    ROUND((AVG(position_z) + (hashtext(format('z%s_%s_%s', FLOOR(position_x/$2::float)::int, FLOOR(position_y/$2::float)::int, FLOOR(position_z/$2::float)::int))::bigint % 1000) / 1000.0 * $2 * 0.45)::numeric, 4)::float,
     COUNT(*)::int,
     COUNT(*) FILTER (WHERE state = 'discovered')::int,
     COUNT(*) FILTER (WHERE state = 'being_solved')::int,

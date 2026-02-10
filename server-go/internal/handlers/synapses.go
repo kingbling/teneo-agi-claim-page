@@ -20,12 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// Grid sizes for LOD cluster computation (must match engine.go recomputeClusters)
-var lodGridSizes = map[int]float64{
-	0: 0.08,
-	1: 0.3,
-	2: 1.0,
-}
+// lodGridSizes references the shared config for LOD cluster computation
+var lodGridSizes = config.LODGridSizes
 
 // getClusterIDForPosition computes the cluster ID for a given position and LOD level
 func getClusterIDForPosition(x, y, z float64, lodLevel int) string {
