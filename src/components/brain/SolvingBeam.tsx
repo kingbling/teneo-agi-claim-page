@@ -12,8 +12,8 @@ import { onMount, onCleanup, createEffect, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { Ship } from '@/stores/shipStore'
-import { constrainToBrainShape } from './core/brainConstants'
 import { SYNAPSE_CONFIG, type SynapseType } from '@/types/game'
+import { computeOrbitPosition } from '@/utils/orbitHelper'
 
 interface SolvingBeamProps {
   ship: Ship
@@ -130,6 +130,14 @@ export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
     time: 0,
     intensity: 0.7,
   }
+
+  // Cached Vector3 objects to avoid per-frame allocation
+  const _shipPos = new THREE.Vector3()
+  const _synapsePos = new THREE.Vector3()
+  const _midpoint = new THREE.Vector3()
+  const _direction = new THREE.Vector3()
+  const _up = new THREE.Vector3(0, 1, 0)
+  const _quaternion = new THREE.Quaternion()
 
   onMount(() => {
     const sceneObj = scene()
@@ -288,27 +296,16 @@ export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
     beamGroup.add(particleSystemRef)
   }
 
-  // Calculate ship's animated orbit position (must match AgentMarkers.tsx orbit logic)
+  // Calculate ship's animated orbit position using shared helper
   function getShipOrbitPosition(ship: Ship, now: number): [number, number, number] {
-    // Get synapse position (target position) - this is where the ship orbits around
-    const [synapseX, synapseY, synapseZ] = constrainToBrainShape(
-      ship.targetPositionX ?? ship.positionX,
-      ship.targetPositionY ?? ship.positionY,
-      ship.targetPositionZ ?? ship.positionZ
-    )
-
-    // Orbit parameters (must match AgentMarkers.tsx)
-    const orbitRadius = 0.15
-    const orbitSpeed = 0.002 + (ship.id.charCodeAt(0) % 10) * 0.0003
-    const orbitPhase = ship.id.charCodeAt(0)
-    const angle = now * orbitSpeed + orbitPhase
-
-    // Calculate orbit position
-    const cx = synapseX + Math.cos(angle) * orbitRadius
-    const cz = synapseZ + Math.sin(angle) * orbitRadius
-    const cy = synapseY + 0.08 + Math.sin(angle * 2) * 0.04
-
-    return [cx, cy, cz]
+    return computeOrbitPosition({
+      shipId: ship.id,
+      centerX: ship.targetPositionX ?? ship.positionX,
+      centerY: ship.targetPositionY ?? ship.positionY,
+      centerZ: ship.targetPositionZ ?? ship.positionZ,
+      radius: 0.15,
+      now,
+    })
   }
 
   // Handle visibility changes only - position updates happen in useFrame
@@ -363,11 +360,9 @@ export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
 
     const now = Date.now()
     const [shipX, shipY, shipZ] = getShipOrbitPosition(props.ship, now)
-    const [synapseX, synapseY, synapseZ] = constrainToBrainShape(
-      props.synapsePosition.x,
-      props.synapsePosition.y,
-      props.synapsePosition.z
-    )
+    const synapseX = props.synapsePosition.x
+    const synapseY = props.synapsePosition.y
+    const synapseZ = props.synapsePosition.z
 
     // Update line positions
     const linePositions = geometryRef.getAttribute('position') as THREE.BufferAttribute
@@ -376,21 +371,19 @@ export const SolvingBeam: Component<SolvingBeamProps> = (props) => {
     linePositions.needsUpdate = true
     lineRef.computeLineDistances()
 
-    // Update volumetric beam mesh
+    // Update volumetric beam mesh — reuse cached Vector3/Quaternion
     if (beamMeshRef) {
-      const shipPos = new THREE.Vector3(shipX, shipY, shipZ)
-      const synapsePos = new THREE.Vector3(synapseX, synapseY, synapseZ)
-      const beamLength = shipPos.distanceTo(synapsePos)
-      const midpoint = shipPos.clone().add(synapsePos).multiplyScalar(0.5)
+      _shipPos.set(shipX, shipY, shipZ)
+      _synapsePos.set(synapseX, synapseY, synapseZ)
+      const beamLength = _shipPos.distanceTo(_synapsePos)
+      _midpoint.addVectors(_shipPos, _synapsePos).multiplyScalar(0.5)
 
-      beamMeshRef.position.copy(midpoint)
+      beamMeshRef.position.copy(_midpoint)
       beamMeshRef.scale.set(1, beamLength, 1)
 
-      const direction = synapsePos.clone().sub(shipPos).normalize()
-      const up = new THREE.Vector3(0, 1, 0)
-      const quaternion = new THREE.Quaternion()
-      quaternion.setFromUnitVectors(up, direction)
-      beamMeshRef.quaternion.copy(quaternion)
+      _direction.subVectors(_synapsePos, _shipPos).normalize()
+      _quaternion.setFromUnitVectors(_up, _direction)
+      beamMeshRef.quaternion.copy(_quaternion)
     }
 
     // Update particle positions

@@ -5,6 +5,8 @@
  * Extracted from SpaceMarkers.tsx for cleaner code organization.
  */
 
+import { glslDistanceScale, glslClampPointSize, glslCircleDiscard } from './common'
+
 /**
  * Vertex shader for synapse markers with state-based animation
  * Enhanced with dramatic type-based visual hierarchy and progress rings
@@ -129,8 +131,8 @@ export const SYNAPSE_VERTEX_SHADER = `
     }
 
     // Distance-based scaling for consistent appearance
-    float distScale = 80.0 / max(-mvPosition.z, 1.0);
-    gl_PointSize = clamp(aSize * pulse * sizeMultiplier * distScale, 2.0, 32.0);
+    ${glslDistanceScale(80)}
+    ${glslClampPointSize('aSize * pulse * sizeMultiplier * distScale', 2, 32)}
     gl_Position = projectionMatrix * mvPosition;
   }
 `
@@ -158,14 +160,8 @@ export const SYNAPSE_FRAGMENT_SHADER = `
   }
 
   void main() {
-    vec2 center = gl_PointCoord - vec2(0.5);
-    float dist = length(center);
-
-    // Discard fragments outside the circle (fixes square appearance)
-    if (dist > 0.5) discard;
-
-    // Soft circular falloff
-    float alpha = 1.0 - smoothstep(0.2, 0.5, dist);
+    ${glslCircleDiscard(0.2, 0.5)}
+    float alpha = circleAlpha;
 
     vec3 finalColor = vColor;
 

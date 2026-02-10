@@ -3,7 +3,6 @@ import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { SynapseType, UserLevel } from '@/types/game'
 import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG, SYNAPSE_TYPE_ORDER } from '@/types/game'
-import { constrainToBrainShape } from './core/brainConstants'
 import type { SynapseCluster } from '@/stores/shipStore'
 import { log } from '@/utils/logger'
 
@@ -47,6 +46,68 @@ function getDominantSynapseType(typeCounts?: Record<SynapseType, number>): Synap
   return dominantType
 }
 
+// Simple spatial grid for efficient nearest-neighbor search
+// Divides space into cells of given size, only compares within adjacent cells
+function buildSpatialGrid(nodes: DiscoveredNode[], cellSize: number) {
+  const grid = new Map<string, number[]>()
+  for (let i = 0; i < nodes.length; i++) {
+    const p = nodes[i].position
+    const key = `${Math.floor(p.x / cellSize)},${Math.floor(p.y / cellSize)},${Math.floor(p.z / cellSize)}`
+    let cell = grid.get(key)
+    if (!cell) { cell = []; grid.set(key, cell) }
+    cell.push(i)
+  }
+  return grid
+}
+
+function findNearestNeighbor(
+  nodeIdx: number,
+  nodes: DiscoveredNode[],
+  grid: Map<string, number[]>,
+  cellSize: number,
+): { idx: number; dist: number } | null {
+  const p = nodes[nodeIdx].position
+  const cx = Math.floor(p.x / cellSize)
+  const cy = Math.floor(p.y / cellSize)
+  const cz = Math.floor(p.z / cellSize)
+
+  let nearestIdx = -1
+  let nearestDist = Infinity
+
+  // Search 3x3x3 neighborhood of cells
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const key = `${cx + dx},${cy + dy},${cz + dz}`
+        const cell = grid.get(key)
+        if (!cell) continue
+        for (const j of cell) {
+          if (j === nodeIdx) continue
+          const dist = p.distanceTo(nodes[j].position)
+          if (dist < nearestDist) {
+            nearestDist = dist
+            nearestIdx = j
+          }
+        }
+      }
+    }
+  }
+
+  // Fallback: if 3x3x3 found nothing (very sparse), do full scan
+  if (nearestIdx === -1) {
+    for (let j = 0; j < nodes.length; j++) {
+      if (j === nodeIdx) continue
+      const dist = p.distanceTo(nodes[j].position)
+      if (dist < nearestDist) {
+        nearestDist = dist
+        nearestIdx = j
+      }
+    }
+  }
+
+  return nearestIdx !== -1 ? { idx: nearestIdx, dist: nearestDist } : null
+}
+
 // Build network of connections between discovered synapse clusters
 function buildNetwork(
   clusters: SynapseCluster[],
@@ -58,10 +119,8 @@ function buildNetwork(
   const nodes: DiscoveredNode[] = discovered.map(c => {
     const dominantType = getDominantSynapseType(c.typeCounts)
     const unlockLevel = SYNAPSE_CONFIG[dominantType].unlockUserLevel
-    // Use same position transform as SpaceMarkers for alignment
-    const [x, y, z] = constrainToBrainShape(c.positionX, c.positionY, c.positionZ)
     return {
-      position: new THREE.Vector3(x, y, z),
+      position: new THREE.Vector3(c.positionX, c.positionY, c.positionZ),
       discoveryRatio: c.discoveredCount / Math.max(1, c.synapseCount),
       dominantType,
       isLocked: userLevel < unlockLevel
@@ -70,52 +129,42 @@ function buildNetwork(
 
   if (discovered.length < 2) return { nodes, connections: [] }
 
+  // Use spatial grid for O(n) average-case nearest-neighbor search
+  // Cell size ~1.0 works well for brain-scale coordinates
+  const cellSize = 1.0
+  const grid = buildSpatialGrid(nodes, cellSize)
+
   const connections: Connection[] = []
   const connectionSet = new Set<string>()
 
   // Connect each node to its nearest neighbor only (chain-like structure)
   for (let i = 0; i < nodes.length; i++) {
-    let nearestIdx = -1
-    let nearestDist = Infinity
+    const nearest = findNearestNeighbor(i, nodes, grid, cellSize)
+    if (!nearest) continue
 
-    // Find nearest neighbor
-    for (let j = 0; j < nodes.length; j++) {
-      if (i === j) continue
-      const dist = nodes[i].position.distanceTo(nodes[j].position)
-      if (dist < nearestDist) {
-        nearestDist = dist
-        nearestIdx = j
-      }
-    }
+    // Normalize key to avoid duplicate connections (A->B same as B->A)
+    const key = i < nearest.idx ? `${i}-${nearest.idx}` : `${nearest.idx}-${i}`
+    if (connectionSet.has(key)) continue
+    connectionSet.add(key)
 
-    if (nearestIdx !== -1) {
-      // Normalize key to avoid duplicate connections (A->B same as B->A)
-      const key = i < nearestIdx ? `${i}-${nearestIdx}` : `${nearestIdx}-${i}`
-      if (!connectionSet.has(key)) {
-        connectionSet.add(key)
+    const nodeA = nodes[i]
+    const nodeB = nodes[nearest.idx]
 
-        const nodeA = nodes[i]
-        const nodeB = nodes[nearestIdx]
+    const avgRatio = (nodeA.discoveryRatio + nodeB.discoveryRatio) / 2
+    const brightness = 0.3 + avgRatio * 0.7
 
-        // Brightness based on discovery ratio
-        const avgRatio = (nodeA.discoveryRatio + nodeB.discoveryRatio) / 2
-        const brightness = 0.3 + avgRatio * 0.7
+    const type1Index = SYNAPSE_TYPE_ORDER.indexOf(nodeA.dominantType)
+    const type2Index = SYNAPSE_TYPE_ORDER.indexOf(nodeB.dominantType)
+    const dominantType = type1Index > type2Index ? nodeA.dominantType : nodeB.dominantType
+    const isLocked = nodeA.isLocked || nodeB.isLocked
 
-        // Use the rarer type for connection color
-        const type1Index = SYNAPSE_TYPE_ORDER.indexOf(nodeA.dominantType)
-        const type2Index = SYNAPSE_TYPE_ORDER.indexOf(nodeB.dominantType)
-        const dominantType = type1Index > type2Index ? nodeA.dominantType : nodeB.dominantType
-        const isLocked = nodeA.isLocked || nodeB.isLocked
-
-        connections.push({
-          from: nodeA.position.clone(),
-          to: nodeB.position.clone(),
-          brightness,
-          dominantType,
-          isLocked
-        })
-      }
-    }
+    connections.push({
+      from: nodeA.position.clone(),
+      to: nodeB.position.clone(),
+      brightness,
+      dominantType,
+      isLocked
+    })
   }
 
   return { nodes, connections }
@@ -460,41 +509,93 @@ export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
     })
   })
 
-  // Update node geometry when data changes
+  // Update node geometry when data changes — reuse attributes with needsUpdate
+  let nodeAttrsInit = false
   createEffect(() => {
     const data = nodeGeometryData()
     if (!pointsGeometry || !pointsObject) return
 
     if (!data) {
-      // No data - hide the object
       pointsObject.visible = false
       return
     }
 
-    pointsGeometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
-    pointsGeometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
-    pointsGeometry.setAttribute('aColor', new THREE.BufferAttribute(data.colors, 3))
+    if (!nodeAttrsInit || pointsGeometry.getAttribute('position')?.count !== data.positions.length / 3) {
+      // Need new attributes (size changed or first init)
+      const posAttr = new THREE.BufferAttribute(data.positions, 3)
+      posAttr.setUsage(THREE.DynamicDrawUsage)
+      pointsGeometry.setAttribute('position', posAttr)
+
+      const sizeAttr = new THREE.BufferAttribute(data.sizes, 1)
+      sizeAttr.setUsage(THREE.DynamicDrawUsage)
+      pointsGeometry.setAttribute('aSize', sizeAttr)
+
+      const colorAttr = new THREE.BufferAttribute(data.colors, 3)
+      colorAttr.setUsage(THREE.DynamicDrawUsage)
+      pointsGeometry.setAttribute('aColor', colorAttr)
+
+      nodeAttrsInit = true
+    } else {
+      // Same size — update in place
+      const posAttr = pointsGeometry.getAttribute('position') as THREE.BufferAttribute
+      posAttr.array.set(data.positions)
+      posAttr.needsUpdate = true
+
+      const sizeAttr = pointsGeometry.getAttribute('aSize') as THREE.BufferAttribute
+      sizeAttr.array.set(data.sizes)
+      sizeAttr.needsUpdate = true
+
+      const colorAttr = pointsGeometry.getAttribute('aColor') as THREE.BufferAttribute
+      colorAttr.array.set(data.colors)
+      colorAttr.needsUpdate = true
+    }
+
     pointsGeometry.computeBoundingSphere()
-    pointsObject.visible = true  // Show when we have data
+    pointsObject.visible = true
   })
 
-  // Update line geometry when data changes
+  // Update line geometry when data changes — reuse attributes with needsUpdate
+  let lineAttrsInit = false
   createEffect(() => {
     const data = lineGeometryData()
     if (!linesGeometry || !linesObject || !sparklesGeometry || !sparklesObject) return
 
     if (!data) {
-      // No data - hide the objects
       linesObject.visible = false
       sparklesObject.visible = false
       return
     }
 
-    linesGeometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
-    linesGeometry.setAttribute('aColor', new THREE.BufferAttribute(data.colors, 3))
-    linesGeometry.setAttribute('aOpacity', new THREE.BufferAttribute(data.opacities, 1))
+    if (!lineAttrsInit || linesGeometry.getAttribute('position')?.count !== data.positions.length / 3) {
+      const posAttr = new THREE.BufferAttribute(data.positions, 3)
+      posAttr.setUsage(THREE.DynamicDrawUsage)
+      linesGeometry.setAttribute('position', posAttr)
+
+      const colorAttr = new THREE.BufferAttribute(data.colors, 3)
+      colorAttr.setUsage(THREE.DynamicDrawUsage)
+      linesGeometry.setAttribute('aColor', colorAttr)
+
+      const opacityAttr = new THREE.BufferAttribute(data.opacities, 1)
+      opacityAttr.setUsage(THREE.DynamicDrawUsage)
+      linesGeometry.setAttribute('aOpacity', opacityAttr)
+
+      lineAttrsInit = true
+    } else {
+      const posAttr = linesGeometry.getAttribute('position') as THREE.BufferAttribute
+      posAttr.array.set(data.positions)
+      posAttr.needsUpdate = true
+
+      const colorAttr = linesGeometry.getAttribute('aColor') as THREE.BufferAttribute
+      colorAttr.array.set(data.colors)
+      colorAttr.needsUpdate = true
+
+      const opacityAttr = linesGeometry.getAttribute('aOpacity') as THREE.BufferAttribute
+      opacityAttr.array.set(data.opacities)
+      opacityAttr.needsUpdate = true
+    }
+
     linesGeometry.computeBoundingSphere()
-    linesObject.visible = true  // Show when we have data
+    linesObject.visible = true
 
     // Initialize sparkle particles along sparse selection of connections
     const { connections } = networkData()

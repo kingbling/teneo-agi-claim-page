@@ -9,8 +9,8 @@ import { onMount, onCleanup, createEffect, createMemo } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { Ship } from '@/stores/shipStore'
-import { constrainToBrainShape } from './core/brainConstants'
 import type { SynapseType } from '@/types/game'
+import { glslDistanceScale, glslClampPointSize, glslCircleDiscard } from './shaders/common'
 
 interface SolvingSparksProps {
   ship: Ship
@@ -64,8 +64,8 @@ const SPARK_VERTEX_SHADER = `
 
     // Size decreases as spark expands and fades
     float sizeFade = 1.0 - t;
-    float distScale = 200.0 / max(-mvPosition.z, 1.0);
-    gl_PointSize = clamp(aSize * sizeFade * distScale, 1.0, 12.0);
+    ${glslDistanceScale(200)}
+    ${glslClampPointSize('aSize * sizeFade * distScale', 1, 12)}
 
     // Alpha fades out over lifetime
     vAlpha = sizeFade * sizeFade;  // Quadratic falloff for nice fade
@@ -83,14 +83,8 @@ const SPARK_FRAGMENT_SHADER = `
   varying float vAlpha;
 
   void main() {
-    vec2 center = gl_PointCoord - vec2(0.5);
-    float dist = length(center);
-
-    // Discard outside circle
-    if (dist > 0.5) discard;
-
-    // Soft circular glow
-    float glow = 1.0 - smoothstep(0.0, 0.5, dist);
+    ${glslCircleDiscard(0.0, 0.5)}
+    float glow = circleAlpha;
 
     // Hot white core transitioning to synapse color
     vec3 coreColor = vec3(1.0, 1.0, 0.95);  // Near-white
@@ -122,12 +116,11 @@ export function SolvingSparks(props: SolvingSparksProps) {
   // Compute synapse center position
   const synapseCenter = createMemo(() => {
     if (!props.synapsePosition) return new THREE.Vector3()
-    const [x, y, z] = constrainToBrainShape(
+    return new THREE.Vector3(
       props.synapsePosition.x,
       props.synapsePosition.y,
       props.synapsePosition.z
     )
-    return new THREE.Vector3(x, y, z)
   })
 
   onMount(() => {

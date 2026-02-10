@@ -20,6 +20,88 @@ import {
 // SHIP STORE — SERVER MESSAGE HANDLERS
 // ============================================================================
 
+/**
+ * Merge a server ship with local animation data.
+ * Preserves travel animation data if travel is still in progress locally,
+ * target position for solving ships, or uses server travel data as fallback.
+ */
+function mergeShipWithAnimationData(
+  serverShip: Ship,
+  localShip: Ship | undefined,
+  timestamp: number,
+): Ship | null {
+  // Skip stale updates (local state is newer)
+  if (localShip?._lastLocalUpdate && localShip._lastLocalUpdate > timestamp) {
+    return null // Signal to skip
+  }
+
+  // Check if local ship has animation data AND travel is still in progress
+  const hasLocalAnimationData = localShip?.travelStartTime != null &&
+    localShip?.travelDuration != null &&
+    localShip.travelDuration > 0
+  const travelStillInProgress = hasLocalAnimationData &&
+    Date.now() < (localShip!.travelStartTime! + localShip!.travelDuration!)
+
+  const mappedState = mapServerShipState(serverShip.state)
+  const serverIsTraveling = serverShip.state === 'traveling'
+  const finalState = travelStillInProgress ? 'deploying' as const : mappedState
+
+  // Check if solving ship needs target position preserved
+  const shouldPreserveTargetPosition = (finalState === 'solving' || localShip?.state === 'solving') &&
+    localShip?.targetPositionX !== undefined
+
+  // Determine position source
+  const serverHasPosition = serverShip.positionX !== undefined &&
+    serverShip.positionY !== undefined &&
+    serverShip.positionZ !== undefined
+
+  // Build animation data overlay based on priority
+  let animationOverlay: Partial<Ship> = {}
+  if (travelStillInProgress) {
+    animationOverlay = {
+      startPositionX: localShip!.startPositionX,
+      startPositionY: localShip!.startPositionY,
+      startPositionZ: localShip!.startPositionZ,
+      targetPositionX: localShip!.targetPositionX,
+      targetPositionY: localShip!.targetPositionY,
+      targetPositionZ: localShip!.targetPositionZ,
+      travelStartTime: localShip!.travelStartTime,
+      travelDuration: localShip!.travelDuration,
+      currentSynapseId: localShip!.currentSynapseId,
+      _lastLocalUpdate: localShip!._lastLocalUpdate,
+    }
+  } else if (shouldPreserveTargetPosition && localShip) {
+    animationOverlay = {
+      targetPositionX: localShip.targetPositionX,
+      targetPositionY: localShip.targetPositionY,
+      targetPositionZ: localShip.targetPositionZ,
+      currentSynapseId: localShip.currentSynapseId,
+    }
+  } else if (serverIsTraveling) {
+    animationOverlay = {
+      startPositionX: serverShip.startPositionX,
+      startPositionY: serverShip.startPositionY,
+      startPositionZ: serverShip.startPositionZ,
+      targetPositionX: serverShip.targetPositionX,
+      targetPositionY: serverShip.targetPositionY,
+      targetPositionZ: serverShip.targetPositionZ,
+      travelStartTime: serverShip.travelStartTime,
+      travelDuration: serverShip.travelDuration,
+      currentSynapseId: serverShip.currentSynapseId,
+    }
+  }
+
+  return {
+    ...serverShip,
+    state: finalState,
+    positionX: serverHasPosition ? serverShip.positionX : localShip?.positionX,
+    positionY: serverHasPosition ? serverShip.positionY : localShip?.positionY,
+    positionZ: serverHasPosition ? serverShip.positionZ : localShip?.positionZ,
+    rotationY: localShip?.rotationY ?? serverShip.rotationY,
+    ...animationOverlay,
+  }
+}
+
 type FetchSynapseDetailsFn = (synapseId: string) => Promise<unknown>
 type FetchSynapseExplorersFn = (synapseId: string) => Promise<unknown>
 
@@ -70,102 +152,20 @@ export function createMessageHandler(
         if (!Array.isArray(ships)) break
 
         setState(produce((s) => {
-          // Build a map of existing ships for O(1) lookup
           const existingShipsMap = new Map(safeUserShips(s).map(ship => [ship.id, ship]))
 
-          // Merge incoming ships with existing ships
           for (const serverShip of ships) {
             const localShip = existingShipsMap.get(serverShip.id)
+            const merged = mergeShipWithAnimationData(serverShip, localShip, timestamp)
 
-            // Keep local state if it was modified more recently than the server's timestamp
-            // This prevents flickering when user action is followed by stale WebSocket sync
-            if (localShip?._lastLocalUpdate && localShip._lastLocalUpdate > timestamp) {
+            if (merged === null) {
               log.ws.debug('ships:sync - Skipping stale update for ship', fmt.shortId(serverShip.id))
-              continue // Skip this update, keep local state
+              continue
             }
 
-            // === BULLETPROOF ANIMATION DATA PRESERVATION ===
-            // Check if local ship has animation data AND travel is still in progress
-            // This is independent of state - we preserve animation data based on timing, not state
-            const hasLocalAnimationData = localShip?.travelStartTime != null &&
-              localShip?.travelDuration != null &&
-              localShip.travelDuration > 0
-            const travelStillInProgress = hasLocalAnimationData &&
-              Date.now() < (localShip!.travelStartTime! + localShip!.travelDuration!)
-
-            // Map server state to client state (server: traveling/solving → client: deploying/solving)
-            const mappedState = mapServerShipState(serverShip.state)
-            const serverIsTraveling = serverShip.state === 'traveling'
-
-            // Override state if travel is still in progress locally
-            const finalState = travelStillInProgress ? 'deploying' as const : mappedState
-
-            // Check if ship is solving (we need to preserve its targetPosition for synapse location)
-            const shouldPreserveTargetPosition = (finalState === 'solving' || localShip?.state === 'solving') &&
-              localShip?.targetPositionX !== undefined
-
-            // Log animation data preservation
-            if (travelStillInProgress) {
-              log.ws.success('ships:sync - PRESERVING animation data!', fmt.shortId(serverShip.id), {
-                localState: localShip?.state,
-                serverState: serverShip.state,
-                finalState,
-                travelTimeRemaining: fmt.ms((localShip!.travelStartTime! + localShip!.travelDuration!) - Date.now()),
-              })
-            }
-
-            // Determine position source
-            const serverHasPosition = serverShip.positionX !== undefined &&
-              serverShip.positionY !== undefined &&
-              serverShip.positionZ !== undefined
-
-            // Build merged ship
-            const mergedShip: Ship = {
-              ...serverShip,
-              state: finalState,
-              // Preserve local position if server doesn't send one
-              positionX: serverHasPosition ? serverShip.positionX : localShip?.positionX,
-              positionY: serverHasPosition ? serverShip.positionY : localShip?.positionY,
-              positionZ: serverHasPosition ? serverShip.positionZ : localShip?.positionZ,
-              // Preserve rotationY from local ship since server doesn't send it in ShipDTO
-              rotationY: localShip?.rotationY ?? serverShip.rotationY,
-              // ALWAYS preserve animation data if travel is still in progress
-              ...(travelStillInProgress ? {
-                startPositionX: localShip!.startPositionX,
-                startPositionY: localShip!.startPositionY,
-                startPositionZ: localShip!.startPositionZ,
-                targetPositionX: localShip!.targetPositionX,
-                targetPositionY: localShip!.targetPositionY,
-                targetPositionZ: localShip!.targetPositionZ,
-                travelStartTime: localShip!.travelStartTime,
-                travelDuration: localShip!.travelDuration,
-                currentSynapseId: localShip!.currentSynapseId,
-                _lastLocalUpdate: localShip!._lastLocalUpdate,
-              } : shouldPreserveTargetPosition && localShip ? {
-                // Preserve target position for solving ships (synapse location)
-                targetPositionX: localShip.targetPositionX,
-                targetPositionY: localShip.targetPositionY,
-                targetPositionZ: localShip.targetPositionZ,
-                currentSynapseId: localShip.currentSynapseId,
-              } : serverIsTraveling ? {
-                // Server is traveling but local doesn't have data yet - use server data
-                startPositionX: serverShip.startPositionX,
-                startPositionY: serverShip.startPositionY,
-                startPositionZ: serverShip.startPositionZ,
-                targetPositionX: serverShip.targetPositionX,
-                targetPositionY: serverShip.targetPositionY,
-                targetPositionZ: serverShip.targetPositionZ,
-                travelStartTime: serverShip.travelStartTime,
-                travelDuration: serverShip.travelDuration,
-                currentSynapseId: serverShip.currentSynapseId,
-              } : {}),
-            }
-
-            // Add or update ship in the map
-            existingShipsMap.set(serverShip.id, mergedShip)
+            existingShipsMap.set(serverShip.id, merged)
           }
 
-          // Convert map back to array
           s.userShips = Array.from(existingShipsMap.values())
           s.isLoadingShips = false
         }))

@@ -7,9 +7,9 @@
 
 // Brain shape scaling factors
 export const BRAIN_SCALE = {
-  x: 1.3,  // Wider
-  y: 1.0,  // Normal height
-  z: 1.1,  // Slightly deeper
+  x: 1.35 * 1.2,  // Must match SynapseParticlesMinimal scaling
+  y: 1.0 * 1.2,
+  z: 1.15 * 1.2,
 } as const
 
 // Particle counts
@@ -217,9 +217,7 @@ export function constrainToBrainShape(rawX: number, rawY: number, rawZ: number):
   const shapeMod = grooveFactor + frontalBulge + temporalBulge + occipitalBulge + cerebellumBulge - bottomFlatten
 
   // Apply shape and keep INSIDE the volume (multiply by r to maintain depth distribution)
-  // Use 0.92 as max to keep synapses slightly inside the brain surface
-  const maxR = 0.92
-  const finalR = Math.min(r, maxR) * shapeMod
+  const finalR = r * shapeMod
 
   // Apply final scaling with BRAIN_SCALE
   return [

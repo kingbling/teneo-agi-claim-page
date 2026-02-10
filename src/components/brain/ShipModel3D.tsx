@@ -8,9 +8,10 @@
 import { onMount, onCleanup, createEffect, createSignal, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree } from '@/three/hooks'
-import { constrainToBrainShape } from './core/brainConstants'
 import { loadShipModel, getEngineColor as getEngineColorFromLoader } from '@/three/useShipModel'
 import { shipStore, type Ship } from '@/stores/shipStore'
+import { constrainToBrainShape } from '@/components/brain/core/brainConstants'
+import { computeOrbitPosition } from '@/utils/orbitHelper'
 import { log, fmt } from '@/utils/logger'
 
 interface ShipModel3DProps {
@@ -21,16 +22,18 @@ interface ShipModel3DProps {
 const SHIP_SCALE = 0.08  // Smaller scale to fit the brain scene
 const ENGINE_TRAIL_PARTICLES = 30
 
+// Cached Vector3 for lerp targets — avoids allocation per frame
+const _lerpTarget = new THREE.Vector3()
+
 /**
- * Get ship world position with brain shape constraint
+ * Get ship world position (DB stores final visualization coordinates)
  */
 function getShipWorldPosition(ship: Ship): THREE.Vector3 {
-  const [x, y, z] = constrainToBrainShape(
+  return new THREE.Vector3(
     ship.positionX ?? 0,
     ship.positionY ?? 0,
     ship.positionZ ?? 0
   )
-  return new THREE.Vector3(x, y, z)
 }
 
 /**
@@ -104,11 +107,14 @@ function createEngineTrail(engineColor: number): {
 
         float lifeFade = 1.0 - life;
         float sizeMult = lifeFade * (1.0 + lifeFade * 0.3);
-        float distScale = min(150.0 / max(-mvPosition.z, 0.3), 80.0);
-        gl_PointSize = clamp(size * sizeMult * distScale * uIntensity, 1.0, 40.0);
+        float camDist = -mvPosition.z;
+        float distScale = min(150.0 / max(camDist, 0.3), 30.0);
+        gl_PointSize = clamp(size * sizeMult * distScale * uIntensity, 1.0, 20.0);
 
-        float distFade = smoothstep(0.2, 1.0, -mvPosition.z);
-        vAlpha = lifeFade * lifeFade * 0.4 * uIntensity * (0.3 + distFade * 0.7);
+        // Fade out trail at distance to prevent glow blob
+        float distFade = smoothstep(0.2, 1.0, camDist);
+        float farFade = 1.0 - smoothstep(2.0, 4.0, camDist);
+        vAlpha = lifeFade * lifeFade * 0.4 * uIntensity * (0.3 + distFade * 0.7) * farFade;
 
         gl_Position = projectionMatrix * mvPosition;
       }
@@ -268,18 +274,24 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
         rawZ = startZ + (targetZ - startZ) * progress
       }
 
-      const [cx, cy, cz] = constrainToBrainShape(rawX, rawY, rawZ)
       // Lerp toward target position to smooth 100ms server tick jumps
-      shipGroup.position.lerp(new THREE.Vector3(cx, cy, cz), 0.25)
+      shipGroup.position.lerp(_lerpTarget.set(rawX, rawY, rawZ), 0.25)
 
-      // Use server-provided rotation (set by travel:position or travel:started)
-      const serverRotY = freshShip.rotationY ?? 0
-      // Angular lerp with wrapping to handle -π/π boundary
-      let deltaAngle = serverRotY - shipGroup.rotation.y
-      // Normalize to [-π, π]
-      deltaAngle = ((deltaAngle + Math.PI) % (Math.PI * 2)) - Math.PI
-      if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2
-      shipGroup.rotation.y += deltaAngle * 0.15
+      // Compute rotation from current position toward constrained target
+      const targetX = freshShip.targetPositionX!
+      const targetZ = freshShip.targetPositionZ ?? 0
+      const [ctX, , ctZ] = constrainToBrainShape(targetX, freshShip.targetPositionY ?? 0, targetZ)
+      const dirX = ctX - shipGroup.position.x
+      const dirZ = ctZ - shipGroup.position.z
+      // Only update rotation if there's meaningful distance (avoid jitter near arrival)
+      if (dirX * dirX + dirZ * dirZ > 0.0001) {
+        const targetRotY = Math.atan2(dirX, -dirZ)  // Ship model faces -Z
+        // Angular lerp with wrapping
+        let deltaAngle = targetRotY - shipGroup.rotation.y
+        deltaAngle = ((deltaAngle + Math.PI) % (Math.PI * 2)) - Math.PI
+        if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2
+        shipGroup.rotation.y += deltaAngle * 0.15
+      }
     } else if (freshShip.state === 'idle') {
       // === IDLE ANIMATION: Gentle hover/breathing motion ===
       const pos = getShipWorldPosition(freshShip)
@@ -296,43 +308,40 @@ export const ShipModel3D: Component<ShipModel3DProps> = (props) => {
       const rotationWobble = Math.sin(now * 0.0008 + idlePhase * 0.5) * 0.05
       shipGroup.rotation.y = (freshShip.rotationY ?? 0) + rotationWobble
     } else if (freshShip.state === 'solving' && freshShip.targetPositionX !== undefined) {
-      // === SOLVING ANIMATION: Orbit around target synapse ===
-      const orbitRadius = 0.05
-      // Vary orbit speed slightly based on ship ID for visual interest
-      const orbitSpeed = 0.0005 + (freshShip.id.charCodeAt(0) % 10) * 0.0001
-      const orbitPhase = freshShip.id.charCodeAt(0)
-      const angle = now * orbitSpeed + orbitPhase
-
-      // Get synapse position (target position)
-      const [synapseX, synapseY, synapseZ] = constrainToBrainShape(
-        freshShip.targetPositionX,
-        freshShip.targetPositionY ?? 0,
-        freshShip.targetPositionZ ?? 0
-      )
-
-      // Orbit around synapse
-      const orbitX = synapseX + Math.cos(angle) * orbitRadius
-      const orbitZ = synapseZ + Math.sin(angle) * orbitRadius
-      // Slight Y wobble for 3D effect
-      const orbitY = synapseY + Math.sin(angle * 2) * 0.01
+      // === SOLVING ANIMATION: Orbit around target synapse (uses shared helper) ===
+      const [orbitX, orbitY, orbitZ] = computeOrbitPosition({
+        shipId: freshShip.id,
+        centerX: freshShip.targetPositionX,
+        centerY: freshShip.targetPositionY ?? 0,
+        centerZ: freshShip.targetPositionZ ?? 0,
+        radius: 0.15,
+        now,
+      })
 
       // Lerp to orbit position — smooth transition when arriving from deploying state
       const isTransition = prevState !== null && prevState !== 'solving'
       const lerpFactor = isTransition ? 0.08 : 0.3
-      const target = new THREE.Vector3(orbitX, orbitY, orbitZ)
-      shipGroup.position.lerp(target, lerpFactor)
+      shipGroup.position.lerp(_lerpTarget.set(orbitX, orbitY, orbitZ), lerpFactor)
 
       // Rotate ship to face direction of orbit (tangent to orbit path)
-      const tangentAngle = angle + Math.PI / 2 // 90 degrees ahead in orbit
-      shipGroup.rotation.y = -tangentAngle // Negative because ship faces -Z
+      const orbitSpeed = 0.0005 + (freshShip.id.charCodeAt(0) % 10) * 0.0001
+      const orbitPhase = freshShip.id.charCodeAt(0)
+      const angle = now * orbitSpeed + orbitPhase
+      const tangentAngle = angle + Math.PI / 2
+      shipGroup.rotation.y = -tangentAngle
     } else {
-      // Use current position from store
       const pos = getShipWorldPosition(freshShip)
+      const prev = shipGroup.position.clone()
       shipGroup.position.lerp(pos, 0.1)
-
-      // Use rotation from store if available
-      if (freshShip.rotationY !== undefined) {
-        shipGroup.rotation.y = freshShip.rotationY
+      // Compute rotation from movement direction
+      const moveDirX = shipGroup.position.x - prev.x
+      const moveDirZ = shipGroup.position.z - prev.z
+      if (moveDirX * moveDirX + moveDirZ * moveDirZ > 0.00001) {
+        const targetRotY = Math.atan2(moveDirX, -moveDirZ)
+        let deltaAngle = targetRotY - shipGroup.rotation.y
+        deltaAngle = ((deltaAngle + Math.PI) % (Math.PI * 2)) - Math.PI
+        if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2
+        shipGroup.rotation.y += deltaAngle * 0.15
       }
     }
 

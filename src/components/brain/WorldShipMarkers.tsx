@@ -1,7 +1,7 @@
 import { onMount, onCleanup, createEffect, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree } from '@/three/hooks'
-import { constrainToBrainShape, WORLD_SHIP_CONFIG } from './core/brainConstants'
+import { WORLD_SHIP_CONFIG } from './core/brainConstants'
 import { WORLD_SHIP_VERTEX_SHADER, WORLD_SHIP_FRAGMENT_SHADER } from './shaders/worldShipShaders'
 import { shipStore, type WorldShip } from '@/stores/shipStore'
 
@@ -102,7 +102,7 @@ export const WorldShipMarkers: Component = () => {
 
       for (let i = 0; i < worldShips.length && writeIdx < MAX_WORLD_SHIPS; i++) {
         const ship = worldShips[i]
-        const [cx, cy, cz] = constrainToBrainShape(ship.x, ship.y, ship.z)
+        const cx = ship.x, cy = ship.y, cz = ship.z
 
         // Smooth interpolation
         let rendered = renderedPositions.get(ship.id)
@@ -171,13 +171,6 @@ export const WorldShipMarkers: Component = () => {
         fadeState.delete(id)
         renderedPositions.delete(id)
         prevPositions.delete(id)
-      }
-
-      // Zero out remaining slots
-      for (let i = writeIdx; i < MAX_WORLD_SHIPS; i++) {
-        posAttr.setXYZ(i, 0, 0, 0)
-        alphaAttr.setX(i, 0)
-        velAttr.setXYZ(i, 0, 0, 0)
       }
 
       posAttr.needsUpdate = true

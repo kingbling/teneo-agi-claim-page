@@ -8,7 +8,6 @@
 import { onMount, onCleanup, createEffect, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
-import { constrainToBrainShape } from './core/brainConstants'
 import type { Synapse } from '@/stores/shipStore'
 
 interface SolvingSynapseHighlightProps {
@@ -82,13 +81,7 @@ export const SolvingSynapseHighlight: Component<SolvingSynapseHighlightProps> = 
       return
     }
 
-    const [x, y, z] = constrainToBrainShape(
-      synapse.positionX,
-      synapse.positionY,
-      synapse.positionZ
-    )
-
-    group.position.set(x, y, z)
+    group.position.set(synapse.positionX, synapse.positionY, synapse.positionZ)
     group.visible = true
   })
 

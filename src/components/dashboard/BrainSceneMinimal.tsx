@@ -22,10 +22,9 @@ import { SolvingSparks } from '@/components/brain/SolvingSparks'
 import { SolvingSynapseHighlight } from '@/components/brain/SolvingSynapseHighlight'
 import { ArrivalPulseManager } from '@/components/brain/ArrivalPulseManager'
 import { WorldShipMarkers } from '@/components/brain/WorldShipMarkers'
-import { CAMERA_CONFIG, LOD_THRESHOLDS, SHIP_ZOOM_CONFIG, SHIP_FOLLOW_CONFIG, constrainToBrainShape } from '@/components/brain/core/brainConstants'
+import { CAMERA_CONFIG, LOD_THRESHOLDS, SHIP_ZOOM_CONFIG, SHIP_FOLLOW_CONFIG } from '@/components/brain/core/brainConstants'
 import { TIMING } from '@/constants/timing'
 import type { SynapseCluster, ShipCluster, Ship, Synapse, SynapseDiscoveryEvent } from '@/stores/shipStore'
-import { log, fmt } from '@/utils/logger'
 
 /**
  * Region camera target for navigating to brain regions
@@ -413,12 +412,14 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
 
   // Track LOD level for particle count adjustment
   const [currentLodLevel, setCurrentLodLevel] = createSignal(1)
+  // Track camera distance for model visibility threshold
+  const [cameraDistance, setCameraDistance] = createSignal(5)
 
   // Store reference to OrbitControls for camera animations
   const [controlsRef, setControlsRef] = createSignal<OrbitControlsType | null>(null)
 
-  // Track whether to show the 3D ship model (when zoomed in close)
-  const showShipModel = () => props.isShipZoom ?? false
+  // Track whether to show the 3D ship model (when zoomed in close AND within LOD 0 range)
+  const showShipModel = () => (props.isShipZoom ?? false) && cameraDistance() < LOD_THRESHOLDS.lod0
 
   // Get the selected ship object for 3D model rendering
   const selectedShip = () => {
@@ -427,30 +428,24 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
   }
 
   // Compute ship world position for depth-based particle visibility
-  // Uses constrainToBrainShape to match exact rendered ship position
   const shipWorldPosition = createMemo(() => {
     const ship = selectedShip()
     if (!ship || !showShipModel()) return null
-    const [x, y, z] = constrainToBrainShape(ship.positionX, ship.positionY, ship.positionZ)
-    return new THREE.Vector3(x, y, z)
+    return new THREE.Vector3(ship.positionX, ship.positionY, ship.positionZ)
   })
 
   // Compute selected ship position for TargetBeam (always visible if ship selected, even in searching state)
-  // Uses constrainToBrainShape to match exact rendered ship position
   const selectedShipPosition = createMemo(() => {
     const ship = selectedShip()
     if (!ship) return null
-    const [x, y, z] = constrainToBrainShape(ship.positionX, ship.positionY, ship.positionZ)
-    return new THREE.Vector3(x, y, z)
+    return new THREE.Vector3(ship.positionX, ship.positionY, ship.positionZ)
   })
 
   // Compute exploration target position for TargetBeam
-  // Uses constrainToBrainShape to match exact rendered synapse position
   const explorationTargetPosition = createMemo(() => {
     const target = props.explorationTarget
     if (!target) return null
-    const [x, y, z] = constrainToBrainShape(target.positionX, target.positionY, target.positionZ)
-    return new THREE.Vector3(x, y, z)
+    return new THREE.Vector3(target.positionX, target.positionY, target.positionZ)
   })
 
   // Determine if TargetBeam should be active (ship is idle and has a target)
@@ -459,9 +454,10 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
     return ship?.state === 'idle' && props.explorationTarget !== null && props.explorationTarget !== undefined
   }
 
-  // Wrapper to update both parent and local LOD state
+  // Wrapper to update both parent and local LOD/distance state
   const handleZoomInfo = (info: { distance: number; lod: number }) => {
     setCurrentLodLevel(info.lod)
+    setCameraDistance(info.distance)
     setZoomInfo(info)
   }
 
@@ -508,39 +504,34 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
         isShipZoom={false}  // Disabled: depth cutout looked bad
       />
 
-      {/* Synapse clusters - always visible for selection */}
-      {spaceClusters().length > 0 && (
-        <SpaceMarkers
-          clusters={spaceClusters()}
-          onSynapseClick={onSpaceClick}
-          onIndividualSynapseClick={onIndividualSynapseClick}
-          filterType={props.synapseTypeFilter}
-          hasIdleShip={props.hasIdleShip}
-          userLevel={props.userLevel}
-        />
-      )}
+      {/* Synapse clusters - always mounted to avoid Three.js object destroy/recreate */}
+      <SpaceMarkers
+        clusters={spaceClusters()}
+        onSynapseClick={onSpaceClick}
+        onIndividualSynapseClick={onIndividualSynapseClick}
+        filterType={props.synapseTypeFilter}
+        hasIdleShip={props.hasIdleShip}
+        userLevel={props.userLevel}
+      />
 
-      {/* Synapse network connections */}
-      {spaceClusters().length > 0 && (
-        <SynapseNetwork
-          synapseClusters={spaceClusters()}
-          shipPosition={shipWorldPosition()}
-          isShipZoom={false}  // Disabled: depth cutout looked bad
-        />
-      )}
+      {/* Synapse network connections - always mounted */}
+      <SynapseNetwork
+        synapseClusters={spaceClusters()}
+        shipPosition={shipWorldPosition()}
+        isShipZoom={false}  // Disabled: depth cutout looked bad
+      />
 
       {/* World ships (other users + ambient) */}
       <WorldShipMarkers />
 
-      {/* Ship markers (Masterplan 2026: renamed from agent markers) */}
-      {/* Always render - component handles empty array internally. Conditional rendering causes unmount/remount which destroys Three.js objects */}
+      {/* Ship markers (point sprites for click detection + world ships) */}
       <ShipMarkers
         userShips={userAgents()}
         shipClusters={agentClusters()}
         onShipClick={onAgentClick}
         showIdleShips={props.showIdleShips}
         selectedShipId={props.selectedShipId}
-        hideSelectedShipParticle={showShipModel()}
+        hideAllUserParticles={true}
       />
 
       {/* Target beam - visualizes connection between searching ship and selected synapse */}
@@ -551,26 +542,13 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
         color={0x00ffff}
       />
 
-      {/* 3D Ship model - shown when zoomed in close on a ship */}
-      {(() => {
-        const shouldShowModel = showShipModel()
-        const ship = selectedShip()
-        // Debug logging
-        if (shouldShowModel || ship) {
-          log.brain.debug('Ship model check:', {
-            showShipModel: shouldShowModel,
-            selectedShipId: fmt.shortId(props.selectedShipId),
-            hasShip: !!ship,
-            shipId: fmt.shortId(ship?.id),
-          })
-        }
-        return shouldShowModel && ship ? (
-          <ShipModel3D
-            ship={ship}
-            isVisible={shouldShowModel}
-          />
-        ) : null
-      })()}
+      {/* 3D Ship models - always rendered for all user ships */}
+      {userAgents().map(ship => (
+        <ShipModel3D
+          ship={ship}
+          isVisible={true}
+        />
+      ))}
 
       {/* Solving beams - visualize connection between solving ships and their synapses */}
       {userAgents()

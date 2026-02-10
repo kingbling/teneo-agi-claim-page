@@ -2,7 +2,8 @@ import { onMount, onCleanup, createEffect, createMemo, createSignal, For } from 
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { SynapseDiscoveryEvent } from '@/stores/shipStore'
-import { LOOT_THRESHOLDS, constrainToBrainShape } from '@/constants'
+import { LOOT_THRESHOLDS } from '@/constants'
+import { glslDistanceScale, glslClampPointSize, glslSoftCircle } from './shaders/common'
 import { log } from '@/utils/logger'
 
 interface DiscoveryBurstProps {
@@ -51,8 +52,8 @@ const BURST_VERTEX_SHADER = `
     );
 
     // Size shrinks as it fades (with protective clamping for close camera)
-    float distScale = 250.0 / max(-mvPosition.z, 1.0);
-    gl_PointSize = clamp(aSize * vAlpha * distScale, 2.0, 64.0);
+    ${glslDistanceScale(250)}
+    ${glslClampPointSize('aSize * vAlpha * distScale', 2, 64)}
 
     gl_Position = projectionMatrix * mvPosition;
   }
@@ -64,11 +65,8 @@ const BURST_FRAGMENT_SHADER = `
   varying vec3 vColor;
 
   void main() {
-    vec2 center = gl_PointCoord - vec2(0.5);
-    float dist = length(center);
-
-    // Soft circular falloff
-    float alpha = (1.0 - smoothstep(0.2, 0.5, dist)) * vAlpha;
+    ${glslSoftCircle(0.2, 0.5)}
+    float alpha = circleAlpha * vAlpha;
 
     // Add sparkle at core
     float sparkle = (1.0 - dist * 2.0);
@@ -112,13 +110,11 @@ export function DiscoveryBurst(props: DiscoveryBurstProps) {
     if (agiReward < LOOT_THRESHOLDS.MIN_NOTIFY) return
 
     if (latestDiscovery.positionX !== undefined) {
-      // Use same coordinate transformation as synapses for visual consistency
-      const [x, y, z] = constrainToBrainShape(
+      const position = new THREE.Vector3(
         latestDiscovery.positionX,
         latestDiscovery.positionY,
         latestDiscovery.positionZ
       )
-      const position = new THREE.Vector3(x, y, z)
 
       // Intensity based on synapse reward tier
       const intensity = agiReward >= LOOT_THRESHOLDS.UNIQUE ? 3.0 :

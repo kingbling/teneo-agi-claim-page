@@ -8,7 +8,6 @@
 import { createSignal, createEffect, For, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { ArrivalPulse } from './ArrivalPulse'
-import { constrainToBrainShape } from './core/brainConstants'
 import type { Ship } from '@/stores/shipStore'
 
 interface ArrivalPulseManagerProps {
@@ -28,13 +27,15 @@ export const ArrivalPulseManager: Component<ArrivalPulseManagerProps> = (props) 
   // Track ship states to detect transitions
   const previousStates = new Map<string, string>()
 
+  // Dedup set with TTL to prevent duplicate pulse animations if state transitions rapidly
+  let recentPulseShipIds = new Set<string>()
+
   const PULSE_DURATION = 1200 // ms to keep the pulse visible
 
   createEffect(() => {
     const ships = props.ships
     const now = Date.now()
     const newPulses: ActivePulse[] = []
-    const activePulseIds = new Set<string>()
 
     // Check each ship for state transitions
     for (const ship of ships) {
@@ -42,25 +43,25 @@ export const ArrivalPulseManager: Component<ArrivalPulseManagerProps> = (props) 
       const currentState = ship.state
 
       // Detect transition from deploying to solving (ship arrived)
-      if (prevState === 'deploying' && currentState === 'solving') {
+      // Dedup: skip if we already fired a pulse for this ship recently
+      if (prevState === 'deploying' && currentState === 'solving' && !recentPulseShipIds.has(ship.id)) {
         const pulseId = `${ship.id}-${now}`
-        activePulseIds.add(pulseId)
-        // Use same coordinate transformation as synapses for visual consistency
-        const [x, y, z] = constrainToBrainShape(
-          ship.positionX,
-          ship.positionY,
-          ship.positionZ
-        )
+        recentPulseShipIds.add(ship.id)
         newPulses.push({
           id: pulseId,
           shipId: ship.id,
-          position: new THREE.Vector3(x, y, z),
+          position: new THREE.Vector3(ship.positionX, ship.positionY, ship.positionZ),
           startTime: now,
         })
       }
 
       // Update previous state
       previousStates.set(ship.id, currentState)
+    }
+
+    // Prune dedup set when it gets too large
+    if (recentPulseShipIds.size > 50) {
+      recentPulseShipIds = new Set()
     }
 
     // Add new pulses to existing ones

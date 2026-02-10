@@ -6,6 +6,7 @@
  */
 
 import { type Component, createSignal, createMemo, createEffect, onMount, onCleanup, Show } from 'solid-js'
+import { createStore } from 'solid-js/store'
 import * as THREE from 'three'
 import { ThreeCanvas } from '@/three'
 import { DashboardHeader, BrainSceneMinimal, BrainMinimap, QualitySettings, LoginOverlay, SynapseListPanel, type QualityPreset } from '@/components/dashboard'
@@ -30,7 +31,6 @@ import {
   type SynapseType,
 } from '@/types/game'
 import { getDominantSynapseType } from '@/utils/synapseUtils'
-import { constrainToBrainShape } from '@/components/brain/core/brainConstants'
 import { log, fmt } from '@/utils/logger'
 
 // Helper to get brain region from position
@@ -47,8 +47,16 @@ function getRegionFromPosition(x: number, y: number, z: number): string {
 }
 
 export const DiscoveryDashboard: Component = () => {
-  // Help overlay state
-  const [showHelp, setShowHelp] = createSignal(false)
+  // UI panel state — grouped to prevent cascade re-renders between unrelated panels
+  const [panels, setPanels] = createStore({
+    showHelp: false,
+    minimapExpanded: false,
+    qualityExpanded: false,
+    shipNavigatorExpanded: true,
+    synapseListExpanded: false,
+    showCreateShipDialog: false,
+    qualityPreset: 'high' as QualityPreset,
+  })
 
   // Zoom info for LOD management
   const [zoomInfo, setZoomInfo] = createSignal({ distance: 5, lod: 1 })
@@ -77,24 +85,8 @@ export const DiscoveryDashboard: Component = () => {
   const [cameraPosition, setCameraPosition] = createSignal({ x: 0, y: 0, z: 5 })
   const [cameraTarget, setCameraTarget] = createSignal({ x: 0, y: 0, z: 0 })
 
-  // Minimap expanded state
-  const [minimapExpanded, setMinimapExpanded] = createSignal(false)
-
-  // Quality settings state
-  const [qualityExpanded, setQualityExpanded] = createSignal(false)
-  const [qualityPreset, setQualityPreset] = createSignal<QualityPreset>('high')
-
-  // Ship navigator expanded state
-  const [shipNavigatorExpanded, setShipNavigatorExpanded] = createSignal(true)
-
-  // Synapse list panel expanded state
-  const [synapseListExpanded, setSynapseListExpanded] = createSignal(false)
-
   // Synapse type filter - shared between list panel and 3D scene
   const [synapseTypeFilter, setSynapseTypeFilter] = createSignal<SynapseType | 'all'>('all')
-
-  // Create ship dialog state
-  const [showCreateShipDialog, setShowCreateShipDialog] = createSignal(false)
 
   // Explore prompt state (for searching ships clicking a synapse)
   const [explorePromptData, setExplorePromptData] = createSignal<{
@@ -158,7 +150,7 @@ export const DiscoveryDashboard: Component = () => {
       if (key === '0' || key === 'escape') {
         setSelectedRegionIndex(-1)
         setHighlightIntensity(0)
-        setShowHelp(false)
+        setPanels('showHelp', false)
         setDeployTarget(null)
         setPendingDeploy(null)
         setIsZooming(false)
@@ -170,7 +162,7 @@ export const DiscoveryDashboard: Component = () => {
 
       // H for help
       if (key === 'h') {
-        setShowHelp((prev) => !prev)
+        setPanels('showHelp', !panels.showHelp)
         return
       }
 
@@ -271,52 +263,41 @@ export const DiscoveryDashboard: Component = () => {
     // Select the ship (enables selection ring, fetches synapse details)
     shipStore.selectShip(ship.id)
 
-    // Use constrainToBrainShape to match the exact rendered ship position
-    const [x, y, z] = constrainToBrainShape(ship.positionX, ship.positionY, ship.positionZ)
-    const pos = new THREE.Vector3(x, y, z)
+    const pos = new THREE.Vector3(ship.positionX, ship.positionY, ship.positionZ)
     log.dashboard.debug('Setting zoom target to:', fmt.pos(pos.x, pos.y, pos.z))
     setZoomTarget(pos)
     setIsShipZoom(true)  // Enable close zoom for ship inspection
   }
 
+  // Memoized selected ship — only recomputes when the specific ship's data changes,
+  // not when ANY ship in the array updates
+  const followShip = createMemo(() => {
+    const id = shipStore.selectedShipId
+    if (!id) return null
+    return shipStore.selectedShip
+  })
+
   // Camera follow effect - follow selected ship during intentional travel only
   // Does NOT follow during searching (wandering) to avoid constant jerky camera movement
   createEffect(() => {
-    // Track userShips to ensure reactivity when positions update via WebSocket
-    const ships = shipStore.userShips
-    const selectedId = shipStore.selectedShipId
-    if (!ships || !selectedId || !isShipZoom()) return
-
-    // Find the selected ship from the tracked ships array
-    const ship = ships.find(s => s.id === selectedId)
-    if (!ship) return
+    const ship = followShip()
+    if (!ship || !isShipZoom()) return
 
     // Only follow during intentional travel states, NOT searching (wandering)
     const isIntentionalTravel = ship.state === 'deploying' || ship.state === 'returning'
     const isSolving = ship.state === 'solving'
 
     if (isIntentionalTravel || isSolving) {
-      // Calculate position - use client-side interpolation for deploying ships
       let posX = ship.positionX
       let posY = ship.positionY
       let posZ = ship.positionZ
 
-      // Client-side interpolation for deploying ships
       const hasAnimationData = ship.state === 'deploying' &&
         ship.startPositionX !== undefined &&
         ship.targetPositionX !== undefined &&
         ship.travelStartTime !== undefined &&
         ship.travelDuration !== undefined &&
         ship.travelDuration > 0
-
-      // Log what camera follow sees
-      log.dashboard.debug('CameraFollow ship data:', {
-        state: ship.state,
-        hasAnimationData,
-        startX: ship.startPositionX?.toFixed(3),
-        targetX: ship.targetPositionX?.toFixed(3),
-        travelDuration: fmt.ms(ship.travelDuration),
-      })
 
       if (hasAnimationData) {
         const now = Date.now()
@@ -326,21 +307,13 @@ export const DiscoveryDashboard: Component = () => {
         posX = ship.startPositionX! + (ship.targetPositionX! - ship.startPositionX!) * progress
         posY = (ship.startPositionY ?? 0) + ((ship.targetPositionY ?? 0) - (ship.startPositionY ?? 0)) * progress
         posZ = (ship.startPositionZ ?? 0) + ((ship.targetPositionZ ?? 0) - (ship.startPositionZ ?? 0)) * progress
-
-        log.dashboard.debug('CameraFollow INTERPOLATING', fmt.percent(progress), fmt.pos(posX, posY, posZ))
       } else if (isSolving && ship.targetPositionX !== undefined) {
-        // For solving ships, use target position (synapse location)
         posX = ship.targetPositionX
         posY = ship.targetPositionY ?? posY
         posZ = ship.targetPositionZ ?? posZ
-        log.dashboard.debug('CameraFollow using target position (solving)', fmt.pos(posX, posY, posZ))
-      } else {
-        log.dashboard.debug('CameraFollow using store position (no anim data)', fmt.pos(posX, posY, posZ))
       }
 
-      // Update camera target to follow ship using constrainToBrainShape for accuracy
-      const [x, y, z] = constrainToBrainShape(posX, posY, posZ)
-      const pos = new THREE.Vector3(x, y, z)
+      const pos = new THREE.Vector3(posX, posY, posZ)
       setZoomTarget(pos)
     }
   })
@@ -363,7 +336,7 @@ export const DiscoveryDashboard: Component = () => {
 
       {/* Dashboard Header */}
       <DashboardHeader
-        onHelpClick={() => setShowHelp(true)}
+        onHelpClick={() => setPanels('showHelp', true)}
       />
 
       {/* 3D Brain Visualization */}
@@ -418,9 +391,7 @@ export const DiscoveryDashboard: Component = () => {
                   setExplorePromptData(null)
                   // Re-enable ship zoom mode to follow ship during deployment
                   setIsShipZoom(true)
-                  // Set camera to follow ship's current position using constrainToBrainShape
-                  const [x, y, z] = constrainToBrainShape(ship.positionX, ship.positionY, ship.positionZ)
-                  const pos = new THREE.Vector3(x, y, z)
+                  const pos = new THREE.Vector3(ship.positionX, ship.positionY, ship.positionZ)
                   setZoomTarget(pos)
                 }
               }
@@ -467,16 +438,16 @@ export const DiscoveryDashboard: Component = () => {
           {/* Ship Navigator */}
           <ShipNavigator
             onFocusShip={handleShipClick}
-            onCreateShip={() => setShowCreateShipDialog(true)}
-            isExpanded={shipNavigatorExpanded()}
-            onToggle={() => setShipNavigatorExpanded(!shipNavigatorExpanded())}
+            onCreateShip={() => setPanels('showCreateShipDialog', true)}
+            isExpanded={panels.shipNavigatorExpanded}
+            onToggle={() => setPanels('shipNavigatorExpanded', !panels.shipNavigatorExpanded)}
           />
 
           {/* Synapse List Panel */}
           <SynapseListPanel
             onNavigate={handleSynapseListNavigate}
-            isExpanded={synapseListExpanded()}
-            onToggle={() => setSynapseListExpanded(!synapseListExpanded())}
+            isExpanded={panels.synapseListExpanded}
+            onToggle={() => setPanels('synapseListExpanded', !panels.synapseListExpanded)}
             filterType={synapseTypeFilter()}
             onFilterChange={setSynapseTypeFilter}
           />
@@ -504,10 +475,10 @@ export const DiscoveryDashboard: Component = () => {
       </Show>
 
       {/* Help Overlay */}
-      <Show when={showHelp()}>
+      <Show when={panels.showHelp}>
         <div
           class="absolute inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50"
-          onClick={() => setShowHelp(false)}
+          onClick={() => setPanels('showHelp', false)}
         >
           <div
             class="bg-gray-900 border border-gray-700 rounded-2xl p-6 max-w-md"
@@ -522,7 +493,7 @@ export const DiscoveryDashboard: Component = () => {
             </div>
             <button
               class="mt-4 w-full py-2 bg-teal-500 hover:bg-teal-400 text-white font-medium rounded-lg transition-colors"
-              onClick={() => setShowHelp(false)}
+              onClick={() => setPanels('showHelp', false)}
             >
               Close
             </button>
@@ -692,17 +663,17 @@ export const DiscoveryDashboard: Component = () => {
           cameraPosition={cameraPosition()}
           cameraTarget={cameraTarget()}
           selectedRegionIndex={selectedRegionIndex()}
-          isExpanded={minimapExpanded()}
-          onToggle={() => setMinimapExpanded(!minimapExpanded())}
+          isExpanded={panels.minimapExpanded}
+          onToggle={() => setPanels('minimapExpanded', !panels.minimapExpanded)}
           onNavigate={handleMinimapNavigate}
         />
 
         {/* Quality Settings */}
         <QualitySettings
-          preset={qualityPreset()}
-          onPresetChange={setQualityPreset}
-          isExpanded={qualityExpanded()}
-          onToggle={() => setQualityExpanded(!qualityExpanded())}
+          preset={panels.qualityPreset}
+          onPresetChange={(p: QualityPreset) => setPanels('qualityPreset', p)}
+          isExpanded={panels.qualityExpanded}
+          onToggle={() => setPanels('qualityExpanded', !panels.qualityExpanded)}
         />
 
         {/* Selected region indicator */}
@@ -722,8 +693,8 @@ export const DiscoveryDashboard: Component = () => {
 
       {/* Create Ship Dialog */}
       <CreateShipDialog
-        open={showCreateShipDialog()}
-        onOpenChange={setShowCreateShipDialog}
+        open={panels.showCreateShipDialog}
+        onOpenChange={(v: boolean) => setPanels('showCreateShipDialog', v)}
       />
     </div>
   )

@@ -15,9 +15,9 @@ import (
 
 // Brain shape scaling factors (must match frontend BRAIN_SCALE)
 const (
-	BRAIN_SCALE_X = 1.3
-	BRAIN_SCALE_Y = 1.0
-	BRAIN_SCALE_Z = 1.1
+	BRAIN_SCALE_X = 1.35 * 1.2 // Must match SynapseParticlesMinimal scaling
+	BRAIN_SCALE_Y = 1.0 * 1.2
+	BRAIN_SCALE_Z = 1.15 * 1.2
 )
 
 // Brain regions for labeling
@@ -80,8 +80,7 @@ func constrainToBrainShape(rawX, rawY, rawZ float64) (float64, float64, float64)
 	cerebellumBulge := math.Max(0, -dirZ*0.5+0.2) * math.Max(0, -dirY*0.5+0.2) * (1 - math.Abs(dirX)*0.8) * 0.2
 	bottomFlatten := math.Max(0, -dirY-0.5) * 0.15
 	shapeMod := grooveFactor + frontalBulge + temporalBulge + occipitalBulge + cerebellumBulge - bottomFlatten
-	maxR := 0.92
-	finalR := math.Min(r, maxR) * shapeMod
+	finalR := r * shapeMod
 	return dirX * finalR * BRAIN_SCALE_X,
 		dirY * finalR * BRAIN_SCALE_Y,
 		dirZ * finalR * BRAIN_SCALE_Z

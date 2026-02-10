@@ -3,7 +3,6 @@ import { ChevronDown, ChevronUp, Zap, Compass, Filter, Lock } from 'lucide-solid
 import { shipStore, userStore, type SynapseCluster } from '@/stores'
 import type { SynapseType, UserLevel } from '@/types/game'
 import * as THREE from 'three'
-import { constrainToBrainShape } from '../brain/core/brainConstants'
 import { getDominantSynapseType, isSynapseTypeLocked } from '@/utils/synapseUtils'
 import { SYNAPSE_COLORS, SYNAPSE_TYPE_ORDER } from '@/constants/colors'
 
@@ -59,23 +58,21 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
     })
   })
 
-  // Stats
-  const totalCount = createMemo(() => clusters().length)
-  const exploringCount = createMemo(() =>
-    clusters().filter(c => c.beingExploredCount > 0).length
-  )
-  const undiscoveredCount = createMemo(() =>
-    clusters().filter(c => c.discoveredCount === 0).length
-  )
+  // Stats — single reduce pass instead of 3 separate filters
+  const stats = createMemo(() => {
+    const all = clusters()
+    let exploring = 0
+    let undiscovered = 0
+    for (const c of all) {
+      if (c.beingExploredCount > 0) exploring++
+      if (c.discoveredCount === 0) undiscovered++
+    }
+    return { total: all.length, exploring, undiscovered }
+  })
 
   // Get position for navigation
   const getClusterPosition = (cluster: SynapseCluster): THREE.Vector3 => {
-    const [x, y, z] = constrainToBrainShape(
-      cluster.positionX,
-      cluster.positionY,
-      cluster.positionZ
-    )
-    return new THREE.Vector3(x, y, z)
+    return new THREE.Vector3(cluster.positionX, cluster.positionY, cluster.positionZ)
   }
 
   // Get status style
@@ -100,7 +97,7 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
           <Zap class="h-4 w-4 text-purple-400" />
           <span class="text-sm font-medium text-white">Synapses</span>
           <span class="text-xs text-gray-400">
-            {exploringCount()}/{totalCount()}
+            {stats().exploring}/{stats().total}
           </span>
         </div>
         <Show when={props.isExpanded} fallback={<ChevronDown class="h-4 w-4 text-gray-400" />}>
@@ -240,10 +237,10 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
           <div class="px-3 py-2 border-t border-gray-700/50 bg-gray-800/30">
             <div class="flex justify-between text-xs">
               <span class="text-gray-500">
-                Exploring: <span class="text-yellow-400 font-medium">{exploringCount()}</span>
+                Exploring: <span class="text-yellow-400 font-medium">{stats().exploring}</span>
               </span>
               <span class="text-gray-500">
-                Undiscovered: <span class="text-gray-400 font-medium">{undiscoveredCount()}</span>
+                Undiscovered: <span class="text-gray-400 font-medium">{stats().undiscovered}</span>
               </span>
             </div>
           </div>

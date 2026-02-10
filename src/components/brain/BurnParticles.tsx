@@ -2,8 +2,8 @@ import { onMount, onCleanup, createEffect, createMemo } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { Ship } from '@/stores/shipStore'
-import { constrainToBrainShape } from './core/brainConstants'
 import { log } from '@/utils/logger'
+import { glslDistanceScale, glslClampPointSize, glslSoftCircle } from './shaders/common'
 
 interface BurnParticlesProps {
   userAgents: Ship[]
@@ -29,8 +29,8 @@ const BURN_VERTEX_SHADER = `
 
     // Size based on life (fade out as it rises, with protective clamping for close camera)
     float lifeFactor = 1.0 - mod(uTime * 0.5 + aLife, 1.0);
-    float distScale = 300.0 / max(-mvPosition.z, 1.0);
-    gl_PointSize = clamp(aSize * lifeFactor * distScale, 2.0, 48.0);
+    ${glslDistanceScale(300)}
+    ${glslClampPointSize('aSize * lifeFactor * distScale', 2, 48)}
 
     gl_Position = projectionMatrix * mvPosition;
   }
@@ -41,11 +41,8 @@ const BURN_FRAGMENT_SHADER = `
   varying float vLife;
 
   void main() {
-    vec2 center = gl_PointCoord - vec2(0.5);
-    float dist = length(center);
-
-    // Soft circular falloff
-    float alpha = 1.0 - smoothstep(0.2, 0.5, dist);
+    ${glslSoftCircle(0.2, 0.5)}
+    float alpha = circleAlpha;
 
     // Fire colors: yellow core -> orange -> red edges
     float lifeCycle = mod(vLife * 3.0, 1.0);
@@ -69,6 +66,8 @@ const BURN_FRAGMENT_SHADER = `
 `
 
 const PARTICLES_PER_AGENT = 30
+const MAX_BURN_SHIPS = 50
+const MAX_BURN_PARTICLES = MAX_BURN_SHIPS * PARTICLES_PER_AGENT
 
 export function BurnParticles(props: BurnParticlesProps) {
   const { scene } = useThree()
@@ -78,6 +77,12 @@ export function BurnParticles(props: BurnParticlesProps) {
   let geometry: THREE.BufferGeometry | null = null
   let material: THREE.ShaderMaterial | null = null
 
+  // Pre-allocated buffers
+  const preAllocPositions = new Float32Array(MAX_BURN_PARTICLES * 3)
+  const preAllocSizes = new Float32Array(MAX_BURN_PARTICLES)
+  const preAllocLives = new Float32Array(MAX_BURN_PARTICLES)
+  const preAllocVelocities = new Float32Array(MAX_BURN_PARTICLES * 3)
+  let buffersInitialized = false
 
   // Filter to only solving/deploying agents (active burn effect)
   const activeShips = createMemo(() => {
@@ -85,49 +90,39 @@ export function BurnParticles(props: BurnParticlesProps) {
   })
 
   // Build geometry data for burn particles around active agents
+  // Writes into pre-allocated buffers and returns the active count
   const geometryData = createMemo(() => {
     const agents = activeShips()
-    const count = agents.length * PARTICLES_PER_AGENT
+    const agentCount = Math.min(agents.length, MAX_BURN_SHIPS)
+    const count = agentCount * PARTICLES_PER_AGENT
 
     if (count === 0) return null
 
-    const positions = new Float32Array(count * 3)
-    const sizes = new Float32Array(count)
-    const lives = new Float32Array(count)
-    const velocities = new Float32Array(count * 3)
-
-    agents.forEach((agent, agentIndex) => {
-      // Use same coordinate transformation as synapses for visual consistency
-      const [baseX, baseY, baseZ] = constrainToBrainShape(
-        agent.positionX,
-        agent.positionY,
-        agent.positionZ
-      )
+    for (let a = 0; a < agentCount; a++) {
+      const agent = agents[a]
+      const baseX = agent.positionX
+      const baseY = agent.positionY
+      const baseZ = agent.positionZ
 
       for (let p = 0; p < PARTICLES_PER_AGENT; p++) {
-        const i = agentIndex * PARTICLES_PER_AGENT + p
+        const i = a * PARTICLES_PER_AGENT + p
 
-        // Random offset around agent position
         const angle = Math.random() * Math.PI * 2
         const radius = Math.random() * 0.08
-        positions[i * 3] = baseX + Math.cos(angle) * radius
-        positions[i * 3 + 1] = baseY + (Math.random() - 0.5) * 0.05
-        positions[i * 3 + 2] = baseZ + Math.sin(angle) * radius
+        preAllocPositions[i * 3] = baseX + Math.cos(angle) * radius
+        preAllocPositions[i * 3 + 1] = baseY + (Math.random() - 0.5) * 0.05
+        preAllocPositions[i * 3 + 2] = baseZ + Math.sin(angle) * radius
 
-        // Size variation
-        sizes[i] = 3.0 + Math.random() * 4.0
+        preAllocSizes[i] = 3.0 + Math.random() * 4.0
+        preAllocLives[i] = Math.random()
 
-        // Random life offset for staggered animation
-        lives[i] = Math.random()
-
-        // Upward velocity with slight horizontal drift
-        velocities[i * 3] = (Math.random() - 0.5) * 0.02
-        velocities[i * 3 + 1] = 0.05 + Math.random() * 0.1 // Upward
-        velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.02
+        preAllocVelocities[i * 3] = (Math.random() - 0.5) * 0.02
+        preAllocVelocities[i * 3 + 1] = 0.05 + Math.random() * 0.1
+        preAllocVelocities[i * 3 + 2] = (Math.random() - 0.5) * 0.02
       }
-    })
+    }
 
-    return { positions, sizes, lives, velocities }
+    return { count }
   })
 
   onMount(() => {
@@ -165,24 +160,41 @@ export function BurnParticles(props: BurnParticlesProps) {
     })
   })
 
-  // Update geometry when active agents change
+  // Update geometry when active agents change — uses pre-allocated buffers with setDrawRange
   createEffect(() => {
     const data = geometryData()
     if (!geometry) return
 
+    if (!buffersInitialized) {
+      const posAttr = new THREE.BufferAttribute(preAllocPositions, 3)
+      posAttr.setUsage(THREE.DynamicDrawUsage)
+      geometry.setAttribute('position', posAttr)
+
+      const sizeAttr = new THREE.BufferAttribute(preAllocSizes, 1)
+      sizeAttr.setUsage(THREE.DynamicDrawUsage)
+      geometry.setAttribute('aSize', sizeAttr)
+
+      const lifeAttr = new THREE.BufferAttribute(preAllocLives, 1)
+      lifeAttr.setUsage(THREE.DynamicDrawUsage)
+      geometry.setAttribute('aLife', lifeAttr)
+
+      const velAttr = new THREE.BufferAttribute(preAllocVelocities, 3)
+      velAttr.setUsage(THREE.DynamicDrawUsage)
+      geometry.setAttribute('aVelocity', velAttr)
+
+      buffersInitialized = true
+    }
+
     if (!data) {
-      // No active agents - clear geometry
-      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3))
-      geometry.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(0), 1))
-      geometry.setAttribute('aLife', new THREE.BufferAttribute(new Float32Array(0), 1))
-      geometry.setAttribute('aVelocity', new THREE.BufferAttribute(new Float32Array(0), 3))
+      geometry.setDrawRange(0, 0)
       return
     }
 
-    geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3))
-    geometry.setAttribute('aSize', new THREE.BufferAttribute(data.sizes, 1))
-    geometry.setAttribute('aLife', new THREE.BufferAttribute(data.lives, 1))
-    geometry.setAttribute('aVelocity', new THREE.BufferAttribute(data.velocities, 3))
+    geometry.setDrawRange(0, data.count)
+    ;(geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true
+    ;(geometry.getAttribute('aSize') as THREE.BufferAttribute).needsUpdate = true
+    ;(geometry.getAttribute('aLife') as THREE.BufferAttribute).needsUpdate = true
+    ;(geometry.getAttribute('aVelocity') as THREE.BufferAttribute).needsUpdate = true
   })
 
   // Update shader uniforms

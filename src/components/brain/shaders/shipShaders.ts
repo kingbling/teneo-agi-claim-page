@@ -53,6 +53,13 @@ export const SHIP_VERTEX_SHADER = `
       pulse = 1.0 + sin(uTime * ${SHIP_STATE_PULSE.returning.frequency.toFixed(1)}) * ${SHIP_STATE_PULSE.returning.amplitude.toFixed(2)};
     }
 
+    // Hidden particle (aSize set to 0 by hideSelectedShipParticle)
+    if (aSize < 0.1) {
+      gl_PointSize = 0.0;
+      gl_Position = vec4(0.0, 0.0, -9999.0, 1.0);
+      return;
+    }
+
     // Distance-based scaling for consistent appearance (values from SHIP_MARKER_CONFIG)
     float distScale = ${SHIP_MARKER_CONFIG.distanceScale.toFixed(1)} / max(-mvPosition.z, 1.0);
     gl_PointSize = clamp(aSize * pulse * distScale, ${SHIP_MARKER_CONFIG.minPointSize.toFixed(1)}, ${SHIP_MARKER_CONFIG.maxPointSize.toFixed(1)});

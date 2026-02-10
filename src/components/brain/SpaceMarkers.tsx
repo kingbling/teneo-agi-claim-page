@@ -3,7 +3,6 @@ import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { SynapseType, UserLevel } from '@/types/game'
 import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG, formatPoints, formatETA } from '@/types/game'
-import { constrainToBrainShape } from './core/brainConstants'
 import type { SynapseCluster, RawSynapseData } from '@/stores/shipStore'
 import { SpatialOctree } from '@/utils/SpatialOctree'
 import { getDominantSynapseType } from '@/utils/synapseUtils'
@@ -102,6 +101,8 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
 
   // Octree for individual synapse mode (500k points)
   let octree: SpatialOctree | null = null
+  // Cache octree across mode toggles — only rebuild when data changes
+  let octreeDataVersion: number | undefined = undefined
 
   // Frustum culling for viewport optimization
   const frustum = new THREE.Frustum()
@@ -132,21 +133,23 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
   const [tooltipPosition, setTooltipPosition] = createSignal<{ x: number; y: number } | null>(null)
 
   // Build ALL cluster positions for raycasting (always all clusters, not filtered)
+  // Reuses existing Vector3 objects when possible to reduce GC pressure
   createEffect(() => {
     const clusters = props.clusters
-    allClusterPositions = []
+    // Grow or shrink the array to match
+    while (allClusterPositions.length < clusters.length) {
+      allClusterPositions.push(new THREE.Vector3())
+    }
+    allClusterPositions.length = clusters.length
 
-    clusters.forEach((cluster) => {
-      const [x, y, z] = constrainToBrainShape(
-        cluster.positionX,
-        cluster.positionY,
-        cluster.positionZ
-      )
-      allClusterPositions.push(new THREE.Vector3(x, y, z))
+    clusters.forEach((cluster, i) => {
+      allClusterPositions[i].set(cluster.positionX, cluster.positionY, cluster.positionZ)
     })
   })
 
   // Filter clusters by frustum culling (only render visible clusters)
+  // Uses a single reusable Vector3 to avoid allocations per cluster
+  const _frustumTestPoint = new THREE.Vector3()
   const visibleClusters = createMemo(() => {
     // Trigger recomputation when frustum updates
     void frustumNeedsUpdate()
@@ -155,12 +158,8 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     originalToVisibleIndexMap.clear()
 
     props.clusters.forEach((cluster, originalIndex) => {
-      const point = new THREE.Vector3(
-        cluster.positionX,
-        cluster.positionY,
-        cluster.positionZ
-      )
-      if (frustum.containsPoint(point)) {
+      _frustumTestPoint.set(cluster.positionX, cluster.positionY, cluster.positionZ)
+      if (frustum.containsPoint(_frustumTestPoint)) {
         const visibleIndex = visible.length
         visible.push(cluster)
         originalToVisibleIndexMap.set(originalIndex, visibleIndex)
@@ -185,20 +184,17 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     const states = new Float32Array(clusters.length)
     const synapseTypes = new Float32Array(clusters.length)
     const progress = new Float32Array(clusters.length)  // Exploration progress 0-1
-    const clusterPositionsArray: THREE.Vector3[] = []
+    // Reuse existing Vector3 pool for cluster positions
+    while (clusterPositions.length < clusters.length) {
+      clusterPositions.push(new THREE.Vector3())
+    }
+    clusterPositions.length = clusters.length
 
     clusters.forEach((cluster, i) => {
-      // Apply brain shape constraint to keep synapses INSIDE the brain volume
-      const [x, y, z] = constrainToBrainShape(
-        cluster.positionX,
-        cluster.positionY,
-        cluster.positionZ
-      )
-
-      positions[i * 3] = x
-      positions[i * 3 + 1] = y
-      positions[i * 3 + 2] = z
-      clusterPositionsArray.push(new THREE.Vector3(x, y, z))
+      positions[i * 3] = cluster.positionX
+      positions[i * 3 + 1] = cluster.positionY
+      positions[i * 3 + 2] = cluster.positionZ
+      clusterPositions[i].set(cluster.positionX, cluster.positionY, cluster.positionZ)
 
       // Discovery ratios
       const discoveryRatio = cluster.discoveredCount / Math.max(1, cluster.synapseCount)
@@ -250,7 +246,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
       colors[i * 3 + 2] = Math.min(1.0, typeColor[2] * brightness)
     })
 
-    return { positions, colors, sizes, states, synapseTypes, progress, clusterPositions: clusterPositionsArray }
+    return { positions, colors, sizes, states, synapseTypes, progress }
   })
 
   // Build geometry data from raw individual synapses (500k points)
@@ -270,19 +266,6 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     const statesFloat = new Float32Array(count)
     const synapseTypes = new Float32Array(count)
     const progress = new Float32Array(count)
-
-    // Apply brain constraint to positions
-    const constrainedPositions = new Float32Array(count * 3)
-    for (let i = 0; i < count; i++) {
-      const [x, y, z] = constrainToBrainShape(
-        data.positions[i * 3],
-        data.positions[i * 3 + 1],
-        data.positions[i * 3 + 2]
-      )
-      constrainedPositions[i * 3] = x
-      constrainedPositions[i * 3 + 1] = y
-      constrainedPositions[i * 3 + 2] = z
-    }
 
     for (let i = 0; i < count; i++) {
       const state = data.states[i]
@@ -318,7 +301,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     }
 
     return {
-      positions: constrainedPositions,
+      positions: data.positions,
       colors,
       sizes,
       states: statesFloat,
@@ -329,12 +312,20 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
   })
 
   // Build octree when individual geometry is ready
+  // Cache across mode toggles — only rebuild when underlying data changes
   createEffect(() => {
     const data = individualGeometryData()
+    const version = props.rawSynapseDataVersion
     if (data && props.useIndividualMode) {
-      octree = new SpatialOctree(data.positions, 8, 64)
+      if (!octree || octreeDataVersion !== version) {
+        octree = new SpatialOctree(data.positions, 8, 64)
+        octreeDataVersion = version
+      }
+    } else if (!props.useIndividualMode) {
+      // Don't null out octree on mode toggle — keep cached
     } else {
       octree = null
+      octreeDataVersion = undefined
     }
   })
 
@@ -361,12 +352,15 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     const keepThreshold = baseThreshold * 2.0
     raycaster.setFromCamera(pointer, cam)
 
-    // Helper to get position of an index
+    // Reusable temp vectors for distance calculations (avoids allocation per call)
+    const _tempPos = new THREE.Vector3()
+
+    // Helper to get position of an index (writes into _tempPos to avoid allocation)
     const getPosition = (idx: number): THREE.Vector3 | null => {
       if (props.useIndividualMode && octree) {
         const data = individualGeometryData()
         if (data) {
-          return new THREE.Vector3(
+          return _tempPos.set(
             data.positions[idx * 3],
             data.positions[idx * 3 + 1],
             data.positions[idx * 3 + 2]
@@ -424,18 +418,19 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
       let closestActionableIdx: number | null = null
       let closestActionableDist = baseThreshold
 
+      const _candidatePos = new THREE.Vector3()
+      const data = individualGeometryData()
       for (const idx of candidates) {
         // Skip filtered out
         if (filteredAttrBuffer && filteredAttrBuffer[idx] > 0.5) continue
 
-        const data = individualGeometryData()
         if (!data) continue
-        const pos = new THREE.Vector3(
+        _candidatePos.set(
           data.positions[idx * 3],
           data.positions[idx * 3 + 1],
           data.positions[idx * 3 + 2]
         )
-        const dist = raycaster!.ray.distanceToPoint(pos)
+        const dist = raycaster!.ray.distanceToPoint(_candidatePos)
 
         if (dist < closestAnyDist) {
           closestAnyDist = dist
@@ -704,8 +699,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     // Cluster mode fallback
     if (!clusterData) return
 
-    // Update cluster positions for raycasting
-    clusterPositions = clusterData.clusterPositions
+    // clusterPositions already updated in geometryData memo
 
     // Initialize hovered attribute buffer (all zeros = not hovered)
     hoveredAttrBuffer = new Float32Array(props.clusters.length)

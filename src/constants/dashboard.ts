@@ -3,7 +3,7 @@
  */
 
 // Re-export from brainConstants for convenience
-export { BRAIN_SCALE, constrainToBrainShape } from '@/components/brain/core/brainConstants'
+export { BRAIN_SCALE } from '@/components/brain/core/brainConstants'
 
 // Loot thresholds for visual effects (based on AGI reward amounts)
 export const LOOT_THRESHOLDS = {

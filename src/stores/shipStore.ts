@@ -1,4 +1,4 @@
-import { createRoot } from 'solid-js'
+import { createRoot, createMemo } from 'solid-js'
 import { createStore, produce } from 'solid-js/store'
 import { authStore } from './authStore'
 import { userStore } from './userStore'
@@ -51,6 +51,23 @@ const WS_URL = WS_BASE ? `${WS_BASE.replace(/\/$/, '')}/ws` : '/ws'
 
 function createShipStore() {
   const [state, setState] = createStore<ShipStoreState>({ ...initialState })
+
+  // Memoized selectors — only recompute when dependencies change
+  const selectedShipMemo = createMemo(() => {
+    const ships = state.userShips
+    if (!Array.isArray(ships)) return null
+    return ships.find(s => s.id === state.selectedShipId) || null
+  })
+  const solvingShipsMemo = createMemo(() => {
+    const ships = state.userShips
+    if (!Array.isArray(ships)) return []
+    return ships.filter(s => s.state === 'solving')
+  })
+  const idleShipsMemo = createMemo(() => {
+    const ships = state.userShips
+    if (!Array.isArray(ships)) return []
+    return ships.filter(s => s.state === 'idle')
+  })
 
   // Wire up API actions
   const api = createApiActions(state, setState)
@@ -411,22 +428,10 @@ function createShipStore() {
     get isLoadingWorld() { return state.isLoadingWorld },
     get isLoadingShips() { return state.isLoadingShips },
 
-    // ============ COMPUTED SELECTORS ============
-    get selectedShip() {
-      const ships = state.userShips
-      if (!Array.isArray(ships)) return null
-      return ships.find(s => s.id === state.selectedShipId) || null
-    },
-    get solvingShips() {
-      const ships = state.userShips
-      if (!Array.isArray(ships)) return []
-      return ships.filter(s => s.state === 'solving')
-    },
-    get idleShips() {
-      const ships = state.userShips
-      if (!Array.isArray(ships)) return []
-      return ships.filter(s => s.state === 'idle')
-    },
+    // ============ COMPUTED SELECTORS (memoized) ============
+    get selectedShip() { return selectedShipMemo() },
+    get solvingShips() { return solvingShipsMemo() },
+    get idleShips() { return idleShipsMemo() },
     get currentExploration() {
       return {
         synapse: state.currentExplorationSynapse,
