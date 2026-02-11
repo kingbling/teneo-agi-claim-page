@@ -20,6 +20,9 @@ func ListSpaces(c *fiber.Ctx) error {
 	limit, _ := strconv.Atoi(c.Query("limit", "50"))
 	state := c.Query("state", "")
 	synapseType := c.Query("type", "")
+	if synapseType == "" {
+		synapseType = c.Query("synapseType", "")
+	}
 	offset := (page - 1) * limit
 
 	var spaces []generated.Space
@@ -110,21 +113,24 @@ func ListSpaces(c *fiber.Ctx) error {
 			"id":                space.ID,
 			"synapseType":       space.SynapseType,
 			"state":             space.State,
-			"positionX":         space.PositionX,
-			"positionY":         space.PositionY,
-			"positionZ":         space.PositionZ,
-			"totalPoints":       space.PointsRequired,
+			"position":          fiber.Map{"x": space.PositionX, "y": space.PositionY, "z": space.PositionZ},
+			"pointsRequired":    space.PointsRequired,
 			"pointsAccumulated": space.PointsAccumulated,
 			"progress":          progress,
+			"agiReward":         space.AgiReward,
 			"discoveredAt":      discoveredAt,
 		}
 	}
 
+	totalPages := (total + int64(limit) - 1) / int64(limit)
 	return c.JSON(fiber.Map{
 		"spaces": result,
-		"total":  total,
-		"page":   page,
-		"limit":  limit,
+		"pagination": fiber.Map{
+			"page":       page,
+			"limit":      limit,
+			"total":      total,
+			"totalPages": totalPages,
+		},
 	})
 }
 

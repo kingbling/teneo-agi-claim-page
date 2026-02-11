@@ -2,7 +2,7 @@
  * ArrivalPulseManager - Manages arrival pulse effects for all ships
  *
  * Tracks ship state transitions and triggers arrival pulse effects when ships
- * transition from 'deploying' to 'solving' state.
+ * transition from 'traveling' to 'solving' state.
  */
 
 import { createSignal, createEffect, For, type Component } from 'solid-js'
@@ -42,9 +42,9 @@ export const ArrivalPulseManager: Component<ArrivalPulseManagerProps> = (props) 
       const prevState = previousStates.get(ship.id)
       const currentState = ship.state
 
-      // Detect transition from deploying to solving (ship arrived)
+      // Detect transition from traveling to solving (ship arrived)
       // Dedup: skip if we already fired a pulse for this ship recently
-      if (prevState === 'deploying' && currentState === 'solving' && !recentPulseShipIds.has(ship.id)) {
+      if (prevState === 'traveling' && currentState === 'solving' && !recentPulseShipIds.has(ship.id)) {
         const pulseId = `${ship.id}-${now}`
         recentPulseShipIds.add(ship.id)
         newPulses.push({

@@ -28,7 +28,7 @@ const badgeVariants = cva(
         active: 'bg-[hsl(var(--success))]/20 text-[hsl(var(--success))] border border-[hsl(var(--success))]/30',
         idle: 'bg-[hsl(var(--muted))]/15 text-[hsl(var(--muted-foreground))] border border-[hsl(var(--muted))]/25',
         solving: 'bg-[hsl(var(--accent))]/20 text-[hsl(var(--accent))] border border-[hsl(var(--accent))]/35 shadow-sm shadow-[hsl(var(--accent))]/15',
-        deploying: 'bg-[hsl(var(--tier-team))]/20 text-[hsl(var(--tier-team))] border border-[hsl(var(--tier-team))]/30',
+        traveling: 'bg-[hsl(var(--tier-team))]/20 text-[hsl(var(--tier-team))] border border-[hsl(var(--tier-team))]/30',
         resting: 'bg-[hsl(var(--secondary))]/15 text-[hsl(var(--secondary))] border border-[hsl(var(--secondary))]/25',
 
         // Reward badges
@@ -131,7 +131,7 @@ function CountBadge({ count, max = 99, showPlus = true, size = 'sm', ...props }:
 
 // Status indicator badge with animation
 interface StatusBadgeProps extends Omit<BadgeProps, 'children' | 'variant'> {
-  status: 'online' | 'offline' | 'busy' | 'away' | 'active' | 'idle' | 'solving' | 'deploying' | 'returning' | 'resting'
+  status: 'online' | 'offline' | 'busy' | 'away' | 'active' | 'idle' | 'solving' | 'traveling' | 'returning' | 'resting'
   label?: string
   showDot?: boolean
 }
@@ -144,7 +144,7 @@ const statusConfig = {
   active: { variant: 'active' as const, dotColor: 'green' as const, label: 'Active' },
   idle: { variant: 'idle' as const, dotColor: 'yellow' as const, label: 'Idle' },
   solving: { variant: 'solving' as const, dotColor: 'yellow' as const, label: 'Solving' },
-  deploying: { variant: 'deploying' as const, dotColor: 'blue' as const, label: 'Deploying' },
+  traveling: { variant: 'traveling' as const, dotColor: 'blue' as const, label: 'Traveling' },
   returning: { variant: 'active' as const, dotColor: 'green' as const, label: 'Returning' },
   resting: { variant: 'resting' as const, dotColor: 'purple' as const, label: 'Resting' },
 }
@@ -157,7 +157,7 @@ function StatusBadge({ status, label, showDot = true, ...props }: StatusBadgePro
       variant={config.variant}
       dot={showDot}
       dotColor={config.dotColor}
-      pulse={status === 'active' || status === 'solving' || status === 'deploying'}
+      pulse={status === 'active' || status === 'solving' || status === 'traveling'}
       {...props}
     >
       {label || config.label}

@@ -46,7 +46,7 @@ export function createApiActions(
           const mappedState = mapServerShipState(serverShip.state)
 
           // Preserve animation data if ship is still traveling
-          const localIsDeploying = localShip?.state === 'deploying' &&
+          const localIsTraveling = localShip?.state === 'traveling' &&
             localShip.travelStartTime &&
             localShip.travelDuration &&
             Date.now() < localShip.travelStartTime + localShip.travelDuration
@@ -55,7 +55,7 @@ export function createApiActions(
             ...serverShip,
             state: mappedState,
             // Preserve animation data for actively traveling ships
-            ...(localIsDeploying ? {
+            ...(localIsTraveling ? {
               startPositionX: localShip.startPositionX,
               startPositionY: localShip.startPositionY,
               startPositionZ: localShip.startPositionZ,

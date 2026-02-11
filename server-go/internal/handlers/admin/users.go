@@ -104,16 +104,21 @@ func ListUsers(c *fiber.Ctx) error {
 			"userLevel":        user.UserLevel,
 			"maxShips":         user.MaxShips,
 			"isAdmin":          user.IsAdmin,
-			"isBanned":         user.BannedAt != nil,
+			"bannedAt":         user.BannedAt,
+			"banReason":        user.BanReason,
 			"createdAt":        user.CreatedAt,
 		}
 	}
 
+	totalPages := (total + int64(limit) - 1) / int64(limit)
 	return c.JSON(fiber.Map{
 		"users": result,
-		"total": total,
-		"page":  page,
-		"limit": limit,
+		"pagination": fiber.Map{
+			"page":       page,
+			"limit":      limit,
+			"total":      total,
+			"totalPages": totalPages,
+		},
 	})
 }
 
@@ -143,22 +148,25 @@ func GetUserDetail(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"id":               user.ID,
-		"wallet":           user.Wallet,
-		"points":           user.Points,
-		"tier":             user.Tier,
-		"usdcSpent":        user.UsdcSpent,
-		"agenticBalance":   user.AgenticBalance,
-		"totalAgiEarned":   user.TotalAgiEarned,
-		"totalTeneoEarned": user.TotalTeneoEarned,
-		"lotteryTickets":   user.LotteryTickets,
-		"nftCount":         user.NftCount,
-		"userLevel":        user.UserLevel,
-		"maxShips":         user.MaxShips,
-		"isAdmin":          user.IsAdmin,
-		"isBanned":         user.BannedAt != nil,
-		"createdAt":        user.CreatedAt,
-		"ships":            ships,
+		"user": fiber.Map{
+			"id":               user.ID,
+			"wallet":           user.Wallet,
+			"points":           user.Points,
+			"tier":             user.Tier,
+			"usdcSpent":        user.UsdcSpent,
+			"agenticBalance":   user.AgenticBalance,
+			"totalAgiEarned":   user.TotalAgiEarned,
+			"totalTeneoEarned": user.TotalTeneoEarned,
+			"lotteryTickets":   user.LotteryTickets,
+			"nftCount":         user.NftCount,
+			"userLevel":        user.UserLevel,
+			"maxShips":         user.MaxShips,
+			"isAdmin":          user.IsAdmin,
+			"bannedAt":         user.BannedAt,
+			"banReason":        user.BanReason,
+			"createdAt":        user.CreatedAt,
+			"ships":            ships,
+		},
 	})
 }
 

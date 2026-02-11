@@ -65,7 +65,7 @@
 
   /* Agent State Colors */
   --state-idle: #6B7280;
-  --state-deploying: #60a5fa;
+  --state-traveling: #60a5fa;
   --state-wandering: #00E5FF;
   --state-exploring: #00E5FF;
   --state-solving: #FFD700;

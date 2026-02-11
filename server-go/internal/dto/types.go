@@ -30,7 +30,7 @@ type ShipState string
 const (
 	ShipIdle      ShipState = "idle"
 	ShipSearching ShipState = "searching"
-	ShipDeploying ShipState = "deploying" // = traveling
+	ShipTraveling ShipState = "traveling"
 	ShipSolving   ShipState = "solving"   // was "exploring"
 	ShipReturning ShipState = "returning"
 )
@@ -44,7 +44,7 @@ func MapAgentStateToShipState(state AgentState) ShipState {
 		// Searching state is deprecated - treat as idle
 		return ShipIdle
 	case AgentTraveling:
-		return ShipDeploying
+		return ShipTraveling
 	case AgentSolving:
 		return ShipSolving
 	case AgentReturning:

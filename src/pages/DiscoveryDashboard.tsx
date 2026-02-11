@@ -21,6 +21,7 @@ import { shipStore, userStore, uiStore } from '@/stores'
 import type { Ship, SynapseCluster } from '@/stores'
 import { useWebSocketConnection } from '@/hooks'
 import { FUNCTIONAL_BRAIN_REGIONS } from '@/constants/brainRegions'
+import { CAMERA_CONFIG } from '@/components/brain/core/brainConstants'
 import { filterByRegion } from '@/lib/regionFilter'
 import {
   SYNAPSE_CONFIG,
@@ -225,8 +226,8 @@ export const DiscoveryDashboard: Component = () => {
       <ThreeCanvas
         class="w-full h-full"
         camera={{
-          fov: 50,
-          position: [0, 0, 5],
+          fov: CAMERA_CONFIG.fov,
+          position: CAMERA_CONFIG.defaultPosition,
         }}
         gl={{
           antialias: true,

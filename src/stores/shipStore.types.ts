@@ -17,14 +17,10 @@ export function mapServerSynapseState(serverState: string): 'undiscovered' | 'be
 }
 
 // Map server ship states to client ship states
-// Two input paths:
-//   1. Raw AgentState from `agents:update`: idle, traveling, solving, returning
-//   2. Pre-mapped ShipDTO from `ships:sync`/`ships:update`: idle, deploying, solving, returning
-// Client expects: idle, deploying, solving, returning
+// Input: AgentState or ShipDTO state — both now use 'traveling' (unified)
 export function mapServerShipState(serverState: string): ShipStatus {
   switch (serverState) {
-    case 'traveling': return 'deploying'
-    case 'deploying': return 'deploying'
+    case 'traveling': return 'traveling'
     case 'solving': return 'solving'
     case 'returning': return 'returning'
     case 'searching': return 'idle'  // Deprecated - treat as idle
@@ -36,7 +32,7 @@ export function mapServerShipState(serverState: string): ShipStatus {
 
 // Ship Status (simplified from Agent) - 'searching' removed as obsolete
 // Note: 'solving' was renamed from 'exploring' to better reflect ship is working on a synapse
-export type ShipStatus = 'idle' | 'solving' | 'deploying' | 'returning'
+export type ShipStatus = 'idle' | 'solving' | 'traveling' | 'returning'
 
 // Ship Type (visual style)
 export type ShipType = 'neuron' | 'synapse' | 'dendrite' | 'axon' | 'cortex'
@@ -68,7 +64,7 @@ export interface Ship {
   startPositionY?: number
   startPositionZ?: number
 
-  // Target position (for travel path visualization) - destination when deploying
+  // Target position (for travel path visualization) - destination when traveling
   targetPositionX?: number
   targetPositionY?: number
   targetPositionZ?: number

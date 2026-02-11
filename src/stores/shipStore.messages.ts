@@ -44,7 +44,7 @@ function mergeShipWithAnimationData(
 
   const mappedState = mapServerShipState(serverShip.state)
   const serverIsTraveling = serverShip.state === 'traveling'
-  const finalState = travelStillInProgress ? 'deploying' as const : mappedState
+  const finalState = travelStillInProgress ? 'traveling' as const : mappedState
 
   // Check if solving ship needs target position preserved
   const shouldPreserveTargetPosition = (finalState === 'solving' || localShip?.state === 'solving') &&
@@ -241,10 +241,10 @@ export function createMessageHandler(
           // Use map pattern to ensure proper reactivity (like agents:update handler)
           s.userShips = safeUserShips(s).map(ship => {
             if (ship.id !== event.shipId) return ship
-            log.travel.info('travel:started - Updating ship to deploying:', fmt.shortId(ship.id))
+            log.travel.info('travel:started - Updating ship to traveling:', fmt.shortId(ship.id))
             return {
               ...ship,
-              state: 'deploying' as const,
+              state: 'traveling' as const,
               startPositionX: event.startPositionX,
               startPositionY: event.startPositionY,
               startPositionZ: event.startPositionZ,
@@ -281,7 +281,7 @@ export function createMessageHandler(
             if (index >= 0) {
               const beforeRotation = s.userShips[index].rotationY
               const beforeState = s.userShips[index].state
-              // Update position, rotation, and ENSURE state is 'deploying'
+              // Update position, rotation, and ENSURE state is 'traveling'
               // This fixes the issue where ships:sync resets state to idle
               // while the ship is still traveling (receiving position updates)
               s.userShips[index] = {
@@ -291,13 +291,13 @@ export function createMessageHandler(
                 positionZ: update.positionZ,
                 rotationY: update.rotationY,
                 // If we're receiving position updates, the ship is definitely traveling
-                state: 'deploying' as const,
+                state: 'traveling' as const,
                 // Preserve timestamp to prevent ships:sync from overwriting
                 _lastLocalUpdate: Date.now(),
               }
               const afterRotation = s.userShips[index].rotationY
-              if (beforeState !== 'deploying') {
-                log.travel.success(`travel:position - Fixed state: ${beforeState} → deploying`)
+              if (beforeState !== 'traveling') {
+                log.travel.success(`travel:position - Fixed state: ${beforeState} → traveling`)
               }
               log.travel.debug(`travel:position - Ship ${fmt.shortId(update.shipId)} rotation:`,
                 fmt.deg(beforeRotation), '→', fmt.deg(afterRotation))
@@ -389,7 +389,7 @@ export function createMessageHandler(
           break
         }
 
-        // Track ships that just arrived (deploying → solving) for synapse fetch
+        // Track ships that just arrived (traveling → solving) for synapse fetch
         const newlyArrived: { shipId: string; synapseId: string }[] = []
 
         setState(produce((s) => {
@@ -401,8 +401,8 @@ export function createMessageHandler(
             const synapseId = (agent.targetSpaceId ?? agent.currentSpaceId ?? ship.currentSynapseId) as string
             log.ws.debug(`agents:update - Ship ${fmt.shortId(ship.id)} state: ${ship.state} → ${newState} (server: ${agent.state})`)
 
-            // Detect arrival: was deploying, now solving, has synapse ID
-            if (ship.state === 'deploying' && newState === 'solving' && synapseId) {
+            // Detect arrival: was traveling, now solving, has synapse ID
+            if (ship.state === 'traveling' && newState === 'solving' && synapseId) {
               log.ws.info(`agents:update - Ship ${fmt.shortId(ship.id)} ARRIVED at synapse ${fmt.shortId(synapseId)}`)
               newlyArrived.push({ shipId: ship.id, synapseId })
             }
@@ -417,7 +417,7 @@ export function createMessageHandler(
               agent.positionZ !== null
 
             // When ship arrives at destination, use targetPosition as current position
-            const arrivalPosition = ship.state === 'deploying' && newState === 'solving'
+            const arrivalPosition = ship.state === 'traveling' && newState === 'solving'
               ? {
                   positionX: ship.targetPositionX ?? ship.positionX,
                   positionY: ship.targetPositionY ?? ship.positionY,

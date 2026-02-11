@@ -25,6 +25,7 @@ func ListEvents(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to list events"})
 	}
 
+	now := time.Now().UnixMilli()
 	result := make([]fiber.Map, len(events))
 	for i, event := range events {
 		description := ""
@@ -35,12 +36,13 @@ func ListEvents(c *fiber.Ctx) error {
 			"id":          event.ID,
 			"name":        event.Name,
 			"description": description,
-			"type":        event.EventType,
+			"eventType":   event.EventType,
 			"multiplier":  event.Multiplier,
 			"startTime":   event.StartTime,
 			"endTime":     event.EndTime,
 			"isActive":    event.IsActive,
 			"createdAt":   event.CreatedAt,
+			"status":      computeEventStatus(event.IsActive, event.StartTime, event.EndTime, now),
 		}
 	}
 
@@ -65,16 +67,18 @@ func GetEventDetail(c *fiber.Ctx) error {
 	if event.Description != nil {
 		description = *event.Description
 	}
+	now := time.Now().UnixMilli()
 	return c.JSON(fiber.Map{
 		"id":          event.ID,
 		"name":        event.Name,
 		"description": description,
-		"type":        event.EventType,
+		"eventType":   event.EventType,
 		"multiplier":  event.Multiplier,
 		"startTime":   event.StartTime,
 		"endTime":     event.EndTime,
 		"isActive":    event.IsActive,
 		"createdAt":   event.CreatedAt,
+		"status":      computeEventStatus(event.IsActive, event.StartTime, event.EndTime, now),
 	})
 }
 
@@ -86,7 +90,8 @@ func CreateEvent(c *fiber.Ctx) error {
 	var req struct {
 		Name        string  `json:"name"`
 		Description string  `json:"description"`
-		Type        string  `json:"type"` // points_multiplier, agi_multiplier, etc.
+		Type        string  `json:"type"`
+		EventType   string  `json:"eventType"`
 		Multiplier  float64 `json:"multiplier"`
 		StartTime   int64   `json:"startTime"`
 		EndTime     int64   `json:"endTime"`
@@ -96,10 +101,16 @@ func CreateEvent(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
+	// Support both "type" and "eventType" fields
+	eventType := req.EventType
+	if eventType == "" {
+		eventType = req.Type
+	}
+
 	if req.Name == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Name is required"})
 	}
-	if req.Type == "" {
+	if eventType == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Type is required"})
 	}
 	if req.Multiplier <= 0 {
@@ -115,7 +126,7 @@ func CreateEvent(c *fiber.Ctx) error {
 		ID:          uuid.New().String(),
 		Name:        req.Name,
 		Description: description,
-		EventType:   req.Type,
+		EventType:   eventType,
 		Multiplier:  req.Multiplier,
 		StartTime:   req.StartTime,
 		EndTime:     req.EndTime,
@@ -139,6 +150,7 @@ func UpdateEvent(c *fiber.Ctx) error {
 		Name        *string  `json:"name"`
 		Description *string  `json:"description"`
 		Type        *string  `json:"type"`
+		EventType   *string  `json:"eventType"`
 		Multiplier  *float64 `json:"multiplier"`
 		StartTime   *int64   `json:"startTime"`
 		EndTime     *int64   `json:"endTime"`
@@ -146,6 +158,11 @@ func UpdateEvent(c *fiber.Ctx) error {
 
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	// Support both "type" and "eventType" fields
+	if req.EventType != nil && req.Type == nil {
+		req.Type = req.EventType
 	}
 
 	if req.Name == nil && req.Description == nil && req.Type == nil && req.Multiplier == nil && req.StartTime == nil && req.EndTime == nil {
@@ -262,4 +279,18 @@ func DeactivateEvent(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"success": true, "message": "Event deactivated"})
+}
+
+// computeEventStatus derives a status string from event fields
+func computeEventStatus(isActive bool, startTime, endTime, now int64) string {
+	if !isActive {
+		return "inactive"
+	}
+	if now < startTime {
+		return "upcoming"
+	}
+	if now > endTime {
+		return "expired"
+	}
+	return "active"
 }

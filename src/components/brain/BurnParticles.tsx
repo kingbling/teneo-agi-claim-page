@@ -84,9 +84,9 @@ export function BurnParticles(props: BurnParticlesProps) {
   const preAllocVelocities = new Float32Array(MAX_BURN_PARTICLES * 3)
   let buffersInitialized = false
 
-  // Filter to only solving/deploying agents (active burn effect)
+  // Filter to only solving/traveling agents (active burn effect)
   const activeShips = createMemo(() => {
-    return props.userAgents.filter(a => a.state === 'solving' || a.state === 'deploying')
+    return props.userAgents.filter(a => a.state === 'solving' || a.state === 'traveling')
   })
 
   // Build geometry data for burn particles around active agents

@@ -387,7 +387,7 @@ export const AgentReturning: AgentState = "returning";
 export type ShipState = string;
 export const ShipIdle: ShipState = "idle";
 export const ShipSearching: ShipState = "searching";
-export const ShipDeploying: ShipState = "deploying"; // = traveling
+export const ShipTraveling: ShipState = "traveling";
 export const ShipSolving: ShipState = "solving"; // was "exploring"
 export const ShipReturning: ShipState = "returning";
 /**
@@ -542,6 +542,10 @@ export const ServerMessageTypeTravelPosition = "travel:position";
  * ServerMessage types
  */
 export const ServerMessageTypeClusterUpdate = "cluster:update";
+/**
+ * ServerMessage types
+ */
+export const ServerMessageTypeWorldShips = "world:ships";
 /**
  * ServerMessage types
  */
@@ -734,4 +738,35 @@ export interface TravelPositionBatch {
 export interface ClusterUpdateEvent {
   clusters: SpaceCluster[];
   timestamp: number /* int64 */;
+}
+/**
+ * WorldShipUpdate represents a single world ship position (ambient or other-user)
+ * Uses compact field names for bandwidth efficiency
+ */
+export interface WorldShipUpdate {
+  id: string;
+  tp?: string;
+  x: number /* float64 */;
+  y: number /* float64 */;
+  z: number /* float64 */;
+  r: number /* float64 */;
+  s: number /* int */; // 0=traveling, 1=idle
+  /**
+   * Trajectory data for client-side interpolation (only when traveling)
+   */
+  sx?: number /* float64 */;
+  sy?: number /* float64 */;
+  sz?: number /* float64 */;
+  tx?: number /* float64 */;
+  ty?: number /* float64 */;
+  tz?: number /* float64 */;
+  ts?: number /* int64 */;
+  td?: number /* int64 */;
+}
+/**
+ * WorldShipsBatch batches multiple world ship updates
+ */
+export interface WorldShipsBatch {
+  ships: WorldShipUpdate[];
+  t: number /* int64 */;
 }

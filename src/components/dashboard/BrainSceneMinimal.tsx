@@ -238,25 +238,6 @@ function SceneLighting() {
   return null
 }
 
-/**
- * CameraSetup - Configures the camera with initial settings
- */
-function CameraSetup() {
-  const { camera } = useThree()
-
-  onMount(() => {
-    const cam = camera()
-    if (!cam) return
-
-    // Set initial camera position and FOV
-    cam.position.set(...CAMERA_CONFIG.defaultPosition)
-    cam.fov = CAMERA_CONFIG.fov
-    cam.updateProjectionMatrix()
-  })
-
-  return null
-}
-
 // Camera position update callback for minimap
 export interface CameraUpdate {
   position: { x: number; y: number; z: number }
@@ -364,9 +345,6 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
 
   return (
     <>
-      {/* Camera setup */}
-      <CameraSetup />
-
       {/* Orbit controls for camera manipulation */}
       <OrbitControls
         enableDamping

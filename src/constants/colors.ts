@@ -96,12 +96,12 @@ export const SHIP_STATUS_COLORS: Record<ShipStatus, ShipStatusColorConfig> = {
     icon: '○',
     description: 'Ready to deploy',
   },
-  deploying: {
+  traveling: {
     iconClass: 'text-yellow-400',
     badgeClass: 'bg-yellow-500/20 text-yellow-400',
     barClass: 'bg-yellow-500',
     textClass: 'text-yellow-400',
-    label: 'Deploying',
+    label: 'Traveling',
     icon: '→',
     description: 'Traveling to synapse',
   },
@@ -126,7 +126,7 @@ export const SHIP_STATUS_COLORS: Record<ShipStatus, ShipStatusColorConfig> = {
 }
 
 // Status order for display
-export const SHIP_STATUS_ORDER: ShipStatus[] = ['idle', 'deploying', 'solving', 'returning']
+export const SHIP_STATUS_ORDER: ShipStatus[] = ['idle', 'traveling', 'solving', 'returning']
 
 // Synapse types in order (least rare to most rare)
 export const SYNAPSE_TYPE_ORDER: SynapseType[] = [

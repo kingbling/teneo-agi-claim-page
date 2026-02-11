@@ -3,6 +3,7 @@
  */
 
 import { onMount, Show, For } from 'solid-js'
+import { A } from '@solidjs/router'
 import { Users, Database, Ship, TrendingUp } from 'lucide-solid'
 import { adminStore } from '@/stores/adminStore'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
@@ -103,34 +104,34 @@ export default function AdminDashboard() {
         </CardHeader>
         <CardContent>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <a
+            <A
               href="/admin/users"
               class="p-4 rounded-lg border border-[var(--card-border)] hover:bg-[var(--background-tertiary)] transition-colors text-center"
             >
               <Users class="w-6 h-6 mx-auto mb-2 text-[var(--text-secondary)]" />
               <span class="text-sm text-[var(--text-primary)]">Manage Users</span>
-            </a>
-            <a
+            </A>
+            <A
               href="/admin/data"
               class="p-4 rounded-lg border border-[var(--card-border)] hover:bg-[var(--background-tertiary)] transition-colors text-center"
             >
               <Database class="w-6 h-6 mx-auto mb-2 text-[var(--text-secondary)]" />
               <span class="text-sm text-[var(--text-primary)]">Browse Data</span>
-            </a>
-            <a
+            </A>
+            <A
               href="/admin/interventions"
               class="p-4 rounded-lg border border-[var(--card-border)] hover:bg-[var(--background-tertiary)] transition-colors text-center"
             >
               <Ship class="w-6 h-6 mx-auto mb-2 text-[var(--text-secondary)]" />
               <span class="text-sm text-[var(--text-primary)]">Interventions</span>
-            </a>
-            <a
+            </A>
+            <A
               href="/admin/events"
               class="p-4 rounded-lg border border-[var(--card-border)] hover:bg-[var(--background-tertiary)] transition-colors text-center"
             >
               <TrendingUp class="w-6 h-6 mx-auto mb-2 text-[var(--text-secondary)]" />
               <span class="text-sm text-[var(--text-primary)]">Live Events</span>
-            </a>
+            </A>
           </div>
         </CardContent>
       </Card>

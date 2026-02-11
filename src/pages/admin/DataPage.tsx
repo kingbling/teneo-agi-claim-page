@@ -15,7 +15,8 @@ export default function DataPage() {
   const [activeTab, setActiveTab] = createSignal<Tab>('spaces')
   const [spaceSearch, setSpaceSearch] = createSignal('')
   const [agentSearch, setAgentSearch] = createSignal('')
-  const [stateFilter, setStateFilter] = createSignal('')
+  const [spaceStateFilter, setSpaceStateFilter] = createSignal('')
+  const [agentStateFilter, setAgentStateFilter] = createSignal('')
   const [typeFilter, setTypeFilter] = createSignal('')
 
   onMount(() => {
@@ -27,7 +28,7 @@ export default function DataPage() {
     adminStore.fetchSpaces({
       page,
       search: spaceSearch(),
-      state: stateFilter(),
+      state: spaceStateFilter(),
       synapseType: typeFilter(),
     })
   }
@@ -36,7 +37,7 @@ export default function DataPage() {
     adminStore.fetchAgents({
       page,
       search: agentSearch(),
-      state: stateFilter(),
+      state: agentStateFilter(),
     })
   }
 
@@ -156,8 +157,8 @@ export default function DataPage() {
                 />
               </div>
               <select
-                value={stateFilter()}
-                onChange={(e) => { setStateFilter(e.currentTarget.value); fetchSpaces() }}
+                value={spaceStateFilter()}
+                onChange={(e) => { setSpaceStateFilter(e.currentTarget.value); fetchSpaces() }}
                 class="px-4 py-2 rounded-lg border border-[var(--card-border)] bg-[var(--background-primary)] text-[var(--text-primary)]"
               >
                 <option value="">All States</option>
@@ -212,14 +213,14 @@ export default function DataPage() {
                 />
               </div>
               <select
-                value={stateFilter()}
-                onChange={(e) => { setStateFilter(e.currentTarget.value); fetchAgents() }}
+                value={agentStateFilter()}
+                onChange={(e) => { setAgentStateFilter(e.currentTarget.value); fetchAgents() }}
                 class="px-4 py-2 rounded-lg border border-[var(--card-border)] bg-[var(--background-primary)] text-[var(--text-primary)]"
               >
                 <option value="">All States</option>
                 <option value="idle">Idle</option>
                 <option value="solving">Solving</option>
-                <option value="deploying">Deploying</option>
+                <option value="traveling">Traveling</option>
               </select>
             </div>
           </CardContent>

@@ -41,7 +41,7 @@ export const TIER_COLORS = {
 export const STATE_COLORS = {
   idle: { r: 0.5, g: 0.5, b: 0.5 },
   wandering: { r: 0.3, g: 0.8, b: 0.4 },
-  deploying: { r: 0.2, g: 0.6, b: 1.0 },
+  traveling: { r: 0.2, g: 0.6, b: 1.0 },
   solving: { r: 1.0, g: 0.8, b: 0.2 },
   limping_home: { r: 0.8, g: 0.3, b: 0.3 },
   exhausted: { r: 0.4, g: 0.2, b: 0.2 },
@@ -68,11 +68,46 @@ export const NETWORK_CONFIG = {
   maxSpeedMultiplier: 5.0,
 } as const
 
+/**
+ * Compute the actual visual centroid of the brain shape by sampling points
+ * on the unit sphere, applying all deformations + BRAIN_SCALE, and averaging.
+ */
+function computeBrainCentroid(): [number, number, number] {
+  let sumX = 0, sumY = 0, sumZ = 0
+  let count = 0
+
+  // Sample points uniformly on the unit sphere surface using spherical coordinates
+  const latSteps = 100
+  const lonSteps = 100
+  for (let i = 0; i < latSteps; i++) {
+    const theta = (Math.PI * (i + 0.5)) / latSteps // polar angle [0, PI]
+    const sinTheta = Math.sin(theta)
+    for (let j = 0; j < lonSteps; j++) {
+      const phi = (2 * Math.PI * j) / lonSteps // azimuthal angle [0, 2PI)
+      const x = sinTheta * Math.cos(phi)
+      const y = sinTheta * Math.sin(phi) // up axis mapped to Y below
+      const z = Math.cos(theta)
+
+      // constrainToBrainShape expects unit-sphere coords with Y=up
+      // Our sphere sampling has Y=up naturally with this parameterization:
+      // Use (x, z, y) to map: x→x, z→y(up), y→z
+      const [bx, by, bz] = constrainToBrainShape(x, z, y)
+      sumX += bx
+      sumY += by
+      sumZ += bz
+      count++
+    }
+  }
+
+  return [sumX / count, sumY / count, sumZ / count]
+}
+
+const _brainCentroid = computeBrainCentroid()
+
 // Camera defaults - closer default for better detail, limited max to prevent over-exposure
 export const CAMERA_CONFIG = {
   defaultPosition: [0, 0, 3] as const,
-  // Brain visual center (Y offset accounts for brain bounds -0.6 to 0.8)
-  brainCenter: [0, 0.1, 0] as const,
+  brainCenter: _brainCentroid as readonly [number, number, number],
   fov: 50,
   minDistance: 1.5,
   maxDistance: 5,

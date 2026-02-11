@@ -137,7 +137,7 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
     if (!props.showIdleShips) {
       ships = ships.filter(s => {
         if (s.id === props.selectedShipId) return true
-        if (s.state === 'deploying') return true
+        if (s.state === 'traveling') return true
         return s.state !== 'idle'
       })
     }
@@ -322,7 +322,7 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       let rotY = shipRotations.get(ship.id) ?? 0
 
       // Deploy animation with cached parameters
-      const hasAnimData = ship.state === 'deploying' &&
+      const hasAnimData = ship.state === 'traveling' &&
         ship.startPositionX !== undefined &&
         ship.targetPositionX !== undefined &&
         ship.travelStartTime !== undefined &&
@@ -341,7 +341,7 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
       }
 
       const animCache = deployAnimationCache.get(ship.id)
-      if (ship.state === 'deploying' && animCache) {
+      if (ship.state === 'traveling' && animCache) {
         const elapsed = now - animCache.startTime
         const progress = Math.min(Math.max(elapsed / animCache.duration, 0), 1)
         x = animCache.startX + (animCache.targetX - animCache.startX) * progress
@@ -358,7 +358,7 @@ export const ShipMarkers: Component<ShipMarkersProps> = (props) => {
           if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2
           rotY += deltaAngle * 0.15
         }
-      } else if (ship.state !== 'deploying') {
+      } else if (ship.state !== 'traveling') {
         deployAnimationCache.delete(ship.id)
       }
 

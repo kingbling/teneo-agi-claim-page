@@ -107,7 +107,7 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
             {/* Content */}
             <div class="p-3 space-y-3">
               {/* Travel Progress */}
-              <Show when={(currentShip().state === 'deploying' || currentShip().state === 'returning') && travelProgress()}>
+              <Show when={(currentShip().state === 'traveling' || currentShip().state === 'returning') && travelProgress()}>
                 {(progress) => (
                   <div class="space-y-1.5">
                     <div class="flex items-center justify-between text-xs">
@@ -212,7 +212,7 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
                   </button>
                 </Show>
 
-                <Show when={currentShip().state === 'deploying' || currentShip().state === 'returning'}>
+                <Show when={currentShip().state === 'traveling' || currentShip().state === 'returning'}>
                   <button
                     onClick={() => shipStore.recallShip(currentShip().id)}
                     class="flex-1 py-1.5 rounded bg-purple-500/20 border border-purple-500/30 text-purple-400 text-xs font-medium hover:bg-purple-500/30 flex items-center justify-center gap-1"

@@ -575,8 +575,12 @@ const resetAgentToIdle = `-- name: ResetAgentToIdle :exec
 UPDATE agents SET
     state = 'idle',
     target_space_id = NULL,
+    current_space_id = NULL,
     travel_start_time = NULL,
-    travel_duration = NULL
+    travel_duration = NULL,
+    start_position_x = NULL,
+    start_position_y = NULL,
+    start_position_z = NULL
 WHERE id = $1
 `
 

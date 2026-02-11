@@ -96,7 +96,7 @@ export const ExplorePrompt: Component<ExplorePromptProps> = (props) => {
 
           {/* Ship info */}
           <div class="text-xs text-gray-400 mb-3">
-            Deploying: <span class="text-teal-400 font-medium">{props.ship.name}</span>
+            Traveling: <span class="text-teal-400 font-medium">{props.ship.name}</span>
           </div>
 
           {/* Lock warning */}

@@ -269,11 +269,11 @@ function createShipStore() {
 
     log.travel.info('Starting travel: ship', fmt.shortId(shipId), '→ synapse', fmt.shortId(synapseId))
 
-    // Set ship to deploying state while waiting for server response
+    // Set ship to traveling state while waiting for server response
     const now = Date.now()
     setState(produce((s) => {
       s.userShips = safeUserShips(s).map(ss =>
-        ss.id === shipId ? { ...ss, state: 'deploying' as const, _lastLocalUpdate: now } : ss
+        ss.id === shipId ? { ...ss, state: 'traveling' as const, _lastLocalUpdate: now } : ss
       )
       s.explorationTarget = null  // Clear target after travel starts
     }))

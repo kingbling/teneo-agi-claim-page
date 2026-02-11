@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"fmt"
 	"time"
 
 	"teneo/server-go/internal/database"
@@ -28,24 +29,31 @@ func GetOverview(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to get space counts"})
 	}
 
+	deployed := agentCounts.Total - agentCounts.Idle
+	discoveryRate := "0.0"
+	if spaceCounts.Total > 0 {
+		discoveryRate = fmt.Sprintf("%.1f", float64(spaceCounts.Discovered)/float64(spaceCounts.Total)*100)
+	}
+
 	return c.JSON(fiber.Map{
 		"users": fiber.Map{
-			"total":  userCounts.TotalUsers,
-			"active": userCounts.ActiveUsers,
-			"banned": userCounts.BannedUsers,
+			"total":    userCounts.TotalUsers,
+			"new24h":   int64(0),
+			"new7d":    int64(0),
+			"active24h": userCounts.ActiveUsers,
+			"active7d":  userCounts.ActiveUsers,
+			"banned":   userCounts.BannedUsers,
 		},
 		"ships": fiber.Map{
-			"total":     agentCounts.Total,
-			"idle":      agentCounts.Idle,
-			"searching": agentCounts.Searching,
-			"traveling": agentCounts.Traveling,
-			"solving":   agentCounts.Solving,
+			"total":    agentCounts.Total,
+			"idle":     agentCounts.Idle,
+			"deployed": deployed,
 		},
 		"spaces": fiber.Map{
 			"total":         spaceCounts.Total,
 			"discovered":    spaceCounts.Discovered,
-			"beingExplored": spaceCounts.BeingExplored,
-			"undiscovered":  spaceCounts.Total - spaceCounts.Discovered - spaceCounts.BeingExplored,
+			"inProgress":    spaceCounts.BeingExplored,
+			"discoveryRate": discoveryRate,
 		},
 		"timestamp": time.Now().UnixMilli(),
 	})
@@ -67,18 +75,31 @@ func GetEconomy(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to get level distribution"})
 	}
 
-	levelDist := make(map[int32]int64)
-	for _, lc := range levelRows {
-		levelDist[lc.UserLevel] = lc.Count
+	levelDist := make([]fiber.Map, len(levelRows))
+	for i, lc := range levelRows {
+		levelDist[i] = fiber.Map{"level": lc.UserLevel, "count": lc.Count}
+	}
+
+	// Compute averages
+	userCount, _ := store.Queries.GetUserCount(ctx)
+	avgPoints := float64(0)
+	avgAgi := float64(0)
+	if userCount > 0 {
+		avgPoints = totals.TotalPoints / float64(userCount)
+		avgAgi = float64(totals.TotalAgi) / float64(userCount)
 	}
 
 	return c.JSON(fiber.Map{
 		"circulation": fiber.Map{
-			"agi":     totals.TotalAgi,
-			"teneo":   totals.TotalTeneo,
-			"agentic": totals.TotalAgentic,
-			"usdc":    totals.TotalUsdc,
-			"points":  totals.TotalPoints,
+			"totalPoints":    totals.TotalPoints,
+			"totalAgentic":   totals.TotalAgentic,
+			"totalAgi":       totals.TotalAgi,
+			"totalTeneo":     totals.TotalTeneo,
+			"totalUsdcSpent": totals.TotalUsdc,
+		},
+		"averages": fiber.Map{
+			"points": avgPoints,
+			"agi":    avgAgi,
 		},
 		"levelDistribution": levelDist,
 		"timestamp":         time.Now().UnixMilli(),
@@ -97,12 +118,18 @@ func GetSynapseTypes(c *fiber.Ctx) error {
 
 	types := make([]fiber.Map, len(stats))
 	for i, s := range stats {
+		completionRate := "0.0"
+		if s.Total > 0 {
+			completionRate = fmt.Sprintf("%.1f", float64(s.Discovered)/float64(s.Total)*100)
+		}
 		types[i] = fiber.Map{
-			"type":          s.SynapseType,
-			"total":         s.Total,
-			"discovered":    s.Discovered,
-			"beingExplored": s.BeingExplored,
-			"undiscovered":  s.Total - s.Discovered - s.BeingExplored,
+			"type":            s.SynapseType,
+			"total":           s.Total,
+			"discovered":      s.Discovered,
+			"inProgress":      s.BeingExplored,
+			"completionRate":  completionRate,
+			"avgProgress":     0,
+			"totalAgiRewards": 0,
 		}
 	}
 

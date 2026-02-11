@@ -14,7 +14,9 @@ import (
 	"teneo/server-go/internal/dto"
 )
 
-// AmbientShip represents a virtual ship flying between synapses
+// AmbientShip represents a virtual ship flying between synapses.
+// Ships are always traveling — no idle state. When they arrive, they
+// immediately pick a new target so they never vanish from broadcasts.
 type AmbientShip struct {
 	ID       string
 	ShipType config.ShipType
@@ -31,12 +33,6 @@ type AmbientShip struct {
 	// Timing (milliseconds)
 	TravelStart    int64
 	TravelDuration int64
-
-	// State: 0=traveling, 1=idle
-	State int
-
-	// When idle, wait until this time before picking next target
-	IdleUntil int64
 }
 
 // AmbientManager manages a pool of ambient ships
@@ -106,7 +102,6 @@ func (am *AmbientManager) Init() {
 			TargetZ:        target.PositionZ,
 			TravelStart:    now - staggerOffset,
 			TravelDuration: travelDuration,
-			State:          0, // traveling
 		}
 		am.ships = append(am.ships, ship)
 	}
@@ -122,63 +117,46 @@ func (am *AmbientManager) Tick(now int64) []dto.WorldShipUpdate {
 	var updates []dto.WorldShipUpdate
 
 	for _, ship := range am.ships {
-		switch ship.State {
-		case 0: // traveling
-			elapsed := now - ship.TravelStart
-			progress := float64(elapsed) / float64(ship.TravelDuration)
+		elapsed := now - ship.TravelStart
+		progress := float64(elapsed) / float64(ship.TravelDuration)
 
-			if progress >= 1.0 {
-				// Arrived — set to idle with 2-5s pause
-				ship.State = 1
-				ship.CurrentX = ship.TargetX
-				ship.CurrentY = ship.TargetY
-				ship.CurrentZ = ship.TargetZ
-				ship.IdleUntil = now + int64(2000+rand.Intn(3000))
-
-				updates = append(updates, dto.WorldShipUpdate{
-					ID:        ship.ID,
-					ShipType:  string(ship.ShipType),
-					PositionX: ship.CurrentX,
-					PositionY: ship.CurrentY,
-					PositionZ: ship.CurrentZ,
-					State:     1,
-				})
-			} else {
-				// Interpolate position
-				ship.CurrentX = ship.StartX + (ship.TargetX-ship.StartX)*progress
-				ship.CurrentY = ship.StartY + (ship.TargetY-ship.StartY)*progress
-				ship.CurrentZ = ship.StartZ + (ship.TargetZ-ship.StartZ)*progress
-
-				// Calculate rotation toward target
-				dx := ship.TargetX - ship.CurrentX
-				dz := ship.TargetZ - ship.CurrentZ
-				rotationY := math.Atan2(dx, -dz)
-
-				updates = append(updates, dto.WorldShipUpdate{
-					ID:             ship.ID,
-					ShipType:       string(ship.ShipType),
-					PositionX:      ship.CurrentX,
-					PositionY:      ship.CurrentY,
-					PositionZ:      ship.CurrentZ,
-					RotationY:      rotationY,
-					State:          0,
-					StartX:         ship.StartX,
-					StartY:         ship.StartY,
-					StartZ:         ship.StartZ,
-					TargetX:        ship.TargetX,
-					TargetY:        ship.TargetY,
-					TargetZ:        ship.TargetZ,
-					TravelStart:    ship.TravelStart,
-					TravelDuration: ship.TravelDuration,
-				})
-			}
-
-		case 1: // idle
-			if now >= ship.IdleUntil {
-				// Pick new random target
-				am.dispatchShip(ship, now)
-			}
+		if progress >= 1.0 {
+			// Arrived — immediately pick a new target (no idle gap)
+			ship.CurrentX = ship.TargetX
+			ship.CurrentY = ship.TargetY
+			ship.CurrentZ = ship.TargetZ
+			am.dispatchShip(ship, now)
+			// Fresh dispatch means progress=0, emit starting position
+			progress = 0
 		}
+
+		// Interpolate position
+		ship.CurrentX = ship.StartX + (ship.TargetX-ship.StartX)*progress
+		ship.CurrentY = ship.StartY + (ship.TargetY-ship.StartY)*progress
+		ship.CurrentZ = ship.StartZ + (ship.TargetZ-ship.StartZ)*progress
+
+		// Calculate rotation toward target
+		dx := ship.TargetX - ship.CurrentX
+		dz := ship.TargetZ - ship.CurrentZ
+		rotationY := math.Atan2(dx, -dz)
+
+		updates = append(updates, dto.WorldShipUpdate{
+			ID:             ship.ID,
+			ShipType:       string(ship.ShipType),
+			PositionX:      ship.CurrentX,
+			PositionY:      ship.CurrentY,
+			PositionZ:      ship.CurrentZ,
+			RotationY:      rotationY,
+			State:          0,
+			StartX:         ship.StartX,
+			StartY:         ship.StartY,
+			StartZ:         ship.StartZ,
+			TargetX:        ship.TargetX,
+			TargetY:        ship.TargetY,
+			TargetZ:        ship.TargetZ,
+			TravelStart:    ship.TravelStart,
+			TravelDuration: ship.TravelDuration,
+		})
 	}
 
 	return updates
@@ -218,7 +196,6 @@ func (am *AmbientManager) dispatchShip(ship *AmbientShip, now int64) {
 
 	ship.TravelStart = now
 	ship.TravelDuration = travelDuration
-	ship.State = 0 // traveling
 }
 
 // AdjustCount scales the number of active ambient ships inversely to real ship activity.
@@ -237,15 +214,13 @@ func (am *AmbientManager) AdjustCount(realTravelingCount int) {
 	}
 	am.targetCount = target
 
-	// Add ships if needed
+	// Add ships if needed — start them traveling immediately
 	now := time.Now().UnixMilli()
 	for len(am.ships) < am.targetCount {
 		idx := len(am.ships)
 		ship := &AmbientShip{
-			ID:        fmt.Sprintf("ambient-%d", idx),
-			ShipType:  config.RandomShipType(),
-			State:     1, // start idle
-			IdleUntil: now,
+			ID:       fmt.Sprintf("ambient-%d", idx),
+			ShipType: config.RandomShipType(),
 		}
 		// Pick a random starting position
 		ctx := context.Background()
@@ -255,6 +230,7 @@ func (am *AmbientManager) AdjustCount(realTravelingCount int) {
 			ship.CurrentY = pos[0].PositionY
 			ship.CurrentZ = pos[0].PositionZ
 		}
+		am.dispatchShip(ship, now)
 		am.ships = append(am.ships, ship)
 	}
 
@@ -264,15 +240,9 @@ func (am *AmbientManager) AdjustCount(realTravelingCount int) {
 	}
 }
 
-// GetTravelingCount returns how many ambient ships are currently traveling
+// GetTravelingCount returns the total number of ambient ships (all are always traveling)
 func (am *AmbientManager) GetTravelingCount() int {
 	am.mu.RLock()
 	defer am.mu.RUnlock()
-	count := 0
-	for _, s := range am.ships {
-		if s.State == 0 {
-			count++
-		}
-	}
-	return count
+	return len(am.ships)
 }

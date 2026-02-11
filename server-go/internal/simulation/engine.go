@@ -280,7 +280,7 @@ func (e *Engine) processTick() {
 	// Tick ambient ships and broadcast world:ships every 3 ticks
 	now := time.Now().UnixMilli()
 	ambientUpdates := e.ambient.Tick(now)
-	if e.tickCount%3 == 0 && e.OnWorldShipsUpdate != nil && len(ambientUpdates) > 0 {
+	if e.tickCount%3 == 0 && e.OnWorldShipsUpdate != nil {
 		e.OnWorldShipsUpdate(dto.WorldShipsBatch{
 			Ships:     ambientUpdates,
 			Timestamp: now,

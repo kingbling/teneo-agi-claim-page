@@ -43,7 +43,10 @@ func ListAgents(c *fiber.Ctx) error {
 		PositionY        float64
 		PositionZ        float64
 		TargetSpaceID    *string
+		CurrentSpaceID   *string
 		AutopilotEnabled bool
+		SpacesDiscovered int32
+		TotalAgiEarned   int32
 		CreatedAt        int64
 		OwnerWallet      *string
 	}
@@ -52,13 +55,15 @@ func ListAgents(c *fiber.Ctx) error {
 	var args []interface{}
 	if state != "" {
 		query = `SELECT a.id, a.owner_id, a.name, a.state, a.position_x, a.position_y, a.position_z,
-		                a.target_space_id::TEXT, a.autopilot_enabled, a.created_at, u.wallet
+		                a.target_space_id::TEXT, a.current_space_id::TEXT, a.autopilot_enabled,
+		                a.spaces_discovered, a.total_agi_earned, a.created_at, u.wallet
 		         FROM agents a LEFT JOIN users u ON a.owner_id = u.id
 		         WHERE a.state = $1 ORDER BY a.created_at DESC LIMIT $2 OFFSET $3`
 		args = []interface{}{state, limit, offset}
 	} else {
 		query = `SELECT a.id, a.owner_id, a.name, a.state, a.position_x, a.position_y, a.position_z,
-		                a.target_space_id::TEXT, a.autopilot_enabled, a.created_at, u.wallet
+		                a.target_space_id::TEXT, a.current_space_id::TEXT, a.autopilot_enabled,
+		                a.spaces_discovered, a.total_agi_earned, a.created_at, u.wallet
 		         FROM agents a LEFT JOIN users u ON a.owner_id = u.id
 		         ORDER BY a.created_at DESC LIMIT $1 OFFSET $2`
 		args = []interface{}{limit, offset}
@@ -74,7 +79,8 @@ func ListAgents(c *fiber.Ctx) error {
 	for rows.Next() {
 		var r agentRow
 		if err := rows.Scan(&r.ID, &r.OwnerID, &r.Name, &r.State, &r.PositionX, &r.PositionY, &r.PositionZ,
-			&r.TargetSpaceID, &r.AutopilotEnabled, &r.CreatedAt, &r.OwnerWallet); err != nil {
+			&r.TargetSpaceID, &r.CurrentSpaceID, &r.AutopilotEnabled,
+			&r.SpacesDiscovered, &r.TotalAgiEarned, &r.CreatedAt, &r.OwnerWallet); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to scan agent"})
 		}
 		results = append(results, r)
@@ -89,9 +95,13 @@ func ListAgents(c *fiber.Ctx) error {
 		if r.OwnerWallet != nil {
 			wallet = *r.OwnerWallet
 		}
-		targetSpaceID := ""
+		var targetSpaceID interface{} = nil
 		if r.TargetSpaceID != nil {
 			targetSpaceID = *r.TargetSpaceID
+		}
+		var currentSpaceID interface{} = nil
+		if r.CurrentSpaceID != nil {
+			currentSpaceID = *r.CurrentSpaceID
 		}
 		agents[i] = fiber.Map{
 			"id":               r.ID,
@@ -99,20 +109,26 @@ func ListAgents(c *fiber.Ctx) error {
 			"ownerWallet":      wallet,
 			"name":             r.Name,
 			"state":            r.State,
-			"positionX":        r.PositionX,
-			"positionY":        r.PositionY,
-			"positionZ":        r.PositionZ,
+			"position":         fiber.Map{"x": r.PositionX, "y": r.PositionY, "z": r.PositionZ},
+			"currentSpaceId":   currentSpaceID,
 			"targetSpaceId":    targetSpaceID,
 			"autopilotEnabled": r.AutopilotEnabled,
+			"spacesDiscovered": r.SpacesDiscovered,
+			"totalAgiEarned":   r.TotalAgiEarned,
 			"createdAt":        r.CreatedAt,
+			"deployedAt":       nil,
 		}
 	}
 
+	totalPages := (total + int64(limit) - 1) / int64(limit)
 	return c.JSON(fiber.Map{
 		"agents": agents,
-		"total":  total,
-		"page":   page,
-		"limit":  limit,
+		"pagination": fiber.Map{
+			"page":       page,
+			"limit":      limit,
+			"total":      total,
+			"totalPages": totalPages,
+		},
 	})
 }
 
@@ -184,6 +200,8 @@ func GetStuckAgents(c *fiber.Ctx) error {
 			travelStartTime = *a.TravelStartTime
 		}
 
+		hoursDeployed := float64(stuckDuration) / (3600 * 1000)
+
 		agents[i] = fiber.Map{
 			"id":              a.ID,
 			"ownerId":         a.OwnerID,
@@ -192,10 +210,11 @@ func GetStuckAgents(c *fiber.Ctx) error {
 			"state":           a.State,
 			"travelStartTime": travelStartTime,
 			"stuckDuration":   stuckDuration,
+			"hoursDeployed":   hoursDeployed,
 		}
 	}
 
-	return c.JSON(fiber.Map{"stuckAgents": agents, "count": len(agents)})
+	return c.JSON(fiber.Map{"agents": agents, "count": len(agents)})
 }
 
 // GetAgentDetail returns detailed info about a specific agent

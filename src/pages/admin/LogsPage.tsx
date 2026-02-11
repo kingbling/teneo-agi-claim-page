@@ -1,37 +1,32 @@
 /**
- * LogsPage - Real-time server log viewer
+ * LogsPage - Admin action log viewer
  */
 
-import { createSignal, onMount, onCleanup, For, Show } from 'solid-js'
-import { Terminal, Trash2, Download, Filter, Pause, Play } from 'lucide-solid'
+import { createSignal, onMount, For, Show } from 'solid-js'
+import { Terminal, Download, Filter } from 'lucide-solid'
 import { authStore } from '@/stores/authStore'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { log } from '@/utils/logger'
 
 const API_URL = import.meta.env.VITE_API_URL ?? ''
-const WS_URL = import.meta.env.VITE_WS_URL ?? ''
 
 interface LogEntry {
   id: string
-  timestamp: number
-  level: 'info' | 'warn' | 'error' | 'debug'
-  message: string
-  data?: unknown
+  type: string
+  action: string
+  details: string | null
+  adminId: string | null
+  targetId: string | null
+  createdAt: number
 }
 
 export default function LogsPage() {
   const [logs, setLogs] = createSignal<LogEntry[]>([])
   const [isLoading, setIsLoading] = createSignal(false)
-  const [isPaused, setIsPaused] = createSignal(false)
   const [filter, setFilter] = createSignal<string>('')
-  const [levelFilter, setLevelFilter] = createSignal<string>('all')
+  const [typeFilter, setTypeFilter] = createSignal<string>('all')
   const [error, setError] = createSignal<string | null>(null)
 
-  let logContainerRef: HTMLDivElement | undefined
-  let wsRef: WebSocket | null = null
-
-  // Fetch initial logs
   async function fetchLogs() {
     setIsLoading(true)
     setError(null)
@@ -54,131 +49,56 @@ export default function LogsPage() {
     }
   }
 
-  // Clear logs
-  async function clearLogs() {
-    if (!confirm('Clear all server logs?')) return
-
-    try {
-      const response = await fetch(`${API_URL}/api/admin/logs`, {
-        method: 'DELETE',
-        headers: authStore.getAuthHeader(),
-      })
-
-      if (response.ok) {
-        setLogs([])
-      }
-    } catch (err) {
-      log.admin.error('Failed to clear logs:', err)
-    }
-  }
-
-  // Connect to WebSocket for live logs
-  function connectWebSocket() {
-    if (wsRef?.readyState === WebSocket.OPEN) return
-
-    wsRef = new WebSocket(WS_URL)
-
-    wsRef.onmessage = (event) => {
-      if (isPaused()) return
-
-      try {
-        const message = JSON.parse(event.data)
-        if (message.type === 'log:entry') {
-          setLogs((prev) => {
-            const newLogs = [message.data, ...prev]
-            // Keep max 500 logs in memory
-            return newLogs.slice(0, 500)
-          })
-
-          // Auto-scroll to top (newest first)
-          if (logContainerRef) {
-            logContainerRef.scrollTop = 0
-          }
-        }
-      } catch {
-        // Ignore parse errors
-      }
-    }
-
-    wsRef.onclose = () => {
-      // Reconnect after delay
-      setTimeout(connectWebSocket, 3000)
-    }
-  }
-
-  // Export logs
   function exportLogs() {
     const data = JSON.stringify(logs(), null, 2)
     const blob = new Blob([data], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `server-logs-${new Date().toISOString().split('T')[0]}.json`
+    a.download = `admin-logs-${new Date().toISOString().split('T')[0]}.json`
     a.click()
     URL.revokeObjectURL(url)
   }
 
-  // Filter logs
   const filteredLogs = () => {
     let result = logs()
 
-    if (levelFilter() !== 'all') {
-      result = result.filter((log) => log.level === levelFilter())
+    if (typeFilter() !== 'all') {
+      result = result.filter((entry) => entry.type === typeFilter())
     }
 
     if (filter()) {
       const search = filter().toLowerCase()
-      result = result.filter((log) => log.message.toLowerCase().includes(search))
+      result = result.filter((entry) => entry.action.toLowerCase().includes(search))
     }
 
     return result
   }
 
-  // Format timestamp
   function formatTime(timestamp: number) {
     return new Date(timestamp).toLocaleTimeString('en-US', {
       hour12: false,
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-      fractionalSecondDigits: 3,
     })
   }
 
-  // Get log level color
-  function getLevelColor(level: string) {
-    switch (level) {
+  function getTypeColor(type: string) {
+    switch (type) {
       case 'error':
         return 'text-red-400'
-      case 'warn':
+      case 'warning':
         return 'text-yellow-400'
-      case 'debug':
-        return 'text-gray-400'
+      case 'intervention':
+        return 'text-orange-400'
       default:
         return 'text-[var(--brand-teal-1)]'
     }
   }
 
-  function getLevelBg(level: string) {
-    switch (level) {
-      case 'error':
-        return 'bg-red-500/10'
-      case 'warn':
-        return 'bg-yellow-500/10'
-      default:
-        return ''
-    }
-  }
-
   onMount(() => {
     fetchLogs()
-    connectWebSocket()
-  })
-
-  onCleanup(() => {
-    if (wsRef) {
-      wsRef.close()
-    }
   })
 
   return (
@@ -186,26 +106,16 @@ export default function LogsPage() {
       {/* Header */}
       <div class="flex items-center justify-between">
         <div>
-          <h1 class="text-2xl font-bold text-[var(--text-primary)]">Server Logs</h1>
-          <p class="text-[var(--text-secondary)] mt-1">Real-time server log streaming</p>
+          <h1 class="text-2xl font-bold text-[var(--text-primary)]">Admin Logs</h1>
+          <p class="text-[var(--text-secondary)] mt-1">Admin action history</p>
         </div>
         <div class="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setIsPaused(!isPaused())}
-            class="gap-2"
-          >
-            {isPaused() ? <Play class="w-4 h-4" /> : <Pause class="w-4 h-4" />}
-            {isPaused() ? 'Resume' : 'Pause'}
+          <Button variant="outline" size="sm" onClick={fetchLogs} class="gap-2">
+            Refresh
           </Button>
           <Button variant="outline" size="sm" onClick={exportLogs} class="gap-2">
             <Download class="w-4 h-4" />
             Export
-          </Button>
-          <Button variant="outline" size="sm" onClick={clearLogs} class="gap-2 text-red-400 hover:text-red-300">
-            <Trash2 class="w-4 h-4" />
-            Clear
           </Button>
         </div>
       </div>
@@ -217,27 +127,26 @@ export default function LogsPage() {
             <div class="flex items-center gap-2">
               <Filter class="w-4 h-4 text-[var(--text-secondary)]" />
               <select
-                value={levelFilter()}
-                onChange={(e) => setLevelFilter(e.target.value)}
+                value={typeFilter()}
+                onChange={(e) => setTypeFilter(e.target.value)}
                 class="bg-[var(--background-secondary)] border border-[var(--card-border)] rounded px-3 py-1.5 text-sm text-[var(--text-primary)]"
               >
-                <option value="all">All Levels</option>
-                <option value="info">Info</option>
-                <option value="warn">Warnings</option>
-                <option value="error">Errors</option>
-                <option value="debug">Debug</option>
+                <option value="all">All Types</option>
+                <option value="user">User</option>
+                <option value="intervention">Intervention</option>
+                <option value="event">Event</option>
+                <option value="system">System</option>
               </select>
             </div>
             <input
               type="text"
-              placeholder="Search logs..."
+              placeholder="Search actions..."
               value={filter()}
               onInput={(e) => setFilter(e.target.value)}
               class="flex-1 bg-[var(--background-secondary)] border border-[var(--card-border)] rounded px-3 py-1.5 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]"
             />
             <div class="text-sm text-[var(--text-secondary)]">
-              {filteredLogs().length} logs
-              {isPaused() && <span class="ml-2 text-yellow-400">(paused)</span>}
+              {filteredLogs().length} entries
             </div>
           </div>
         </CardContent>
@@ -255,32 +164,30 @@ export default function LogsPage() {
         <CardHeader class="pb-2">
           <div class="flex items-center gap-2">
             <Terminal class="w-5 h-5 text-[var(--brand-teal-1)]" />
-            <CardTitle>Log Stream</CardTitle>
+            <CardTitle>Log Entries</CardTitle>
           </div>
         </CardHeader>
         <CardContent class="p-0">
-          <div
-            ref={logContainerRef}
-            class="h-[600px] overflow-y-auto font-mono text-xs bg-[var(--background-primary)] rounded-b-lg"
-          >
+          <div class="h-[600px] overflow-y-auto font-mono text-xs bg-[var(--background-primary)] rounded-b-lg">
             <Show when={isLoading()}>
               <div class="p-4 text-[var(--text-secondary)]">Loading logs...</div>
             </Show>
 
             <Show when={!isLoading() && filteredLogs().length === 0}>
-              <div class="p-4 text-[var(--text-secondary)]">No logs to display</div>
+              <div class="p-4 text-[var(--text-secondary)]">No log entries to display</div>
             </Show>
 
             <For each={filteredLogs()}>
-              {(log) => (
-                <div
-                  class={`px-4 py-1.5 border-b border-[var(--card-border)]/30 hover:bg-[var(--background-secondary)] ${getLevelBg(log.level)}`}
-                >
-                  <span class="text-[var(--text-tertiary)] mr-3">{formatTime(log.timestamp)}</span>
-                  <span class={`uppercase font-semibold mr-3 w-12 inline-block ${getLevelColor(log.level)}`}>
-                    {log.level}
+              {(entry) => (
+                <div class="px-4 py-1.5 border-b border-[var(--card-border)]/30 hover:bg-[var(--background-secondary)]">
+                  <span class="text-[var(--text-tertiary)] mr-3">{formatTime(entry.createdAt)}</span>
+                  <span class={`uppercase font-semibold mr-3 w-16 inline-block ${getTypeColor(entry.type)}`}>
+                    {entry.type}
                   </span>
-                  <span class="text-[var(--text-primary)]">{log.message}</span>
+                  <span class="text-[var(--text-primary)] mr-3">{entry.action}</span>
+                  <Show when={entry.details}>
+                    <span class="text-[var(--text-tertiary)]">{entry.details}</span>
+                  </Show>
                 </div>
               )}
             </For>

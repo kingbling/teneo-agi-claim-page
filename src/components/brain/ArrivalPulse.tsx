@@ -2,7 +2,7 @@
  * ArrivalPulse - Visual pulse effect when a ship arrives at a synapse
  *
  * Creates an expanding ring pulse at the ship's position when it transitions
- * from 'deploying' to 'solving' state.
+ * from 'traveling' to 'solving' state.
  */
 
 import { onMount, onCleanup, createEffect, type Component } from 'solid-js'
