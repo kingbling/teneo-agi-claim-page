@@ -9,7 +9,7 @@ import { type Component, Show } from 'solid-js'
 import { A } from '@solidjs/router'
 import { HelpCircle, Wallet, Zap, Ship, Calendar } from 'lucide-solid'
 import { useWebSocketConnection } from '@/hooks'
-import { userStore, shipStore, eventStore } from '@/stores'
+import { userStore, shipStore, eventStore, teneoStore } from '@/stores'
 import { formatPoints } from '@/types/game'
 import { cn } from '@/lib/utils'
 
@@ -46,6 +46,16 @@ export const DashboardHeader: Component<DashboardHeaderProps> = (props) => {
 
         {/* Right side */}
         <div class="flex items-center gap-3">
+          {/* Teneo Points */}
+          <Show when={teneoStore.isLinked}>
+            <div class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--background-secondary)] border border-[var(--card-border)]">
+              <span class="text-xs font-medium text-[var(--text-primary)]">
+                {formatPoints(teneoStore.pointsTotal)}
+              </span>
+              <span class="text-[10px] text-[var(--text-muted)]">TP</span>
+            </div>
+          </Show>
+
           {/* $AGI Earned */}
           <Show when={userStore.totalAgiEarned > 0}>
             <div class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--background-secondary)] border border-[var(--card-border)]">

@@ -36,7 +36,7 @@ func (q *Queries) ClearUserAuthNonce(ctx context.Context, id string) error {
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (id, wallet, tier, staked_amount, points, total_loot_earned, created_at, user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned, lottery_tickets, nft_count, max_ships, is_admin)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-RETURNING id, wallet, tier, staked_amount, points, total_loot_earned, created_at, user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned, lottery_tickets, nft_count, max_ships, auth_nonce, auth_nonce_issued_at, is_admin, banned_at, ban_reason
+RETURNING id, wallet, tier, staked_amount, points, total_loot_earned, created_at, user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned, lottery_tickets, nft_count, max_ships, auth_nonce, auth_nonce_issued_at, is_admin, banned_at, ban_reason, teneo_user_id, teneo_points, teneo_linked_at
 `
 
 type CreateUserParams struct {
@@ -99,6 +99,9 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.IsAdmin,
 		&i.BannedAt,
 		&i.BanReason,
+		&i.TeneoUserID,
+		&i.TeneoPoints,
+		&i.TeneoLinkedAt,
 	)
 	return i, err
 }
@@ -189,7 +192,7 @@ func (q *Queries) GetTopUsersByColumn(ctx context.Context, limit int32) ([]GetTo
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, wallet, tier, staked_amount, points, total_loot_earned, created_at, user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned, lottery_tickets, nft_count, max_ships, auth_nonce, auth_nonce_issued_at, is_admin, banned_at, ban_reason FROM users WHERE id = $1
+SELECT id, wallet, tier, staked_amount, points, total_loot_earned, created_at, user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned, lottery_tickets, nft_count, max_ships, auth_nonce, auth_nonce_issued_at, is_admin, banned_at, ban_reason, teneo_user_id, teneo_points, teneo_linked_at FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
@@ -216,6 +219,9 @@ func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
 		&i.IsAdmin,
 		&i.BannedAt,
 		&i.BanReason,
+		&i.TeneoUserID,
+		&i.TeneoPoints,
+		&i.TeneoLinkedAt,
 	)
 	return i, err
 }
@@ -238,7 +244,7 @@ func (q *Queries) GetUserAdminInfo(ctx context.Context, id string) (GetUserAdmin
 }
 
 const getUserByWallet = `-- name: GetUserByWallet :one
-SELECT id, wallet, tier, staked_amount, points, total_loot_earned, created_at, user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned, lottery_tickets, nft_count, max_ships, auth_nonce, auth_nonce_issued_at, is_admin, banned_at, ban_reason FROM users WHERE wallet = $1
+SELECT id, wallet, tier, staked_amount, points, total_loot_earned, created_at, user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned, lottery_tickets, nft_count, max_ships, auth_nonce, auth_nonce_issued_at, is_admin, banned_at, ban_reason, teneo_user_id, teneo_points, teneo_linked_at FROM users WHERE wallet = $1
 `
 
 func (q *Queries) GetUserByWallet(ctx context.Context, wallet string) (User, error) {
@@ -265,6 +271,9 @@ func (q *Queries) GetUserByWallet(ctx context.Context, wallet string) (User, err
 		&i.IsAdmin,
 		&i.BannedAt,
 		&i.BanReason,
+		&i.TeneoUserID,
+		&i.TeneoPoints,
+		&i.TeneoLinkedAt,
 	)
 	return i, err
 }
@@ -375,6 +384,17 @@ func (q *Queries) GetUserLevelDistribution(ctx context.Context) ([]GetUserLevelD
 	return items, nil
 }
 
+const getUserTeneoID = `-- name: GetUserTeneoID :one
+SELECT teneo_user_id FROM users WHERE id = $1
+`
+
+func (q *Queries) GetUserTeneoID(ctx context.Context, id string) (*string, error) {
+	row := q.db.QueryRow(ctx, getUserTeneoID, id)
+	var teneo_user_id *string
+	err := row.Scan(&teneo_user_id)
+	return teneo_user_id, err
+}
+
 const incrementUserAGI = `-- name: IncrementUserAGI :exec
 UPDATE users SET total_agi_earned = COALESCE(total_agi_earned, 0) + $2 WHERE id = $1
 `
@@ -412,8 +432,29 @@ func (q *Queries) IncrementUserPoints(ctx context.Context, arg IncrementUserPoin
 	return err
 }
 
+const linkTeneoUser = `-- name: LinkTeneoUser :exec
+UPDATE users SET teneo_user_id = $2, teneo_points = $3, teneo_linked_at = $4 WHERE id = $1
+`
+
+type LinkTeneoUserParams struct {
+	ID            string  `json:"id"`
+	TeneoUserID   *string `json:"teneo_user_id"`
+	TeneoPoints   float64 `json:"teneo_points"`
+	TeneoLinkedAt *int64  `json:"teneo_linked_at"`
+}
+
+func (q *Queries) LinkTeneoUser(ctx context.Context, arg LinkTeneoUserParams) error {
+	_, err := q.db.Exec(ctx, linkTeneoUser,
+		arg.ID,
+		arg.TeneoUserID,
+		arg.TeneoPoints,
+		arg.TeneoLinkedAt,
+	)
+	return err
+}
+
 const listUsers = `-- name: ListUsers :many
-SELECT id, wallet, tier, staked_amount, points, total_loot_earned, created_at, user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned, lottery_tickets, nft_count, max_ships, auth_nonce, auth_nonce_issued_at, is_admin, banned_at, ban_reason FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2
+SELECT id, wallet, tier, staked_amount, points, total_loot_earned, created_at, user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned, lottery_tickets, nft_count, max_ships, auth_nonce, auth_nonce_issued_at, is_admin, banned_at, ban_reason, teneo_user_id, teneo_points, teneo_linked_at FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2
 `
 
 type ListUsersParams struct {
@@ -451,6 +492,9 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]User, e
 			&i.IsAdmin,
 			&i.BannedAt,
 			&i.BanReason,
+			&i.TeneoUserID,
+			&i.TeneoPoints,
+			&i.TeneoLinkedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -497,6 +541,20 @@ UPDATE users SET banned_at = NULL, ban_reason = NULL WHERE id = $1
 
 func (q *Queries) UnbanUser(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, unbanUser, id)
+	return err
+}
+
+const updateTeneoPoints = `-- name: UpdateTeneoPoints :exec
+UPDATE users SET teneo_points = $2 WHERE id = $1
+`
+
+type UpdateTeneoPointsParams struct {
+	ID          string  `json:"id"`
+	TeneoPoints float64 `json:"teneo_points"`
+}
+
+func (q *Queries) UpdateTeneoPoints(ctx context.Context, arg UpdateTeneoPointsParams) error {
+	_, err := q.db.Exec(ctx, updateTeneoPoints, arg.ID, arg.TeneoPoints)
 	return err
 }
 

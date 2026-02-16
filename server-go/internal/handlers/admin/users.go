@@ -28,16 +28,30 @@ func ListUsers(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "50"))
 	search := c.Query("search", "")
+	filter := c.Query("filter", "")
 	offset := (page - 1) * limit
 
 	var users []generated.User
 	var total int64
 
+	// Build filter clause
+	filterClause := ""
+	switch filter {
+	case "admin":
+		filterClause = "is_admin = true"
+	case "banned":
+		filterClause = "banned_at IS NOT NULL"
+	}
+
 	if search != "" {
-		// Use raw SQL for search since sqlc ListUsers doesn't support dynamic WHERE
 		searchPattern := "%" + search + "%"
+		whereClause := "(wallet ILIKE $1 OR wallet ILIKE $2)"
+		if filterClause != "" {
+			whereClause += " AND " + filterClause
+		}
+
 		countRow := store.Pool.QueryRow(ctx,
-			"SELECT COUNT(*) FROM users WHERE wallet ILIKE $1 OR wallet ILIKE $2",
+			"SELECT COUNT(*) FROM users WHERE "+whereClause,
 			searchPattern, searchPattern)
 		if err := countRow.Scan(&total); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to count users"})
@@ -48,9 +62,44 @@ func ListUsers(c *fiber.Ctx) error {
 			        user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned,
 			        lottery_tickets, nft_count, max_ships, auth_nonce, auth_nonce_issued_at,
 			        is_admin, banned_at, ban_reason
-			 FROM users WHERE wallet ILIKE $1 OR wallet ILIKE $2
+			 FROM users WHERE `+whereClause+`
 			 ORDER BY created_at DESC LIMIT $3 OFFSET $4`,
 			searchPattern, searchPattern, limit, offset)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to query users"})
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var u generated.User
+			if err := rows.Scan(
+				&u.ID, &u.Wallet, &u.Tier, &u.StakedAmount, &u.Points, &u.TotalLootEarned,
+				&u.CreatedAt, &u.UserLevel, &u.UsdcSpent, &u.AgenticBalance, &u.TotalAgiEarned,
+				&u.TotalTeneoEarned, &u.LotteryTickets, &u.NftCount, &u.MaxShips,
+				&u.AuthNonce, &u.AuthNonceIssuedAt, &u.IsAdmin, &u.BannedAt, &u.BanReason,
+			); err != nil {
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to scan user"})
+			}
+			users = append(users, u)
+		}
+		if err := rows.Err(); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to iterate users"})
+		}
+	} else if filterClause != "" {
+		// Filter without search — use raw SQL for dynamic WHERE
+		countRow := store.Pool.QueryRow(ctx,
+			"SELECT COUNT(*) FROM users WHERE "+filterClause)
+		if err := countRow.Scan(&total); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to count users"})
+		}
+
+		rows, err := store.Pool.Query(ctx,
+			`SELECT id, wallet, tier, staked_amount, points, total_loot_earned, created_at,
+			        user_level, usdc_spent, agentic_balance, total_agi_earned, total_teneo_earned,
+			        lottery_tickets, nft_count, max_ships, auth_nonce, auth_nonce_issued_at,
+			        is_admin, banned_at, ban_reason
+			 FROM users WHERE `+filterClause+`
+			 ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to query users"})
 		}
@@ -271,6 +320,9 @@ func BanUser(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to ban user"})
 	}
 
+	adminID, _ := c.Locals("userId").(string)
+	WriteLog(store.Pool, "user", "ban_user", req.Reason, adminID, userID)
+
 	return c.JSON(fiber.Map{"success": true, "message": "User banned"})
 }
 
@@ -283,6 +335,9 @@ func UnbanUser(c *fiber.Ctx) error {
 	if err := store.Queries.UnbanUser(ctx, userID); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to unban user"})
 	}
+
+	adminID, _ := c.Locals("userId").(string)
+	WriteLog(store.Pool, "user", "unban_user", "", adminID, userID)
 
 	return c.JSON(fiber.Map{"success": true, "message": "User unbanned"})
 }
@@ -333,6 +388,9 @@ func GrantTokens(c *fiber.Ctx) error {
 	default:
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid token type"})
 	}
+
+	adminID, _ := c.Locals("userId").(string)
+	WriteLog(store.Pool, "user", "grant_tokens", fmt.Sprintf("%s:%.0f", tokenType, req.Amount), adminID, userID)
 
 	return c.JSON(fiber.Map{"success": true, "granted": req.Amount, "type": tokenType})
 }

@@ -12,6 +12,7 @@ import (
 	"teneo/server-go/internal/database"
 	"teneo/server-go/internal/database/generated"
 	"teneo/server-go/internal/dto"
+	"teneo/server-go/internal/teneo"
 	wshub "teneo/server-go/internal/websocket"
 
 	"github.com/gofiber/fiber/v2"
@@ -279,7 +280,7 @@ func GetUserShips(c *fiber.Ctx, store *database.Store) error {
 
 // DeployShip deploys a ship directly to a synapse (starts traveling immediately)
 // If no synapseId is provided, positions the ship at the given coordinates but keeps it idle
-func DeployShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *config.Config) error {
+func DeployShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *config.Config, teneoClient *teneo.Client) error {
 	ctx := c.Context()
 	shipID := c.Params("id")
 
@@ -342,20 +343,32 @@ func DeployShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *config
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to look up user"})
 		}
 
-		if user.Points < params.TravelCost {
-			return c.Status(400).JSON(fiber.Map{
-				"error":     "Insufficient points for travel",
-				"required":  params.TravelCost,
-				"available": user.Points,
-			})
-		}
-
-		// Deduct travel cost from user's points
-		if err := store.Queries.DecrementUserPoints(ctx, generated.DecrementUserPointsParams{
-			ID:     agent.OwnerID,
-			Points: params.TravelCost,
-		}); err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct travel cost"})
+		// Deduct travel cost: use Teneo community points if linked, otherwise local points
+		if teneoClient != nil && user.TeneoUserID != nil {
+			if user.TeneoPoints < params.TravelCost {
+				return c.Status(400).JSON(fiber.Map{
+					"error":     "Insufficient Teneo points for travel",
+					"required":  params.TravelCost,
+					"available": user.TeneoPoints,
+				})
+			}
+			if err := burnTeneoPoints(ctx, store, teneoClient, hub, agent.OwnerID, params.TravelCost, "travel"); err != nil {
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct Teneo points: " + err.Error()})
+			}
+		} else {
+			if user.Points < params.TravelCost {
+				return c.Status(400).JSON(fiber.Map{
+					"error":     "Insufficient points for travel",
+					"required":  params.TravelCost,
+					"available": user.Points,
+				})
+			}
+			if err := store.Queries.DecrementUserPoints(ctx, generated.DecrementUserPointsParams{
+				ID:     agent.OwnerID,
+				Points: params.TravelCost,
+			}); err != nil {
+				return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct travel cost"})
+			}
 		}
 
 		// Update agent to traveling state
@@ -462,7 +475,7 @@ func RecallShip(c *fiber.Ctx, store *database.Store) error {
 }
 
 // TravelToSynapse starts traveling to a specific synapse
-func TravelToSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *config.Config) error {
+func TravelToSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *config.Config, teneoClient *teneo.Client) error {
 	ctx := c.Context()
 	shipID := c.Params("id")
 
@@ -527,20 +540,32 @@ func TravelToSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *c
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to look up user"})
 	}
 
-	if user.Points < params.TravelCost {
-		return c.Status(400).JSON(fiber.Map{
-			"error":     "Insufficient points for travel",
-			"required":  params.TravelCost,
-			"available": user.Points,
-		})
-	}
-
-	// Deduct travel cost from user's points
-	if err := store.Queries.DecrementUserPoints(ctx, generated.DecrementUserPointsParams{
-		ID:     agent.OwnerID,
-		Points: params.TravelCost,
-	}); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct travel cost"})
+	// Deduct travel cost: use Teneo community points if linked, otherwise local points
+	if teneoClient != nil && user.TeneoUserID != nil {
+		if user.TeneoPoints < params.TravelCost {
+			return c.Status(400).JSON(fiber.Map{
+				"error":     "Insufficient Teneo points for travel",
+				"required":  params.TravelCost,
+				"available": user.TeneoPoints,
+			})
+		}
+		if err := burnTeneoPoints(ctx, store, teneoClient, hub, agent.OwnerID, params.TravelCost, "travel"); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct Teneo points: " + err.Error()})
+		}
+	} else {
+		if user.Points < params.TravelCost {
+			return c.Status(400).JSON(fiber.Map{
+				"error":     "Insufficient points for travel",
+				"required":  params.TravelCost,
+				"available": user.Points,
+			})
+		}
+		if err := store.Queries.DecrementUserPoints(ctx, generated.DecrementUserPointsParams{
+			ID:     agent.OwnerID,
+			Points: params.TravelCost,
+		}); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct travel cost"})
+		}
 	}
 
 	// Update agent to traveling state

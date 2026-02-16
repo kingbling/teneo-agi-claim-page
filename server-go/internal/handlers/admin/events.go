@@ -137,6 +137,9 @@ func CreateEvent(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create event"})
 	}
 
+	adminID, _ := c.Locals("userId").(string)
+	WriteLog(store.Pool, "event", "create_event", req.Name, adminID, event.ID)
+
 	return c.JSON(fiber.Map{"success": true, "id": event.ID})
 }
 
@@ -233,6 +236,9 @@ func DeleteEvent(c *fiber.Ctx) error {
 	if err := store.Queries.DeleteEvent(ctx, eventID); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete event"})
 	}
+
+	adminID, _ := c.Locals("userId").(string)
+	WriteLog(store.Pool, "event", "delete_event", "", adminID, eventID)
 
 	return c.JSON(fiber.Map{"success": true})
 }

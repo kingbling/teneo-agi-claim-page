@@ -24,13 +24,13 @@ import { FUNCTIONAL_BRAIN_REGIONS } from '@/constants/brainRegions'
 import { CAMERA_CONFIG } from '@/components/brain/core/brainConstants'
 import { filterByRegion } from '@/lib/regionFilter'
 import {
-  SYNAPSE_CONFIG,
-  SYNAPSE_TYPE_COLORS,
+  SYNAPSE_COLORS,
   formatPoints,
   formatETA,
   getSynapseTypeLabel,
   type SynapseType,
 } from '@/types/game'
+import { configStore } from '@/stores/configStore'
 import { getDominantSynapseType } from '@/utils/synapseUtils'
 import { log, fmt } from '@/utils/logger'
 
@@ -61,6 +61,9 @@ export const DiscoveryDashboard: Component = () => {
 
   // Zoom info for LOD management
   const [zoomInfo, setZoomInfo] = createSignal({ distance: 5, lod: 1 })
+
+  // Follow trigger — incremented on every ship click to force re-zoom even for same ship
+  const [followTrigger, setFollowTrigger] = createSignal(0)
 
   // Region selection state
   const [selectedRegionIndex, setSelectedRegionIndex] = createSignal<number>(-1)
@@ -190,7 +193,7 @@ export const DiscoveryDashboard: Component = () => {
     // Camera always orbits brain center — no zoom animation needed
   }
 
-  // Handle ship click - just select the ship
+  // Handle ship click - select the ship and trigger camera follow
   const handleShipClick = (ship: Ship) => {
     log.dashboard.info('Ship clicked:', {
       id: fmt.shortId(ship.id),
@@ -199,6 +202,7 @@ export const DiscoveryDashboard: Component = () => {
       position: fmt.pos(ship.positionX, ship.positionY, ship.positionZ),
     })
     shipStore.selectShip(ship.id)
+    setFollowTrigger(n => n + 1)
   }
 
   // Login handler - called when user successfully authenticates
@@ -248,6 +252,7 @@ export const DiscoveryDashboard: Component = () => {
           onCameraUpdate={handleCameraUpdate}
           showIdleShips={uiStore.showIdleShips}
           selectedShipId={shipStore.selectedShipId}
+          followTrigger={followTrigger()}
           synapseTypeFilter={synapseTypeFilter() === 'all' ? null : synapseTypeFilter()}
           explorationTarget={shipStore.explorationTarget}
         />
@@ -262,8 +267,9 @@ export const DiscoveryDashboard: Component = () => {
               const ship = shipStore.selectedShip
               const target = shipStore.explorationTarget
               if (ship && target) {
-                const config = SYNAPSE_CONFIG[target.synapseType]
-                const pointsPerMin = Math.floor(config.maxPerMin / 2) || 50
+                const tc = configStore.getSynapseType(target.synapseType)
+                const maxPerMin = tc ? Math.max(100, tc.pointsRequired / 60) : 100
+                const pointsPerMin = Math.floor(maxPerMin / 2) || 50
                 const success = await shipStore.travelToSynapse(ship.id, target.id, pointsPerMin)
                 if (success) {
                   setExplorePromptData(null)
@@ -369,12 +375,10 @@ export const DiscoveryDashboard: Component = () => {
           const target = deployTarget()!
           const cluster = target.cluster
           const dominantType = getDominantSynapseType(cluster.typeCounts)
-          const config = SYNAPSE_CONFIG[dominantType]
-          const typeColor = SYNAPSE_TYPE_COLORS[dominantType]
+          const typeConfig = configStore.getSynapseType(dominantType)
+          const typeColor = SYNAPSE_COLORS[dominantType]?.rgb || { r: 0.5, g: 0.7, b: 1.0 }
           const regionName = getRegionFromPosition(cluster.positionX, cluster.positionY, cluster.positionZ)
-          const unlockLevel = SYNAPSE_CONFIG[dominantType].unlockUserLevel
-          const userLevel = userStore.userLevel
-          const isLocked = userLevel < unlockLevel
+          const isLocked = false  // No level gating
           const idleShips = shipStore.idleShips
 
           return (
@@ -415,37 +419,34 @@ export const DiscoveryDashboard: Component = () => {
                   </div>
                   <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
                     <p class="text-xs text-gray-400">Points Required</p>
-                    <p class="text-lg font-bold text-cyan-400">{formatPoints(config.points)}</p>
+                    <p class="text-lg font-bold text-cyan-400">{formatPoints(typeConfig?.pointsRequired)}</p>
                   </div>
                   <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
-                    <p class="text-xs text-gray-400">Base ETA</p>
-                    <p class="text-lg font-bold text-purple-400">{formatETA(config.etaMinutes)}</p>
+                    <p class="text-xs text-gray-400">Reward</p>
+                    <p class="text-lg font-bold text-purple-400">{typeConfig?.agiRewardMin}–{typeConfig?.agiRewardMax} AGI</p>
                   </div>
                 </div>
 
                 {/* Rewards section */}
+                {typeConfig && (
                 <div class="p-3 rounded-lg bg-gradient-to-r from-amber-900/30 to-purple-900/30 border border-amber-500/30 mb-4">
                   <p class="text-xs text-gray-400 mb-2">Completion Rewards</p>
                   <div class="flex justify-between items-center">
                     <div>
-                      <span class="text-amber-400 font-bold">{formatPoints(config.agiReward)}</span>
+                      <span class="text-amber-400 font-bold">{typeConfig.agiRewardMin}–{typeConfig.agiRewardMax}</span>
                       <span class="text-xs text-gray-400 ml-1">$AGI</span>
                     </div>
-                    <div class="px-2 py-1 rounded text-xs font-medium" classList={{
-                      'bg-green-500/20 text-green-400': config.distribution === 'fair_share',
-                      'bg-amber-500/20 text-amber-400': config.distribution === 'lottery',
-                    }}>
-                      {config.distribution === 'fair_share' ? 'Fair Share' : 'Lottery'}
+                    <div class="px-2 py-1 rounded text-xs font-medium bg-green-500/20 text-green-400">
+                      Fair Share
                     </div>
                   </div>
                 </div>
+                )}
 
                 {/* Lock warning */}
                 <Show when={isLocked}>
                   <div class="p-3 rounded-lg bg-red-900/20 border border-red-500/30 mb-4">
-                    <p class="text-sm text-red-400">
-                      🔒 Requires User Level {unlockLevel} (You: L{userLevel})
-                    </p>
+                    <p class="text-sm text-red-400">Locked</p>
                   </div>
                 </Show>
 
@@ -474,8 +475,9 @@ export const DiscoveryDashboard: Component = () => {
                           target.cluster.positionZ
                         )
                         if (synapse) {
-                          const synapseConfig = SYNAPSE_CONFIG[synapse.synapseType]
-                          const pointsPerMin = Math.floor(synapseConfig.maxPerMin / 2) || 50
+                          const stc = configStore.getSynapseType(synapse.synapseType)
+                          const sMaxPerMin = stc ? Math.max(100, stc.pointsRequired / 60) : 100
+                          const pointsPerMin = Math.floor(sMaxPerMin / 2) || 50
                           const success = await shipStore.travelToSynapse(ship.id, synapse.id, pointsPerMin)
                           if (success) {
                             setDeployTarget(null)

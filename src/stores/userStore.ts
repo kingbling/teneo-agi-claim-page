@@ -6,7 +6,6 @@ import {
   calculateUserLevel,
   getUserLevelConfig,
   getMaxShipsForUserLevel,
-  getUnlockedSynapseTypes,
 } from '@/types/game'
 import { authStore } from './authStore'
 import { shipStore } from './shipStore'
@@ -82,7 +81,7 @@ const initialState: UserState = {
   currentShipCount: 0,
 
   // Unlocks
-  unlockedSynapseTypes: ['minor', 'complex', 'deep', 'core'],  // L1 unlocks all non-lottery types
+  unlockedSynapseTypes: [],  // All types unlocked (populated from configStore)
 
   // UI State
   isLoading: false,
@@ -142,7 +141,7 @@ function createUserStore() {
         currentShipCount: 0, // Will be set by shipStore
 
         // Unlocks (from User Level)
-        unlockedSynapseTypes: getUnlockedSynapseTypes(userLevel),
+        unlockedSynapseTypes: [],  // All types unlocked
 
         isLoading: false,
       })
@@ -193,7 +192,7 @@ function createUserStore() {
         userLevel: newLevel,
         pointsPerMinMultiplier: levelConfig.multiplier,
         maxShips: getMaxShipsForUserLevel(newLevel),
-        unlockedSynapseTypes: getUnlockedSynapseTypes(newLevel),
+        unlockedSynapseTypes: [],  // All types unlocked
       })
 
       return true

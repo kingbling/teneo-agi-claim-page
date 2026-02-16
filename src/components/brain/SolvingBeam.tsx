@@ -12,7 +12,8 @@ import { onMount, onCleanup, createEffect, type Component } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { Ship } from '@/stores/shipStore'
-import { SYNAPSE_CONFIG, type SynapseType } from '@/types/game'
+import type { SynapseType } from '@/types/game'
+import { configStore } from '@/stores/configStore'
 import { computeOrbitPosition } from '@/utils/orbitHelper'
 
 interface SolvingBeamProps {
@@ -31,19 +32,23 @@ const BEAM_PARTICLES = 30 // Particles flowing along the beam
  * Minor (60min) = fastest, Unique (30 days) = slowest
  */
 function getAnimationSpeedMultiplier(synapseType: SynapseType | undefined): number {
-  if (!synapseType) return 1.0 // Default speed for minor
+  if (!synapseType) return 1.0
 
-  const config = SYNAPSE_CONFIG[synapseType]
-  const etaMinutes = config.etaMinutes
+  const typeConfig = configStore.getSynapseType(synapseType)
+  if (!typeConfig) return 1.0
 
-  // Base reference: minor at 60 minutes = 1.0x speed
-  // Scale inversely with sqrt of ETA ratio for perceptible but not extreme differences
-  // minor (60): 1.0, complex (720): 0.29, deep (2880): 0.14, unique (43200): 0.037
-  const baseEta = SYNAPSE_CONFIG.minor.etaMinutes // 60
+  // Derive ETA from pointsRequired / maxPerMin (same formula as engine)
+  const maxPerMin = Math.max(100, typeConfig.pointsRequired / 60)
+  const etaMinutes = typeConfig.pointsRequired / maxPerMin
+
+  // Base reference: first type's ETA = 1.0x speed
+  const types = configStore.synapseTypes
+  const firstType = types[0]
+  const baseMaxPerMin = firstType ? Math.max(100, firstType.pointsRequired / 60) : 100
+  const baseEta = firstType ? firstType.pointsRequired / baseMaxPerMin : 60
   const ratio = baseEta / etaMinutes
 
-  // Use sqrt to make the scaling more gradual
-  // Clamp minimum to 0.1x to keep animation visible
+  // Use sqrt for gradual scaling, clamp minimum to 0.1x
   return Math.max(0.1, Math.sqrt(ratio))
 }
 

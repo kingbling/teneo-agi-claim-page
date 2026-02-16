@@ -32,3 +32,5 @@ server-go/data/
 
 # Go binary
 server-go/bin/
+# Nightshift plan artifacts (keep out of version control)
+.nightshift-plan

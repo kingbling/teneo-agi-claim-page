@@ -16,6 +16,18 @@ export const AdminGuard: ParentComponent = (props) => {
   const navigate = useNavigate()
 
   onMount(async () => {
+    // Wait for auth to finish initializing (handles page refresh / direct nav)
+    if (!authStore.isInitialized) {
+      await new Promise<void>((resolve) => {
+        const interval = setInterval(() => {
+          if (authStore.isInitialized) {
+            clearInterval(interval)
+            resolve()
+          }
+        }, 50)
+      })
+    }
+
     // Check if user is logged in
     if (!authStore.isAuthenticated) {
       navigate('/', { replace: true })

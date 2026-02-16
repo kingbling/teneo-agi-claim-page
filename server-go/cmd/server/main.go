@@ -17,6 +17,7 @@ import (
 	"teneo/server-go/internal/handlers/admin"
 	"teneo/server-go/internal/middleware"
 	"teneo/server-go/internal/simulation"
+	"teneo/server-go/internal/teneo"
 	wshub "teneo/server-go/internal/websocket"
 
 	"github.com/gofiber/fiber/v2"
@@ -40,6 +41,13 @@ func main() {
 	// Create WebSocket hub
 	hub := wshub.NewHub()
 	go hub.Run()
+
+	// Create Teneo community API client (optional)
+	var teneoClient *teneo.Client
+	if cfg.TeneoCommunityAPIURL != "" {
+		teneoClient = teneo.NewClient(cfg.TeneoCommunityAPIURL, cfg.TeneoCommunityAPIKey)
+		log.Printf("Teneo community API configured: %s", cfg.TeneoCommunityAPIURL)
+	}
 
 	// Create and start simulation engine
 	engine := simulation.New(store, hub, cfg)
@@ -82,6 +90,9 @@ func main() {
 
 	// Start engine in background
 	go engine.Start()
+
+	// Build synapse type index for binary encoding
+	handlers.BuildSynapseTypeIndexMap(store)
 
 	// Create Fiber app
 	app := fiber.New(fiber.Config{
@@ -147,16 +158,16 @@ func main() {
 
 		// Read pump with message handler
 		client.ReadPump(func(message []byte) {
-			handleWebSocketMessage(client, message, hub, store)
+			handleWebSocketMessage(client, message, hub, store, teneoClient)
 		})
 	}))
 
 	// Ships routes
 	ships := app.Group("/api/ships")
 	ships.Post("/", func(c *fiber.Ctx) error { return handlers.CreateShip(c, store) })
-	ships.Post("/:id/deploy", func(c *fiber.Ctx) error { return handlers.DeployShip(c, store, hub, cfg) })
+	ships.Post("/:id/deploy", func(c *fiber.Ctx) error { return handlers.DeployShip(c, store, hub, cfg, teneoClient) })
 	ships.Post("/:id/recall", func(c *fiber.Ctx) error { return handlers.RecallShip(c, store) })
-	ships.Post("/:id/travel-to-synapse", func(c *fiber.Ctx) error { return handlers.TravelToSynapse(c, store, hub, cfg) })
+	ships.Post("/:id/travel-to-synapse", func(c *fiber.Ctx) error { return handlers.TravelToSynapse(c, store, hub, cfg, teneoClient) })
 	ships.Post("/:id/autopilot", func(c *fiber.Ctx) error { return handlers.ToggleAutopilot(c, store) })
 
 	// Users routes
@@ -173,6 +184,14 @@ func main() {
 	synapses.Post("/:id/explore", func(c *fiber.Ctx) error { return handlers.ExploreSynapse(c, store, hub) })
 	synapses.Post("/:id/leave", func(c *fiber.Ctx) error { return handlers.LeaveSynapse(c, store, hub) })
 	synapses.Post("/:id/rate", func(c *fiber.Ctx) error { return handlers.UpdateExplorationRate(c, store) })
+
+	// Teneo integration routes
+	teneoGroup := app.Group("/api/teneo")
+	teneoGroup.Post("/link", handlers.TeneoLink(store, teneoClient))
+	teneoGroup.Get("/balance", handlers.TeneoBalance(store, teneoClient))
+
+	// Synapse types (public)
+	app.Get("/api/synapse-types", func(c *fiber.Ctx) error { return handlers.ListPublicSynapseTypes(c, store) })
 
 	// World state
 	app.Get("/api/world", func(c *fiber.Ctx) error { return handlers.GetWorldState(c, store) })
@@ -236,6 +255,16 @@ func main() {
 	adminGroup.Post("/events/:id/activate", admin.ActivateEvent)
 	adminGroup.Post("/events/:id/deactivate", admin.DeactivateEvent)
 
+	// Admin - Synapse Types
+	adminGroup.Get("/synapse-types", admin.ListSynapseTypes)
+	adminGroup.Get("/synapse-types/:id", admin.GetSynapseTypeDetail)
+	adminGroup.Post("/synapse-types", admin.CreateSynapseType)
+	adminGroup.Patch("/synapse-types/:id", admin.UpdateSynapseType)
+	adminGroup.Delete("/synapse-types/:id", admin.DeleteSynapseType)
+	adminGroup.Post("/synapse-types/:id/generate", admin.GenerateSynapses)
+	adminGroup.Post("/synapse-types/:id/model", admin.UploadSynapseTypeModel)
+	adminGroup.Post("/synapse-types/wipe", admin.WipeSynapses)
+
 	// Admin - Logs
 	adminGroup.Get("/logs", admin.GetLogs)
 	adminGroup.Delete("/logs", admin.ClearLogs)
@@ -280,7 +309,7 @@ func generateClientID() string {
 	return fmt.Sprintf("client-%d", time.Now().UnixNano())
 }
 
-func handleWebSocketMessage(client *wshub.Client, message []byte, hub *wshub.Hub, store *database.Store) {
+func handleWebSocketMessage(client *wshub.Client, message []byte, hub *wshub.Hub, store *database.Store, teneoClient *teneo.Client) {
 	var msg dto.ClientMessage
 	if err := json.Unmarshal(message, &msg); err != nil {
 		log.Printf("[WS] Invalid message format from client %s", client.ID)
@@ -315,6 +344,16 @@ func handleWebSocketMessage(client *wshub.Client, message []byte, hub *wshub.Hub
 
 		// Send user's ships
 		sendUserShips(client, store)
+
+		// Sync Teneo balance if linked
+		if teneoClient != nil {
+			go func() {
+				user, err := store.Queries.GetUser(context.Background(), userID)
+				if err == nil {
+					handlers.SyncTeneoBalance(context.Background(), store, teneoClient, hub, userID, user)
+				}
+			}()
+		}
 
 		log.Printf("[WS] Client %s authenticated as user %s", client.ID[:12], userID[:8])
 

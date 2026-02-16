@@ -197,22 +197,15 @@ func ExploreSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
 		})
 	}
 
-	// Get synapse config
-	synapseType := dto.SynapseType(space.SynapseType)
-	synapseConfig := dto.GetDefaultSynapseConfig()[synapseType]
+	// Derive max rate from synapse type config in DB
+	maxPerMin := int(space.PointsRequired) / 60
+	if maxPerMin < 100 {
+		maxPerMin = 100
+	}
 
-	// Check user level requirement
+	// Check user level
 	user, _ := store.Queries.GetUser(ctx, req.UserID)
 	userLevel := dto.CalculateUserLevel(user.UsdcSpent)
-	requiredLevel := synapseConfig.UnlockUserLevel
-
-	if userLevel < requiredLevel {
-		levelConfig := dto.GetDefaultUserLevelConfig()[requiredLevel]
-		return c.Status(403).JSON(fiber.Map{
-			"error": fmt.Sprintf("User level %d too low for %s synapse (requires level %d, $%.0f+ USDC spent)",
-				userLevel, synapseType, requiredLevel, levelConfig.MinUSDC),
-		})
-	}
 
 	// Check if synapse is already being explored
 	explorerCount, _ := store.Queries.GetSynapseExplorerCount(ctx, synapseID)
@@ -229,7 +222,7 @@ func ExploreSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
 		requestedRate = 100
 	}
 	boostedRate := int(requestedRate * levelMultiplier)
-	cappedRate := int(math.Min(float64(boostedRate), float64(synapseConfig.MaxPerMin)))
+	cappedRate := int(math.Min(float64(boostedRate), float64(maxPerMin)))
 
 	now := time.Now().UnixMilli()
 
@@ -434,9 +427,11 @@ func UpdateExplorationRate(c *fiber.Ctx, store *database.Store) error {
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Synapse not found"})
 	}
-	synapseType := dto.SynapseType(space.SynapseType)
-	synapseConfig := dto.GetDefaultSynapseConfig()[synapseType]
-	cappedRate := int(math.Min(req.PointsPerMin, float64(synapseConfig.MaxPerMin)))
+	maxPerMinRate := int(space.PointsRequired) / 60
+	if maxPerMinRate < 100 {
+		maxPerMinRate = 100
+	}
+	cappedRate := int(math.Min(req.PointsPerMin, float64(maxPerMinRate)))
 
 	// Get explorer and update rate
 	explorer, err := store.Queries.GetExplorerByShip(ctx, req.ShipID)
@@ -546,6 +541,11 @@ func GetBulkSynapses(c *fiber.Ctx, store *database.Store) error {
 	c.Set("Content-Encoding", "gzip")
 	c.Set("Cache-Control", "no-cache")
 
+	// Ensure synapse type index map is current
+	if synapseTypeIndexMap == nil {
+		BuildSynapseTypeIndexMap(store)
+	}
+
 	// Fetch all spaces ordered by ID for consistent indexing
 	spaces, err := store.Queries.GetBulkSpaces(ctx)
 	if err != nil {
@@ -583,21 +583,33 @@ func encodeState(s string) uint8 {
 	}
 }
 
-// encodeSynapseType converts synapse type string to uint8
+// synapseTypeIndexMap caches the type name → index mapping for binary encoding.
+// Built dynamically from DB-ordered synapse types.
+var synapseTypeIndexMap map[string]uint8
+
+// BuildSynapseTypeIndexMap loads synapse types from DB and builds the index map.
+// Called from GetBulkSynapses before encoding, and can be called on startup.
+func BuildSynapseTypeIndexMap(store *database.Store) {
+	ctx := context.Background()
+	types, err := store.Queries.ListSynapseTypes(ctx)
+	if err != nil {
+		return
+	}
+	m := make(map[string]uint8, len(types))
+	for i, t := range types {
+		m[t.Name] = uint8(i)
+	}
+	synapseTypeIndexMap = m
+}
+
+// encodeSynapseType converts synapse type string to uint8 using dynamic index map
 func encodeSynapseType(t string) uint8 {
-	types := map[string]uint8{
-		"minor":     0,
-		"complex":   1,
-		"deep":      2,
-		"core":      3,
-		"rare":      4,
-		"legendary": 5,
-		"unique":    6,
+	if synapseTypeIndexMap != nil {
+		if v, ok := synapseTypeIndexMap[t]; ok {
+			return v
+		}
 	}
-	if v, ok := types[t]; ok {
-		return v
-	}
-	return 0 // default to minor
+	return 0
 }
 
 // GetWorldState returns the current world state including clusters

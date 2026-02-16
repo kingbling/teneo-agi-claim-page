@@ -2,60 +2,54 @@ import { onMount, onCleanup, createEffect, createMemo, createSignal, type Compon
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { SynapseType, UserLevel } from '@/types/game'
-import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG, formatPoints, formatETA } from '@/types/game'
+import { SYNAPSE_COLORS, formatPoints, formatETA } from '@/types/game'
 import type { SynapseCluster, RawSynapseData } from '@/stores/shipStore'
+import { configStore } from '@/stores/configStore'
 import { SpatialOctree } from '@/utils/SpatialOctree'
 import { getDominantSynapseType } from '@/utils/synapseUtils'
 import { SYNAPSE_VERTEX_SHADER, SYNAPSE_FRAGMENT_SHADER } from './shaders/synapseShaders'
 import { log } from '@/utils/logger'
 
-// Synapse type priority for determining dominant type (rarity order)
-const SYNAPSE_TYPE_PRIORITY: Record<SynapseType, number> = {
-  minor: 1,
-  complex: 2,
-  deep: 3,
-  core: 4,
-  rare: 5,
-  legendary: 6,
-  unique: 7,
+// Dynamic helpers that derive from configStore.synapseTypes
+// All types are now unlocked (no level gating) — server removed level gating from backend
+
+// Get type index by name (for shader type uniform)
+function getSynapseTypeIndex(name: string): number {
+  const types = configStore.synapseTypes
+  const idx = types.findIndex(t => t.name === name)
+  return idx >= 0 ? idx : 0
 }
 
-// Phase 2.3: Brightness multipliers by rarity - expanded range for visual hierarchy
-// rare/legendary/unique exceed bloom threshold (0.75) to trigger glow
-const SYNAPSE_BRIGHTNESS_MULTIPLIERS: Record<SynapseType, number> = {
-  minor: 0.5,       // Muted background
-  complex: 0.6,     // Slightly brighter
-  deep: 0.7,        // Noticeable step up
-  core: 0.85,       // Getting bright
-  rare: 1.0,        // Full brightness
-  legendary: 1.2,   // EXCEEDS 1.0 → triggers bloom!
-  unique: 1.5,      // DRAMATICALLY bright → definite bloom
+// Get type name by index (for binary decode)
+function getSynapseTypeByIndex(index: number): string {
+  const types = configStore.synapseTypes
+  return types[index]?.name || types[0]?.name || 'minor'
 }
 
-// Size multipliers by synapse type - subtle visual hierarchy
-const SYNAPSE_SIZE_MULTIPLIERS: Record<SynapseType, number> = {
-  minor: 1.0,      // Base size
-  complex: 1.1,    // Slightly larger
-  deep: 1.2,       // A bit larger
-  core: 1.3,       // Noticeable
-  rare: 1.4,       // Slightly more
-  legendary: 1.5,  // Visible difference
-  unique: 1.6,     // Most prominent
+// Get color tuple for a synapse type
+function getSynapseColor(name: string): [number, number, number] {
+  const color = SYNAPSE_COLORS[name]
+  if (color) return [color.rgb.r, color.rgb.g, color.rgb.b]
+  return [0.5, 0.7, 1.0] // fallback blue
 }
 
-// Color mapping for 7 synapse types (RGB normalized from SYNAPSE_TYPE_COLORS)
-const SYNAPSE_COLOR_MAP: Record<SynapseType, [number, number, number]> = {
-  minor:     [SYNAPSE_TYPE_COLORS.minor.r, SYNAPSE_TYPE_COLORS.minor.g, SYNAPSE_TYPE_COLORS.minor.b],         // Blue
-  complex:   [SYNAPSE_TYPE_COLORS.complex.r, SYNAPSE_TYPE_COLORS.complex.g, SYNAPSE_TYPE_COLORS.complex.b],   // Purple
-  deep:      [SYNAPSE_TYPE_COLORS.deep.r, SYNAPSE_TYPE_COLORS.deep.g, SYNAPSE_TYPE_COLORS.deep.b],           // Teal
-  core:      [SYNAPSE_TYPE_COLORS.core.r, SYNAPSE_TYPE_COLORS.core.g, SYNAPSE_TYPE_COLORS.core.b],           // Gold
-  rare:      [SYNAPSE_TYPE_COLORS.rare.r, SYNAPSE_TYPE_COLORS.rare.g, SYNAPSE_TYPE_COLORS.rare.b],           // Red-pink
-  legendary: [SYNAPSE_TYPE_COLORS.legendary.r, SYNAPSE_TYPE_COLORS.legendary.g, SYNAPSE_TYPE_COLORS.legendary.b], // Bright magenta
-  unique:    [SYNAPSE_TYPE_COLORS.unique.r, SYNAPSE_TYPE_COLORS.unique.g, SYNAPSE_TYPE_COLORS.unique.b],     // Brilliant yellow
+// Brightness multiplier: scales linearly with sort order (later = rarer = brighter)
+function getSynapseBrightness(name: string): number {
+  const types = configStore.synapseTypes
+  const idx = types.findIndex(t => t.name === name)
+  if (idx < 0 || types.length <= 1) return 0.6
+  // Scale from 0.5 (first type) to 1.5 (last type)
+  return 0.5 + (idx / (types.length - 1)) * 1.0
 }
 
-// Synapse type index to type name mapping
-const SYNAPSE_TYPE_BY_INDEX: SynapseType[] = ['minor', 'complex', 'deep', 'core', 'rare', 'legendary', 'unique']
+// Size multiplier: scales linearly with sort order
+function getSynapseSize(name: string): number {
+  const types = configStore.synapseTypes
+  const idx = types.findIndex(t => t.name === name)
+  if (idx < 0 || types.length <= 1) return 1.0
+  // Scale from 1.0 (first type) to 1.6 (last type)
+  return 1.0 + (idx / (types.length - 1)) * 0.6
+}
 
 interface SynapseMarkersProps {
   clusters: SynapseCluster[]
@@ -217,17 +211,13 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
 
       // Get dominant synapse type
       const dominantType = getDominantSynapseType(cluster.typeCounts)
-      const typeIndex = SYNAPSE_TYPE_PRIORITY[dominantType] - 1  // 0-6 for shader
+      const typeIndex = getSynapseTypeIndex(dominantType)
       synapseTypes[i] = typeIndex
-
-      // Check if this synapse type is locked for the user (Masterplan 2026: USDC-based level gating)
-      const unlockLevel = SYNAPSE_CONFIG[dominantType].unlockUserLevel
-      const isLocked = userLevel < unlockLevel
 
       // Size based on synapse count and type rarity - tiny clean markers
       const baseSize = 2.5  // Tiny base for clean look
       const weightScale = 1.0 + Math.log10(Math.max(1, cluster.synapseCount)) * 0.05  // Very subtle scaling
-      const typeMultiplier = SYNAPSE_SIZE_MULTIPLIERS[dominantType]
+      const typeMultiplier = getSynapseSize(dominantType)
       sizes[i] = baseSize * weightScale * typeMultiplier
 
       // State: 0=undiscovered, 1=exploring, 2=discovered
@@ -245,16 +235,12 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
       }
 
       // Colors based on synapse type and state
-      const typeColor = SYNAPSE_COLOR_MAP[dominantType]
+      const typeColor = getSynapseColor(dominantType)
 
-      // Phase 2.3: Brightness based on rarity tier + state modifier
-      const rarityBrightness = SYNAPSE_BRIGHTNESS_MULTIPLIERS[dominantType]
+      // Brightness based on rarity tier + state modifier
+      const rarityBrightness = getSynapseBrightness(dominantType)
       const stateModifier = states[i] === 2 ? 1.2 : states[i] === 1 ? 1.0 : 0.75
-      let brightness = rarityBrightness * stateModifier
-
-      if (isLocked) {
-        brightness *= 0.5  // More visible than before (was 0.3), with desaturation in shader
-      }
+      const brightness = rarityBrightness * stateModifier
 
       colors[i * 3] = Math.min(1.0, typeColor[0] * brightness)
       colors[i * 3 + 1] = Math.min(1.0, typeColor[1] * brightness)
@@ -285,15 +271,11 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     for (let i = 0; i < count; i++) {
       const state = data.states[i]
       const typeIdx = data.types[i]
-      const synapseType = SYNAPSE_TYPE_BY_INDEX[typeIdx] || 'minor'
-
-      // Check lock status
-      const unlockLevel = SYNAPSE_CONFIG[synapseType].unlockUserLevel
-      const isLocked = userLevel < unlockLevel
+      const synapseType = getSynapseTypeByIndex(typeIdx)
 
       // Size based on type
       const baseSize = 2.0  // Smaller for individual points
-      sizes[i] = baseSize * SYNAPSE_SIZE_MULTIPLIERS[synapseType]
+      sizes[i] = baseSize * getSynapseSize(synapseType)
 
       // State: 0=undiscovered, 1=being_solved, 2=discovered
       statesFloat[i] = state
@@ -301,14 +283,10 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
       progress[i] = state === 2 ? 1.0 : state === 1 ? 0.5 : 0.0
 
       // Colors
-      const typeColor = SYNAPSE_COLOR_MAP[synapseType]
-      const rarityBrightness = SYNAPSE_BRIGHTNESS_MULTIPLIERS[synapseType]
+      const typeColor = getSynapseColor(synapseType)
+      const rarityBrightness = getSynapseBrightness(synapseType)
       const stateModifier = state === 2 ? 1.2 : state === 1 ? 1.0 : 0.75
-      let brightness = rarityBrightness * stateModifier
-
-      if (isLocked) {
-        brightness *= 0.5
-      }
+      const brightness = rarityBrightness * stateModifier
 
       colors[i * 3] = Math.min(1.0, typeColor[0] * brightness)
       colors[i * 3 + 1] = Math.min(1.0, typeColor[1] * brightness)
@@ -799,7 +777,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
         if (!filterType || filterType === 'all') {
           filteredAttrBuffer[i] = 0.0
         } else {
-          const synapseType = SYNAPSE_TYPE_BY_INDEX[individualData.types[i]] || 'minor'
+          const synapseType = getSynapseTypeByIndex(individualData.types[i])
           filteredAttrBuffer[i] = (synapseType === filterType) ? 0.0 : 1.0
         }
       }
@@ -839,12 +817,10 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     if (props.useIndividualMode && individualData) {
       for (let i = 0; i < individualData.count && i < actionableAttrBuffer.length; i++) {
         const state = individualData.states[i]
-        const synapseType = SYNAPSE_TYPE_BY_INDEX[individualData.types[i]] || 'minor'
 
-        // Check if synapse is actionable
-        const isUnlocked = userLevel >= SYNAPSE_CONFIG[synapseType].unlockUserLevel
+        // All types are now unlocked (no level gating)
         const isNotCompleted = state !== 2  // state 2 = discovered/completed
-        const isActionable = hasIdleShip && isUnlocked && isNotCompleted
+        const isActionable = hasIdleShip && isNotCompleted
 
         actionableAttrBuffer[i] = isActionable ? 1.0 : 0.0
         if (isActionable && !anyActionable) anyActionable = true
@@ -858,18 +834,14 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     clusters.forEach((cluster, i) => {
       if (i >= actionableAttrBuffer!.length) return
 
-      // Get dominant type and check if unlocked
-      const dominant = getDominantSynapseType(cluster.typeCounts)
-      const isUnlocked = userLevel >= SYNAPSE_CONFIG[dominant].unlockUserLevel
-
       // Check if cluster has any undiscovered or partially explored synapses
       const hasAvailableSynapses = cluster.discoveredCount < cluster.synapseCount
 
       // Check if not at max explorer capacity (simplified - assumes max 1 per synapse)
       const hasAvailableSlots = cluster.beingExploredCount < cluster.synapseCount
 
-      // Synapse is actionable if: user has idle ship, synapse is unlocked, and has available slots
-      const isActionable = hasIdleShip && isUnlocked && hasAvailableSynapses && hasAvailableSlots
+      // Synapse is actionable if: user has idle ship and has available slots (no level gating)
+      const isActionable = hasIdleShip && hasAvailableSynapses && hasAvailableSlots
 
       actionableAttrBuffer![i] = isActionable ? 1.0 : 0.0
       if (isActionable && !anyActionable) anyActionable = true
@@ -1031,7 +1003,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     return {
       index: idx,
       state: data.states[idx],
-      type: SYNAPSE_TYPE_BY_INDEX[data.types[idx]] || 'minor',
+      type: getSynapseTypeByIndex(data.types[idx]),
       stateName: ['Undiscovered', 'Being Explored', 'Discovered'][data.states[idx]] || 'Unknown',
     }
   })
@@ -1045,11 +1017,8 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     return cluster ? getDominantSynapseType(cluster.typeCounts) : null
   })
 
-  const hoveredIsLocked = createMemo(() => {
-    const dominantType = hoveredDominantType()
-    const userLevel = props.userLevel ?? 1 as UserLevel
-    return dominantType ? userLevel < SYNAPSE_CONFIG[dominantType].unlockUserLevel : false
-  })
+  // All types are now unlocked (no level gating)
+  const hoveredIsLocked = createMemo(() => false)
 
   // Determine if we should show tooltip
   const showTooltip = createMemo(() => {
@@ -1080,9 +1049,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
                   {hoveredIndividualSynapse()!.stateName}
                 </div>
                 {hoveredIsLocked() && (
-                  <div class="text-red-400 mt-1">
-                    Requires Level {SYNAPSE_CONFIG[hoveredIndividualSynapse()!.type].unlockUserLevel}
-                  </div>
+                  <div class="text-red-400 mt-1">Locked</div>
                 )}
               </>
             )}
@@ -1091,8 +1058,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
             {!props.useIndividualMode && hoveredCluster() && (() => {
               const cluster = hoveredCluster()!
               const dominantType = hoveredDominantType()
-              const config = dominantType ? SYNAPSE_CONFIG[dominantType] : null
-              const isLocked = hoveredIsLocked()
+              const typeConfig = dominantType ? configStore.getSynapseType(dominantType) : null
 
               return (
                 <>
@@ -1102,27 +1068,20 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
 
                   {dominantType && (
                     <div class="text-[var(--text-secondary)] capitalize mt-1">
-                      {dominantType} type
-                      {isLocked && (
-                        <span class="text-red-400 ml-1">(Level {config?.unlockUserLevel} required)</span>
-                      )}
+                      {typeConfig?.displayName || dominantType} type
                     </div>
                   )}
 
                   {/* Progress and rewards info */}
-                  {config && (
+                  {typeConfig && (
                     <div class="mt-2 space-y-1">
                       <div class="flex justify-between text-[var(--text-secondary)]">
                         <span>Points:</span>
-                        <span class="text-[var(--text-primary)]">{formatPoints(config.points)}</span>
+                        <span class="text-[var(--text-primary)]">{formatPoints(typeConfig.pointsRequired)}</span>
                       </div>
                       <div class="flex justify-between text-[var(--text-secondary)]">
                         <span>Reward:</span>
-                        <span class="text-yellow-400">{config.agiReward} $AGI</span>
-                      </div>
-                      <div class="flex justify-between text-[var(--text-secondary)]">
-                        <span>ETA:</span>
-                        <span class="text-[var(--text-primary)]">{formatETA(config.etaMinutes)}</span>
+                        <span class="text-yellow-400">{typeConfig.agiRewardMin}–{typeConfig.agiRewardMax} $AGI</span>
                       </div>
                     </div>
                   )}

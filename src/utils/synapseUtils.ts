@@ -3,7 +3,6 @@
  */
 
 import type { SynapseType } from '@/types/game'
-import { SYNAPSE_CONFIG } from '@/types/game'
 
 /**
  * Get the dominant synapse type from a type count record
@@ -27,23 +26,6 @@ export function getDominantSynapseType(
   }
 
   return dominantType
-}
-
-/**
- * Check if a synapse type is locked for a given user level
- */
-export function isSynapseTypeLocked(synapseType: SynapseType, userLevel: number): boolean {
-  const config = SYNAPSE_CONFIG[synapseType]
-  return userLevel < config.unlockUserLevel
-}
-
-/**
- * Get all unlocked synapse types for a given user level
- */
-export function getUnlockedSynapseTypes(userLevel: number): SynapseType[] {
-  return Object.entries(SYNAPSE_CONFIG)
-    .filter(([, config]) => userLevel >= config.unlockUserLevel)
-    .map(([type]) => type as SynapseType)
 }
 
 /**

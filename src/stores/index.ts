@@ -22,6 +22,9 @@ export type {
   LootEvent,
 } from './shipStore'
 
+// Teneo store - Teneo community points integration
+export { teneoStore } from './teneoStore'
+
 // Event store - live events with multipliers and bonuses
 export { eventStore } from './eventStore'
 

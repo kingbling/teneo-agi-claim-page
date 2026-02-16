@@ -184,13 +184,20 @@ export default function UsersPage() {
         </CardContent>
       </Card>
 
+      {/* Error */}
+      <Show when={adminStore.error}>
+        <div class="p-4 rounded-lg bg-red-500/10 border border-red-500/20">
+          <p class="text-red-500">Error: {adminStore.error}</p>
+        </div>
+      </Show>
+
       {/* Table */}
       <DataTable
         data={adminStore.users}
         columns={columns}
         keyExtractor={(user) => user.id}
         onRowClick={(user) => navigate(`/admin/users/${user.id}`)}
-        isLoading={adminStore.isLoading}
+        isLoading={adminStore.isLoadingUsers}
         sortBy={sortBy()}
         sortOrder={sortOrder()}
         onSort={handleSort}

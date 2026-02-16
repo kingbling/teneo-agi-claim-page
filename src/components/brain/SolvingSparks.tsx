@@ -10,6 +10,7 @@ import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { Ship } from '@/stores/shipStore'
 import type { SynapseType } from '@/types/game'
+import { SYNAPSE_COLORS } from '@/types/game'
 import { glslDistanceScale, glslClampPointSize, glslCircleDiscard } from './shaders/common'
 
 interface SolvingSparksProps {
@@ -19,15 +20,12 @@ interface SolvingSparksProps {
   synapseType?: SynapseType
 }
 
-// Synapse type colors (matching the synapse color scheme)
-const SYNAPSE_TYPE_COLORS: Record<SynapseType, [number, number, number]> = {
-  minor: [0.3, 0.8, 0.9],      // Cyan
-  complex: [0.9, 0.6, 0.2],    // Orange/gold
-  deep: [0.8, 0.3, 0.9],       // Purple
-  core: [1.0, 0.85, 0.3],      // Gold
-  rare: [1.0, 0.4, 0.6],       // Red-pink
-  legendary: [1.0, 0.5, 1.0],  // Bright magenta
-  unique: [1.0, 0.9, 0.3],     // Gold/yellow
+// Get spark color from dynamic SYNAPSE_COLORS (fallback to cyan)
+function getSparkColor(type: SynapseType | undefined): [number, number, number] {
+  if (!type) return [0.3, 0.8, 0.9]
+  const c = SYNAPSE_COLORS[type]
+  if (c) return [c.rgb.r, c.rgb.g, c.rgb.b]
+  return [0.3, 0.8, 0.9]
 }
 
 const SPARK_COUNT = 40
@@ -110,7 +108,7 @@ export function SolvingSparks(props: SolvingSparksProps) {
   // Get color based on synapse type
   const sparkColor = createMemo(() => {
     const type = props.synapseType ?? 'minor'
-    return SYNAPSE_TYPE_COLORS[type] ?? SYNAPSE_TYPE_COLORS.minor
+    return getSparkColor(type)
   })
 
   // Compute synapse center position

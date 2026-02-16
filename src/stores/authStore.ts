@@ -19,6 +19,7 @@ import { injected } from '@wagmi/connectors'
 import { wagmiConfig } from '@/lib/wagmi'
 import { API_URL } from '@/constants/api'
 import { log } from '@/utils/logger'
+import { teneoStore } from './teneoStore'
 
 // DEV BYPASS: Skip MetaMask and use test wallet
 const DEV_AUTH_BYPASS = import.meta.env.VITE_DEV_AUTH_BYPASS === 'true'
@@ -214,6 +215,7 @@ function createAuthStore() {
       token: null,
       authError: null,
     })
+    teneoStore.reset()
   }
 
   /**
@@ -259,6 +261,9 @@ function createAuthStore() {
           isAuthenticating: false,
         })
 
+        // Link Teneo account (non-blocking)
+        teneoStore.linkTeneoAccount()
+
         return { success: true, user }
       }
 
@@ -302,6 +307,9 @@ function createAuthStore() {
         token,
         isAuthenticating: false,
       })
+
+      // Link Teneo account (non-blocking)
+      teneoStore.linkTeneoAccount()
 
       return { success: true, user }
     } catch (error) {

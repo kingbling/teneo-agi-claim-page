@@ -1,94 +1,16 @@
 // Portal Masterplan 2026 - Game Types
 // Single USDC-based Level System (5 Levels)
 
-// Import SYNAPSE_TYPE_ORDER for use in functions below
-import { SYNAPSE_TYPE_ORDER } from '@/constants/colors'
-
 // ============================================================================
-// SYNAPSE TYPES (7 Types)
+// SYNAPSE TYPES — Now dynamic from database via configStore.synapseTypes
 // ============================================================================
 
-export type SynapseType = 'minor' | 'complex' | 'deep' | 'core' | 'rare' | 'legendary' | 'unique'
+// SynapseType is now a string (DB-driven, no longer a fixed union)
+export type SynapseType = string
 
 export type SynapseDistribution = 'fair_share' | 'lottery'
 
 export type UserLevel = 1 | 2 | 3 | 4 | 5
-
-export interface SynapseTypeConfig {
-  points: number              // Total points required to complete
-  maxPerMin: number           // Maximum points/min a user can spend
-  etaMinutes: number          // Base ETA at max spending rate
-  maxExplorers: number        // Max concurrent explorers (-1 = unlimited)
-  distribution: SynapseDistribution
-  agiReward: number           // $AGI reward for completion
-  unlockUserLevel: UserLevel  // User level (USDC-based) required to explore
-}
-
-export const SYNAPSE_CONFIG: Record<SynapseType, SynapseTypeConfig> = {
-  minor: {
-    points: 6_000,
-    maxPerMin: 100,
-    etaMinutes: 60,
-    maxExplorers: 1,         // V1 Masterplan: Single player only
-    distribution: 'fair_share',
-    agiReward: 10,
-    unlockUserLevel: 1,      // All users
-  },
-  complex: {
-    points: 120_000,
-    maxPerMin: 200,
-    etaMinutes: 720,         // 12 hours
-    maxExplorers: 1,         // V1 Masterplan: Single player only
-    distribution: 'fair_share',
-    agiReward: 200,
-    unlockUserLevel: 1,      // All users
-  },
-  deep: {
-    points: 2_000_000,
-    maxPerMin: 300,
-    etaMinutes: 2880,        // 48 hours
-    maxExplorers: 1,         // V1 Masterplan: Single player only
-    distribution: 'fair_share',
-    agiReward: 4_000,
-    unlockUserLevel: 1,      // All users
-  },
-  core: {
-    points: 20_000_000,
-    maxPerMin: 400,
-    etaMinutes: 4320,        // 72 hours
-    maxExplorers: 1,         // V1 Masterplan: Single player only
-    distribution: 'fair_share',
-    agiReward: 40_000,
-    unlockUserLevel: 1,      // All users
-  },
-  rare: {
-    points: 50_000_000,
-    maxPerMin: 500,
-    etaMinutes: 10080,       // 1 week
-    maxExplorers: 1,         // V1 Masterplan: Single player only
-    distribution: 'fair_share',
-    agiReward: 100_000,
-    unlockUserLevel: 2,      // $1+ USDC (Navigator)
-  },
-  legendary: {
-    points: 100_000_000,
-    maxPerMin: 600,
-    etaMinutes: 20160,       // 2 weeks
-    maxExplorers: 1,         // V1 Masterplan: Single player only
-    distribution: 'fair_share',
-    agiReward: 200_000,
-    unlockUserLevel: 3,      // $10+ USDC (Voyager)
-  },
-  unique: {
-    points: 500_000_000,
-    maxPerMin: 1000,
-    etaMinutes: 43200,       // 30 days
-    maxExplorers: 1,         // V1 Masterplan: Single player only
-    distribution: 'fair_share',
-    agiReward: 1_000_000,
-    unlockUserLevel: 4,      // $100+ USDC (Captain)
-  },
-}
 
 // ============================================================================
 // USER LEVELS (5 Levels Based on USDC Spent - Masterplan 2026)
@@ -125,23 +47,13 @@ export function getMaxShipsForUserLevel(userLevel: UserLevel): number {
   return USER_LEVEL_CONFIG[userLevel].maxShips
 }
 
-export function getUnlockedSynapseTypes(userLevel: UserLevel): SynapseType[] {
-  return SYNAPSE_TYPE_ORDER.filter(type => userLevel >= SYNAPSE_CONFIG[type].unlockUserLevel)
-}
-
 // ============================================================================
 // COLORS AND VISUAL CONSTANTS
 // Re-export from centralized colors module
 // ============================================================================
 
-export { SYNAPSE_COLORS, rgbToRgb, rgbToRgba, getSynapseRgbColor, SYNAPSE_TYPE_ORDER } from '@/constants/colors'
+export { SYNAPSE_COLORS, rgbToRgb, rgbToRgba, getSynapseRgbColor } from '@/constants/colors'
 export type { RGBColor, SynapseColorConfig } from '@/constants/colors'
-
-// Legacy export for backwards compatibility - maps to SYNAPSE_COLORS.rgb
-import { SYNAPSE_COLORS } from '@/constants/colors'
-export const SYNAPSE_TYPE_COLORS = Object.fromEntries(
-  Object.entries(SYNAPSE_COLORS).map(([k, v]) => [k, v.rgb])
-) as Record<SynapseType, { r: number; g: number; b: number }>
 
 export const USER_LEVEL_COLORS: Record<UserLevel, string> = {
   1: '#6B7280',  // Gray

@@ -16,6 +16,7 @@ const DataPage = lazy(() => import('./pages/admin/DataPage'))
 const InterventionsPage = lazy(() => import('./pages/admin/InterventionsPage'))
 const EventsPage = lazy(() => import('./pages/admin/EventsPage'))
 const LogsPage = lazy(() => import('./pages/admin/LogsPage'))
+const SynapseTypesPage = lazy(() => import('./pages/admin/SynapseTypesPage'))
 
 // Admin components
 import { AdminGuard } from './components/admin/AdminGuard'
@@ -159,6 +160,15 @@ function App() {
               <AdminLayout>
                 <Suspense fallback={<div class="p-8">Loading...</div>}>
                   <EventsPage />
+                </Suspense>
+              </AdminLayout>
+            </AdminGuard>
+          )} />
+          <Route path="/admin/synapse-types" component={() => (
+            <AdminGuard>
+              <AdminLayout>
+                <Suspense fallback={<div class="p-8">Loading...</div>}>
+                  <SynapseTypesPage />
                 </Suspense>
               </AdminLayout>
             </AdminGuard>

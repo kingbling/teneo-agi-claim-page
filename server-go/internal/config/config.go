@@ -44,6 +44,10 @@ type Config struct {
 	AmbientShipsMin    int     // 5 — minimum ambient ships (when many real ships active)
 	AmbientShipsMax    int     // 15 — maximum ambient ships (when no real ships)
 	AmbientSpeedFactor float64 // 0.8 — speed relative to real ships
+
+	// Teneo Community API
+	TeneoCommunityAPIURL string
+	TeneoCommunityAPIKey string
 }
 
 // Load loads configuration from environment variables with defaults
@@ -76,6 +80,9 @@ func Load() *Config {
 		AmbientShipsMin:    getEnvInt("AMBIENT_SHIPS_MIN", 5),
 		AmbientShipsMax:    getEnvInt("AMBIENT_SHIPS_MAX", 15),
 		AmbientSpeedFactor: getEnvFloat("AMBIENT_SPEED_FACTOR", 8),
+
+		TeneoCommunityAPIURL: getEnv("TENEO_COMMUNITY_API_URL", ""),
+		TeneoCommunityAPIKey: getEnv("TENEO_COMMUNITY_API_KEY", ""),
 	}
 }
 

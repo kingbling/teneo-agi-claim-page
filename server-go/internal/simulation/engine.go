@@ -30,6 +30,16 @@ type explorerData struct {
 	pointsContributed float64
 }
 
+// synapseTypeConfig caches a synapse type's gameplay parameters
+type synapseTypeConfig struct {
+	Name           string
+	PointsRequired int
+	MaxPerMin      int
+	ETAMinutes     int
+	AGIRewardMin   int
+	AGIRewardMax   int
+}
+
 // Engine handles the game simulation tick loop
 type Engine struct {
 	store     *database.Store
@@ -39,6 +49,10 @@ type Engine struct {
 	running   bool
 	stopCh    chan struct{}
 	mu        sync.RWMutex
+
+	// Synapse type cache (loaded from DB, refreshed periodically)
+	synapseTypeCache map[string]synapseTypeConfig // name -> config
+	synapseTypeMu    sync.RWMutex
 
 	// Delta tracking for efficient synapse state updates
 	synapseDeltaQueue []dto.SynapseDelta
@@ -161,16 +175,74 @@ func (e *Engine) broadcastClusterUpdate(posX, posY, posZ float64) {
 // New creates a new simulation engine
 func New(store *database.Store, hub *wshub.Hub, cfg *config.Config) *Engine {
 	e := &Engine{
-		store:           store,
-		hub:             hub,
-		cfg:             cfg,
-		stopCh:          make(chan struct{}),
-		spaceOrderIndex: make(map[string]uint32),
-		ambient:         NewAmbientManager(cfg, store),
+		store:            store,
+		hub:              hub,
+		cfg:              cfg,
+		stopCh:           make(chan struct{}),
+		spaceOrderIndex:  make(map[string]uint32),
+		synapseTypeCache: make(map[string]synapseTypeConfig),
+		ambient:          NewAmbientManager(cfg, store),
 	}
+	// Load synapse type cache from DB
+	e.loadSynapseTypeCache()
 	// Build space order index for delta tracking
 	e.buildSpaceOrderIndex()
 	return e
+}
+
+// loadSynapseTypeCache loads synapse types from DB into the in-memory cache
+func (e *Engine) loadSynapseTypeCache() {
+	ctx := context.Background()
+	types, err := e.store.Queries.ListSynapseTypes(ctx)
+	if err != nil {
+		log.Printf("[Engine] Failed to load synapse type cache: %v", err)
+		return
+	}
+
+	e.synapseTypeMu.Lock()
+	defer e.synapseTypeMu.Unlock()
+
+	e.synapseTypeCache = make(map[string]synapseTypeConfig, len(types))
+	for _, t := range types {
+		pts := int(t.PointsRequired)
+		// Derive MaxPerMin and ETAMinutes from points_required
+		maxPerMin := pts / 60
+		if maxPerMin < 100 {
+			maxPerMin = 100
+		}
+		etaMinutes := pts / maxPerMin
+		if etaMinutes < 1 {
+			etaMinutes = 1
+		}
+		e.synapseTypeCache[t.Name] = synapseTypeConfig{
+			Name:           t.Name,
+			PointsRequired: pts,
+			MaxPerMin:      maxPerMin,
+			ETAMinutes:     etaMinutes,
+			AGIRewardMin:   int(t.AgiRewardMin),
+			AGIRewardMax:   int(t.AgiRewardMax),
+		}
+	}
+	log.Printf("[Engine] Loaded %d synapse types into cache", len(e.synapseTypeCache))
+}
+
+// getSynapseTypeConfig returns the cached config for a synapse type name.
+// Falls back to a safe default if the type is not found in the cache.
+func (e *Engine) getSynapseTypeConfig(typeName string) synapseTypeConfig {
+	e.synapseTypeMu.RLock()
+	defer e.synapseTypeMu.RUnlock()
+	if cfg, ok := e.synapseTypeCache[typeName]; ok {
+		return cfg
+	}
+	// Fallback for unknown types
+	return synapseTypeConfig{
+		Name:           typeName,
+		PointsRequired: 6000,
+		MaxPerMin:      100,
+		ETAMinutes:     60,
+		AGIRewardMin:   3,
+		AGIRewardMax:   10,
+	}
 }
 
 // buildSpaceOrderIndex creates a mapping from space ID to array index
@@ -302,6 +374,11 @@ func (e *Engine) processTick() {
 	if e.tickCount%30 == 0 && e.clustersDirty {
 		e.clustersDirty = false
 		go e.recomputeClusters()
+	}
+
+	// Refresh synapse type cache every 300 ticks (~15 seconds)
+	if e.tickCount%300 == 0 {
+		e.loadSynapseTypeCache()
 	}
 
 	// Adjust ambient ship count every 30 ticks based on real ship activity
@@ -558,9 +635,9 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 		speedBoost := e.getShipSpeedBoost(exp.ShipID)
 		speedMultiplier := 1.0 + speedBoost
 
-		synapseConfig := dto.GetDefaultSynapseConfig()[dto.SynapseType(space.SynapseType)]
+		stConfig := e.getSynapseTypeConfig(space.SynapseType)
 		boostedRate := float64(exp.PointsPerMinute) * speedMultiplier
-		effectiveRate := math.Min(boostedRate, float64(synapseConfig.MaxPerMin))
+		effectiveRate := math.Min(boostedRate, float64(stConfig.MaxPerMin))
 		pointsThisTick := (effectiveRate / 60.0) * deltaSeconds
 
 		totalPointsThisTick += pointsThisTick
@@ -587,9 +664,9 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 		userLevel = user.UserLevel
 	}
 
-	synapseConfig := dto.GetDefaultSynapseConfig()[dto.SynapseType(space.SynapseType)]
+	stCfg := e.getSynapseTypeConfig(space.SynapseType)
 	speedBoost := e.getShipSpeedBoost(exp.shipID)
-	currentETA := dto.CalculateFinalETA(synapseConfig.ETAMinutes, int(userLevel), speedBoost)
+	currentETA := dto.CalculateFinalETA(stCfg.ETAMinutes, int(userLevel), speedBoost)
 
 	newState := "being_solved"
 	if isCompleted {
@@ -628,7 +705,6 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 
 func (e *Engine) completeSynapse(synapseID string, synapseType dto.SynapseType, explorers []explorerData) {
 	ctx := context.Background()
-	config := dto.GetDefaultSynapseConfig()[synapseType]
 	now := time.Now().UnixMilli()
 
 	// Fetch space for position data (needed for completion event)
@@ -638,9 +714,9 @@ func (e *Engine) completeSynapse(synapseID string, synapseType dto.SynapseType, 
 		return
 	}
 
-	// Get event multipliers
+	// Get event multipliers — use per-synapse AGI reward from DB
 	rewardMultiplier := e.getActiveRewardMultiplier()
-	finalAgiReward := float64(config.AGIReward) * rewardMultiplier
+	finalAgiReward := float64(space.AgiReward) * rewardMultiplier
 
 	// V1: Single player - explorer gets 100%
 	exp := explorers[0]
@@ -649,14 +725,8 @@ func (e *Engine) completeSynapse(synapseID string, synapseType dto.SynapseType, 
 	xpMultiplier := e.getShipXPMultiplier(exp.shipID)
 	amplifiedReward := finalAgiReward * (1.0 + xpMultiplier)
 
-	// NFT eligibility check
-	nftEligibleTypes := map[dto.SynapseType]bool{
-		dto.SynapseCore:      true,
-		dto.SynapseRare:      true,
-		dto.SynapseLegendary: true,
-		dto.SynapseUnique:    true,
-	}
-	mintNFT := nftEligibleTypes[synapseType]
+	// NFT eligibility: mint for high-value synapses (AGI reward >= 10000)
+	mintNFT := space.AgiReward >= 10000
 
 	// Use transaction for atomic completion
 	err = e.store.WithTx(ctx, func(q *generated.Queries) error {
@@ -775,8 +845,8 @@ func (e *Engine) joinSynapseExploration(synapseID, shipID, userID string, points
 		return false
 	}
 
-	config := dto.GetDefaultSynapseConfig()[dto.SynapseType(space.SynapseType)]
-	effectiveRate := math.Min(pointsPerMin, float64(config.MaxPerMin))
+	stCfg := e.getSynapseTypeConfig(space.SynapseType)
+	effectiveRate := math.Min(pointsPerMin, float64(stCfg.MaxPerMin))
 	now := time.Now().UnixMilli()
 
 	// Add explorer

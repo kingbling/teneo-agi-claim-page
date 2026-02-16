@@ -10,6 +10,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AdminLog struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Action    string `json:"action"`
+	Details   string `json:"details"`
+	AdminID   string `json:"admin_id"`
+	TargetID  string `json:"target_id"`
+	CreatedAt int64  `json:"created_at"`
+}
+
 type Agent struct {
 	ID                    string          `json:"id"`
 	OwnerID               string          `json:"owner_id"`
@@ -159,6 +169,22 @@ type SynapseExplorer struct {
 	LastUpdatedAt     int64  `json:"last_updated_at"`
 }
 
+type SynapseType struct {
+	ID             string  `json:"id"`
+	Name           string  `json:"name"`
+	DisplayName    string  `json:"display_name"`
+	ColorR         float32 `json:"color_r"`
+	ColorG         float32 `json:"color_g"`
+	ColorB         float32 `json:"color_b"`
+	PointsRequired int32   `json:"points_required"`
+	AgiRewardMin   int32   `json:"agi_reward_min"`
+	AgiRewardMax   int32   `json:"agi_reward_max"`
+	ModelFilename  *string `json:"model_filename"`
+	SortOrder      int32   `json:"sort_order"`
+	CreatedAt      int64   `json:"created_at"`
+	UpdatedAt      int64   `json:"updated_at"`
+}
+
 type User struct {
 	ID                string  `json:"id"`
 	Wallet            string  `json:"wallet"`
@@ -180,4 +206,7 @@ type User struct {
 	IsAdmin           bool    `json:"is_admin"`
 	BannedAt          *int64  `json:"banned_at"`
 	BanReason         *string `json:"ban_reason"`
+	TeneoUserID       *string `json:"teneo_user_id"`
+	TeneoPoints       float64 `json:"teneo_points"`
+	TeneoLinkedAt     *int64  `json:"teneo_linked_at"`
 }

@@ -35,6 +35,7 @@ import type { SynapseCluster, ShipCluster, Ship, Synapse, SynapseDiscoveryEvent 
 function CameraFollower(props: {
   controlsRef: () => OrbitControlsType | null
   followShipId: string | null | undefined
+  followTrigger?: number
   userShips: Ship[]
 }) {
   const { camera } = useThree()
@@ -45,6 +46,7 @@ function CameraFollower(props: {
   let userInterrupted = false
   let loopId: number | null = null
   let prevFollowId: string | null = null
+  let prevTrigger: number = 0
 
   const LERP_SPEED = 0.06
   const FOLLOW_DISTANCE = 1.8
@@ -101,10 +103,14 @@ function CameraFollower(props: {
     loopId = requestAnimationFrame(loop)
   }
 
-  // Watch for ship selection changes
+  // Watch for ship selection changes OR follow trigger (re-click same ship)
   createEffect(() => {
     const shipId = props.followShipId ?? null
-    if (shipId && shipId !== prevFollowId) {
+    const trigger = props.followTrigger ?? 0
+    const triggerChanged = trigger !== prevTrigger
+    prevTrigger = trigger
+
+    if (shipId && (shipId !== prevFollowId || triggerChanged)) {
       userInterrupted = false
       isFollowing = true
       isReturning = false
@@ -267,6 +273,8 @@ export interface BrainSceneMinimalProps {
   showIdleShips?: boolean
   // Selected ship for highlight ring
   selectedShipId?: string | null
+  // Counter that increments on every ship click — forces re-zoom even for same ship
+  followTrigger?: number
   // Synapse type filter - dims non-matching synapses and makes them non-selectable
   synapseTypeFilter?: string | null
   // Exploration target for visualizing ship-to-synapse connection
@@ -374,6 +382,7 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
       <CameraFollower
         controlsRef={controlsRef}
         followShipId={props.selectedShipId}
+        followTrigger={props.followTrigger}
         userShips={userAgents()}
       />
 

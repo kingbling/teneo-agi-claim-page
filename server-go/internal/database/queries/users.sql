@@ -99,3 +99,12 @@ ORDER BY day;
 
 -- name: UpdateUserUsdcAndLevel :exec
 UPDATE users SET usdc_spent = $2, user_level = $3 WHERE id = $1;
+
+-- name: LinkTeneoUser :exec
+UPDATE users SET teneo_user_id = $2, teneo_points = $3, teneo_linked_at = $4 WHERE id = $1;
+
+-- name: UpdateTeneoPoints :exec
+UPDATE users SET teneo_points = $2 WHERE id = $1;
+
+-- name: GetUserTeneoID :one
+SELECT teneo_user_id FROM users WHERE id = $1;

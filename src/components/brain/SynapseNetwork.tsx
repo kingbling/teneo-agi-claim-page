@@ -2,7 +2,8 @@ import { onMount, onCleanup, createEffect, createMemo, type Component } from 'so
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { SynapseType, UserLevel } from '@/types/game'
-import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG, SYNAPSE_TYPE_ORDER } from '@/types/game'
+import { SYNAPSE_COLORS } from '@/types/game'
+import { configStore } from '@/stores/configStore'
 import type { SynapseCluster } from '@/stores/shipStore'
 import { log } from '@/utils/logger'
 
@@ -36,7 +37,7 @@ function getDominantSynapseType(typeCounts?: Record<SynapseType, number>): Synap
   let dominantType: SynapseType = 'minor'
   let highestCount = 0
 
-  for (const type of SYNAPSE_TYPE_ORDER) {
+  for (const type of Object.keys(typeCounts)) {
     const count = typeCounts[type] || 0
     if (count > highestCount) {
       dominantType = type
@@ -119,12 +120,11 @@ function buildNetwork(
 
   const nodes: DiscoveredNode[] = discovered.map(c => {
     const dominantType = getDominantSynapseType(c.typeCounts)
-    const unlockLevel = SYNAPSE_CONFIG[dominantType].unlockUserLevel
     return {
       position: new THREE.Vector3(c.positionX, c.positionY, c.positionZ),
       discoveryRatio: c.discoveredCount / Math.max(1, c.synapseCount),
       dominantType,
-      isLocked: userLevel < unlockLevel
+      isLocked: false  // No level gating
     }
   })
 
@@ -154,8 +154,9 @@ function buildNetwork(
     const avgRatio = (nodeA.discoveryRatio + nodeB.discoveryRatio) / 2
     const brightness = 0.3 + avgRatio * 0.7
 
-    const type1Index = SYNAPSE_TYPE_ORDER.indexOf(nodeA.dominantType)
-    const type2Index = SYNAPSE_TYPE_ORDER.indexOf(nodeB.dominantType)
+    const types = configStore.synapseTypes
+    const type1Index = types.findIndex(t => t.name === nodeA.dominantType)
+    const type2Index = types.findIndex(t => t.name === nodeB.dominantType)
     const dominantType = type1Index > type2Index ? nodeA.dominantType : nodeB.dominantType
     const isLocked = nodeA.isLocked || nodeB.isLocked
 
@@ -349,7 +350,7 @@ export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
       positions[i * 3 + 2] = node.position.z
 
       // Color based on synapse type
-      const typeColor = SYNAPSE_TYPE_COLORS[node.dominantType]
+      const typeColor = SYNAPSE_COLORS[node.dominantType]
       let brightness = 0.6 + node.discoveryRatio * 0.4
 
       // Dim locked nodes
@@ -357,9 +358,9 @@ export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
         brightness *= 0.3
       }
 
-      colors[i * 3] = typeColor.r * brightness
-      colors[i * 3 + 1] = typeColor.g * brightness
-      colors[i * 3 + 2] = typeColor.b * brightness
+      colors[i * 3] = typeColor.rgb.r * brightness
+      colors[i * 3 + 1] = typeColor.rgb.g * brightness
+      colors[i * 3 + 2] = typeColor.rgb.b * brightness
 
       sizes[i] = 8.0 + node.discoveryRatio * 4.0
     })
@@ -389,18 +390,18 @@ export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
       positions[i * 6 + 5] = conn.to.z
 
       // Color based on synapse type
-      const typeColor = SYNAPSE_TYPE_COLORS[conn.dominantType]
+      const typeColor = SYNAPSE_COLORS[conn.dominantType]
       const brightness = conn.isLocked ? 0.2 : conn.brightness
 
       // From color
-      colors[i * 6] = typeColor.r * brightness
-      colors[i * 6 + 1] = typeColor.g * brightness
-      colors[i * 6 + 2] = typeColor.b * brightness
+      colors[i * 6] = typeColor.rgb.r * brightness
+      colors[i * 6 + 1] = typeColor.rgb.g * brightness
+      colors[i * 6 + 2] = typeColor.rgb.b * brightness
 
       // To color (same)
-      colors[i * 6 + 3] = typeColor.r * brightness
-      colors[i * 6 + 4] = typeColor.g * brightness
-      colors[i * 6 + 5] = typeColor.b * brightness
+      colors[i * 6 + 3] = typeColor.rgb.r * brightness
+      colors[i * 6 + 4] = typeColor.rgb.g * brightness
+      colors[i * 6 + 5] = typeColor.rgb.b * brightness
 
       // Opacity - bright visible lines showing the flow path
       const opacity = conn.isLocked ? 0.4 : 0.9
@@ -633,11 +634,11 @@ export const SynapseNetwork: Component<SynapseNetworkProps> = (props) => {
           sparkleSizes[i] = 4.0 + Math.random() * 3.0
 
           // Color based on connection - visible sparkles
-          const typeColor = SYNAPSE_TYPE_COLORS[conn.dominantType]
+          const typeColor = SYNAPSE_COLORS[conn.dominantType]
           const brightness = conn.isLocked ? 0.3 : 0.6 + conn.brightness * 0.3
-          sparkleColors[i * 3] = typeColor.r * brightness
-          sparkleColors[i * 3 + 1] = typeColor.g * brightness
-          sparkleColors[i * 3 + 2] = typeColor.b * brightness
+          sparkleColors[i * 3] = typeColor.rgb.r * brightness
+          sparkleColors[i * 3 + 1] = typeColor.rgb.g * brightness
+          sparkleColors[i * 3 + 2] = typeColor.rgb.b * brightness
         }
       })
 

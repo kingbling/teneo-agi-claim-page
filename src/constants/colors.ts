@@ -1,10 +1,8 @@
 /**
  * Centralized color definitions for the application
  *
- * This consolidates color definitions that were duplicated across:
- * - src/types/game.ts (RGB normalized 0-1)
- * - src/components/ui/SynapseInfo.tsx (Tailwind classes)
- * - src/components/dashboard/SynapseListPanel.tsx (Tailwind classes)
+ * Synapse type colors are now derived from the database via configStore.
+ * Fallback colors are provided for the seeded types.
  */
 
 import type { SynapseType } from '@/types/game'
@@ -28,36 +26,73 @@ export interface SynapseColorConfig {
   }
 }
 
-export const SYNAPSE_COLORS: Record<SynapseType, SynapseColorConfig> = {
-  minor: {
-    rgb: { r: 0.5, g: 0.7, b: 1.0 },
-    tw: { bg: 'bg-blue-500/20', text: 'text-blue-400', border: 'border-blue-500/30', glow: 'shadow-blue-500/20' },
-  },
-  complex: {
-    rgb: { r: 0.7, g: 0.5, b: 1.0 },
-    tw: { bg: 'bg-purple-500/20', text: 'text-purple-400', border: 'border-purple-500/30', glow: 'shadow-purple-500/20' },
-  },
-  deep: {
-    rgb: { r: 0.4, g: 1.0, b: 0.7 },
-    tw: { bg: 'bg-teal-500/20', text: 'text-teal-400', border: 'border-teal-500/30', glow: 'shadow-teal-500/20' },
-  },
-  core: {
-    rgb: { r: 1.0, g: 0.85, b: 0.1 },
-    tw: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30', glow: 'shadow-yellow-500/20' },
-  },
-  rare: {
-    rgb: { r: 1.0, g: 0.4, b: 0.5 },
-    tw: { bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30', glow: 'shadow-red-500/20' },
-  },
-  legendary: {
-    rgb: { r: 1.0, g: 0.5, b: 1.0 },
-    tw: { bg: 'bg-pink-500/20', text: 'text-pink-400', border: 'border-pink-500/30', glow: 'shadow-pink-500/20' },
-  },
-  unique: {
-    rgb: { r: 1.0, g: 1.0, b: 0.3 },
-    tw: { bg: 'bg-amber-400/20', text: 'text-amber-300', border: 'border-amber-400/30', glow: 'shadow-amber-400/20' },
-  },
+// Fallback Tailwind color classes keyed by hue bucket
+// Used when synapse types come from DB (we can't generate Tailwind classes dynamically)
+const TW_COLOR_BUCKETS = [
+  { bg: 'bg-blue-500/20', text: 'text-blue-400', border: 'border-blue-500/30', glow: 'shadow-blue-500/20' },
+  { bg: 'bg-purple-500/20', text: 'text-purple-400', border: 'border-purple-500/30', glow: 'shadow-purple-500/20' },
+  { bg: 'bg-teal-500/20', text: 'text-teal-400', border: 'border-teal-500/30', glow: 'shadow-teal-500/20' },
+  { bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30', glow: 'shadow-yellow-500/20' },
+  { bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30', glow: 'shadow-red-500/20' },
+  { bg: 'bg-pink-500/20', text: 'text-pink-400', border: 'border-pink-500/30', glow: 'shadow-pink-500/20' },
+  { bg: 'bg-amber-400/20', text: 'text-amber-300', border: 'border-amber-400/30', glow: 'shadow-amber-400/20' },
+  { bg: 'bg-cyan-500/20', text: 'text-cyan-400', border: 'border-cyan-500/30', glow: 'shadow-cyan-500/20' },
+  { bg: 'bg-emerald-500/20', text: 'text-emerald-400', border: 'border-emerald-500/30', glow: 'shadow-emerald-500/20' },
+  { bg: 'bg-indigo-500/20', text: 'text-indigo-400', border: 'border-indigo-500/30', glow: 'shadow-indigo-500/20' },
+]
+
+// Default fallback config for unknown types
+const DEFAULT_COLOR_CONFIG: SynapseColorConfig = {
+  rgb: { r: 0.5, g: 0.7, b: 1.0 },
+  tw: TW_COLOR_BUCKETS[0],
 }
+
+// Build synapse color config from RGB values (from DB) + assign Tailwind bucket
+function buildColorConfig(r: number, g: number, b: number, index: number): SynapseColorConfig {
+  return {
+    rgb: { r, g, b },
+    tw: TW_COLOR_BUCKETS[index % TW_COLOR_BUCKETS.length],
+  }
+}
+
+// Dynamic color map — populated from configStore synapse types
+let _synapseColors: Record<string, SynapseColorConfig> = {}
+
+/**
+ * Initialize synapse colors from DB-provided synapse types.
+ * Call this after configStore loads synapse types.
+ */
+export function initSynapseColors(types: Array<{ name: string; colorR: number; colorG: number; colorB: number }>): void {
+  const colors: Record<string, SynapseColorConfig> = {}
+  types.forEach((t, i) => {
+    colors[t.name] = buildColorConfig(t.colorR, t.colorG, t.colorB, i)
+  })
+  _synapseColors = colors
+}
+
+/**
+ * Get the synapse color record. Dynamic after initSynapseColors is called.
+ */
+export const SYNAPSE_COLORS: Record<SynapseType, SynapseColorConfig> = new Proxy(
+  {} as Record<SynapseType, SynapseColorConfig>,
+  {
+    get(_target, prop: string) {
+      return _synapseColors[prop] || DEFAULT_COLOR_CONFIG
+    },
+    ownKeys() {
+      return Object.keys(_synapseColors)
+    },
+    getOwnPropertyDescriptor(_target, prop: string) {
+      if (prop in _synapseColors) {
+        return { configurable: true, enumerable: true, value: _synapseColors[prop] }
+      }
+      return undefined
+    },
+    has(_target, prop: string) {
+      return prop in _synapseColors
+    },
+  }
+)
 
 // Helper to get RGB color as CSS rgba string
 export function rgbToRgba(color: RGBColor, alpha: number = 1): string {
@@ -71,7 +106,7 @@ export function rgbToRgb(color: RGBColor): string {
 
 // Helper to get synapse color as CSS string
 export function getSynapseRgbColor(type: SynapseType | undefined): string {
-  const config = SYNAPSE_COLORS[type || 'minor'] || SYNAPSE_COLORS.minor
+  const config = SYNAPSE_COLORS[type || 'minor'] || DEFAULT_COLOR_CONFIG
   return rgbToRgb(config.rgb)
 }
 
@@ -127,17 +162,3 @@ export const SHIP_STATUS_COLORS: Record<ShipStatus, ShipStatusColorConfig> = {
 
 // Status order for display
 export const SHIP_STATUS_ORDER: ShipStatus[] = ['idle', 'traveling', 'solving', 'returning']
-
-// Synapse types in order (least rare to most rare)
-export const SYNAPSE_TYPE_ORDER: SynapseType[] = [
-  'minor', 'complex', 'deep', 'core', 'rare', 'legendary', 'unique'
-]
-
-// Shop item colors
-export const ITEM_COLORS: Record<string, { accent: string; bg: string }> = {
-  speed_boost: { accent: '#75e6ea', bg: 'rgba(117, 230, 234, 0.1)' },
-  luck_charm: { accent: '#41cba4', bg: 'rgba(65, 203, 164, 0.1)' },
-  xp_amplifier: { accent: '#a855f7', bg: 'rgba(168, 85, 247, 0.1)' },
-  radar: { accent: '#397bff', bg: 'rgba(57, 123, 255, 0.1)' },
-  cloak: { accent: '#94a3b8', bg: 'rgba(148, 163, 184, 0.1)' },
-}

@@ -89,6 +89,23 @@ export interface AdminEvent {
   status: string
 }
 
+export interface AdminSynapseType {
+  id: string
+  name: string
+  displayName: string
+  colorR: number
+  colorG: number
+  colorB: number
+  pointsRequired: number
+  agiRewardMin: number
+  agiRewardMax: number
+  modelFilename: string | null
+  sortOrder: number
+  synapseCount: number
+  createdAt: number
+  updatedAt: number
+}
+
 export interface Pagination {
   page: number
   limit: number
@@ -98,7 +115,11 @@ export interface Pagination {
 
 export interface AdminState {
   isAdmin: boolean
-  isLoading: boolean
+  isLoadingUsers: boolean
+  isLoadingAnalytics: boolean
+  isLoadingSpaces: boolean
+  isLoadingAgents: boolean
+  isLoadingEvents: boolean
   error: string | null
 
   // Users
@@ -119,11 +140,20 @@ export interface AdminState {
 
   // Events
   events: AdminEvent[]
+
+  // Synapse Types
+  synapseTypes: AdminSynapseType[]
+  isLoadingSynapseTypes: boolean
 }
 
 const initialState: AdminState = {
   isAdmin: false,
-  isLoading: false,
+  isLoadingUsers: false,
+  isLoadingAnalytics: false,
+  isLoadingSpaces: false,
+  isLoadingAgents: false,
+  isLoadingEvents: false,
+  isLoadingSynapseTypes: false,
   error: null,
 
   users: [],
@@ -139,6 +169,8 @@ const initialState: AdminState = {
   agentsPagination: { page: 1, limit: 50, total: 0, totalPages: 0 },
 
   events: [],
+
+  synapseTypes: [],
 }
 
 function createAdminStore() {
@@ -188,7 +220,7 @@ function createAdminStore() {
     sortBy?: string
     sortOrder?: string
   } = {}): Promise<void> {
-    setState({ isLoading: true, error: null })
+    setState({ isLoadingUsers: true, error: null })
 
     const query = new URLSearchParams()
     if (params.page) query.set('page', String(params.page))
@@ -203,12 +235,12 @@ function createAdminStore() {
     )
 
     if (error) {
-      setState({ isLoading: false, error })
+      setState({ isLoadingUsers: false, error })
     } else if (data) {
       setState({
         users: data.users,
         usersPagination: data.pagination,
-        isLoading: false,
+        isLoadingUsers: false,
       })
     }
   }
@@ -260,14 +292,14 @@ function createAdminStore() {
 
   // Analytics
   async function fetchAnalytics(): Promise<void> {
-    setState({ isLoading: true, error: null })
+    setState({ isLoadingAnalytics: true, error: null })
 
     const { data, error } = await apiCall<AdminAnalytics>('/api/admin/analytics/overview')
 
     if (error) {
-      setState({ isLoading: false, error })
+      setState({ isLoadingAnalytics: false, error })
     } else if (data) {
-      setState({ analytics: data, isLoading: false })
+      setState({ analytics: data, isLoadingAnalytics: false })
     }
   }
 
@@ -281,7 +313,7 @@ function createAdminStore() {
     sortBy?: string
     sortOrder?: string
   } = {}): Promise<void> {
-    setState({ isLoading: true, error: null })
+    setState({ isLoadingSpaces: true, error: null })
 
     const query = new URLSearchParams()
     if (params.page) query.set('page', String(params.page))
@@ -297,12 +329,12 @@ function createAdminStore() {
     )
 
     if (error) {
-      setState({ isLoading: false, error })
+      setState({ isLoadingSpaces: false, error })
     } else if (data) {
       setState({
         spaces: data.spaces,
         spacesPagination: data.pagination,
-        isLoading: false,
+        isLoadingSpaces: false,
       })
     }
   }
@@ -317,7 +349,7 @@ function createAdminStore() {
     sortBy?: string
     sortOrder?: string
   } = {}): Promise<void> {
-    setState({ isLoading: true, error: null })
+    setState({ isLoadingAgents: true, error: null })
 
     const query = new URLSearchParams()
     if (params.page) query.set('page', String(params.page))
@@ -333,12 +365,12 @@ function createAdminStore() {
     )
 
     if (error) {
-      setState({ isLoading: false, error })
+      setState({ isLoadingAgents: false, error })
     } else if (data) {
       setState({
         agents: data.agents,
         agentsPagination: data.pagination,
-        isLoading: false,
+        isLoadingAgents: false,
       })
     }
   }
@@ -362,15 +394,15 @@ function createAdminStore() {
 
   // Events
   async function fetchEvents(includeExpired = false): Promise<void> {
-    setState({ isLoading: true, error: null })
+    setState({ isLoadingEvents: true, error: null })
 
     const query = includeExpired ? '?includeExpired=true' : ''
     const { data, error } = await apiCall<{ events: AdminEvent[] }>(`/api/admin/events${query}`)
 
     if (error) {
-      setState({ isLoading: false, error })
+      setState({ isLoadingEvents: false, error })
     } else if (data) {
-      setState({ events: data.events, isLoading: false })
+      setState({ events: data.events, isLoadingEvents: false })
     }
   }
 
@@ -386,25 +418,6 @@ function createAdminStore() {
     const { error } = await apiCall('/api/admin/events', {
       method: 'POST',
       body: JSON.stringify(event),
-    })
-    return !error
-  }
-
-  async function updateEvent(
-    eventId: string,
-    updates: Partial<{
-      name: string
-      description: string
-      eventType: string
-      multiplier: number
-      startTime: number
-      endTime: number
-      isActive: boolean
-    }>
-  ): Promise<boolean> {
-    const { error } = await apiCall(`/api/admin/events/${eventId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(updates),
     })
     return !error
   }
@@ -430,6 +443,79 @@ function createAdminStore() {
     return !error
   }
 
+  // Synapse Types
+  async function fetchSynapseTypes(): Promise<void> {
+    setState({ isLoadingSynapseTypes: true, error: null })
+    const { data, error } = await apiCall<{ synapseTypes: AdminSynapseType[] }>('/api/admin/synapse-types')
+    if (error) {
+      setState({ isLoadingSynapseTypes: false, error })
+    } else if (data) {
+      setState({ synapseTypes: data.synapseTypes, isLoadingSynapseTypes: false })
+    }
+  }
+
+  async function createSynapseType(st: {
+    name: string
+    displayName: string
+    colorR: number
+    colorG: number
+    colorB: number
+    pointsRequired: number
+    agiRewardMin: number
+    agiRewardMax: number
+    sortOrder: number
+  }): Promise<boolean> {
+    const { error } = await apiCall('/api/admin/synapse-types', {
+      method: 'POST',
+      body: JSON.stringify(st),
+    })
+    return !error
+  }
+
+  async function updateSynapseType(id: string, updates: Record<string, unknown>): Promise<boolean> {
+    const { error } = await apiCall(`/api/admin/synapse-types/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    })
+    return !error
+  }
+
+  async function deleteSynapseType(id: string): Promise<boolean> {
+    const { error } = await apiCall(`/api/admin/synapse-types/${id}`, {
+      method: 'DELETE',
+    })
+    return !error
+  }
+
+  async function generateSynapses(typeId: string, count: number): Promise<{ generated?: number; error?: string }> {
+    const { data, error } = await apiCall<{ generated: number; totalForType: number }>(
+      `/api/admin/synapse-types/${typeId}/generate`,
+      { method: 'POST', body: JSON.stringify({ count }) }
+    )
+    if (error) return { error }
+    return { generated: data?.generated }
+  }
+
+  async function uploadSynapseTypeModel(typeId: string, file: File): Promise<boolean> {
+    const formData = new FormData()
+    formData.append('model', file)
+    try {
+      const response = await fetch(`${API_URL}/api/admin/synapse-types/${typeId}/model`, {
+        method: 'POST',
+        headers: authStore.getAuthHeader(),
+        body: formData,
+      })
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+
+  async function wipeSynapses(): Promise<boolean> {
+    const { error } = await apiCall('/api/admin/synapse-types/wipe', { method: 'POST' })
+    return !error
+  }
+
   // Reset store
   function reset() {
     setState({ ...initialState })
@@ -438,7 +524,11 @@ function createAdminStore() {
   return {
     // State (reactive getters)
     get isAdmin() { return state.isAdmin },
-    get isLoading() { return state.isLoading },
+    get isLoadingUsers() { return state.isLoadingUsers },
+    get isLoadingAnalytics() { return state.isLoadingAnalytics },
+    get isLoadingSpaces() { return state.isLoadingSpaces },
+    get isLoadingAgents() { return state.isLoadingAgents },
+    get isLoadingEvents() { return state.isLoadingEvents },
     get error() { return state.error },
 
     get users() { return state.users },
@@ -454,6 +544,9 @@ function createAdminStore() {
     get agentsPagination() { return state.agentsPagination },
 
     get events() { return state.events },
+
+    get synapseTypes() { return state.synapseTypes },
+    get isLoadingSynapseTypes() { return state.isLoadingSynapseTypes },
 
     // Actions
     checkAdminAccess,
@@ -483,10 +576,18 @@ function createAdminStore() {
     // Events
     fetchEvents,
     createEvent,
-    updateEvent,
     deleteEvent,
     activateEvent,
     deactivateEvent,
+
+    // Synapse Types
+    fetchSynapseTypes,
+    createSynapseType,
+    updateSynapseType,
+    deleteSynapseType,
+    generateSynapses,
+    uploadSynapseTypeModel,
+    wipeSynapses,
   }
 }
 

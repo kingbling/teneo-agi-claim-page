@@ -1,17 +1,7 @@
 package dto
 
-// SynapseType represents the type of synapse
+// SynapseType represents the type of synapse (dynamic, managed via synapse_types table)
 type SynapseType string
-
-const (
-	SynapseMinor      SynapseType = "minor"
-	SynapseComplex    SynapseType = "complex"
-	SynapseDeep       SynapseType = "deep"
-	SynapseCore       SynapseType = "core"
-	SynapseRare       SynapseType = "rare"
-	SynapseLegendary  SynapseType = "legendary"
-	SynapseUnique     SynapseType = "unique"
-)
 
 // AgentState represents the internal state of an agent/ship
 type AgentState string

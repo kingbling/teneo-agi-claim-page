@@ -4,39 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"math/rand"
 	"os"
+
+	"teneo/server-go/internal/brainshape"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// Brain shape scaling factors (must match frontend BRAIN_SCALE)
-const (
-	BRAIN_SCALE_X = 1.35 * 1.2 // Must match SynapseParticlesMinimal scaling
-	BRAIN_SCALE_Y = 1.0 * 1.2
-	BRAIN_SCALE_Z = 1.15 * 1.2
-)
-
-// Brain regions for labeling
-var brainRegions = []struct {
-	name   string
-	center [3]float64
-	radius float64
-}{
-	{"prefrontal_cortex", [3]float64{-0.6, 0.5, 0.2}, 0.4},
-	{"motor_cortex", [3]float64{-0.4, 0.7, 0.0}, 0.3},
-	{"somatosensory_cortex", [3]float64{-0.5, 0.4, -0.3}, 0.3},
-	{"auditory_cortex", [3]float64{0.6, -0.2, 0.2}, 0.3},
-	{"visual_cortex", [3]float64{0.4, -0.6, -0.1}, 0.4},
-	{"hippocampus", [3]float64{0.5, -0.3, 0.1}, 0.25},
-	{"thalamus", [3]float64{0.0, 0.0, 0.0}, 0.2},
-	{"cerebellum", [3]float64{0.0, -0.8, -0.4}, 0.35},
-	{"temporal_lobe", [3]float64{0.7, -0.1, 0.3}, 0.3},
-	{"parietal_lobe", [3]float64{-0.6, 0.3, -0.2}, 0.3},
-}
 
 // Synapse types distribution
 var synapseTypes = []struct {
@@ -55,62 +31,6 @@ type synapseConfig struct {
 	points int
 	agi    int
 	eta    int
-}
-
-func constrainToBrainShape(rawX, rawY, rawZ float64) (float64, float64, float64) {
-	x, y, z := rawX, rawY, rawZ
-	r := math.Sqrt(x*x + y*y + z*z)
-	if r > 1.0 {
-		x /= r
-		y /= r
-		z /= r
-		r = 1.0
-	}
-	var dirX, dirY, dirZ float64
-	if r > 0.001 {
-		dirX = x / r
-		dirY = y / r
-		dirZ = z / r
-	}
-	grooveDepth := math.Exp(-math.Abs(dirX)*6) * 0.15
-	grooveFactor := 1.0 - grooveDepth*math.Max(0, dirY)
-	frontalBulge := math.Max(0, dirZ*0.5+0.5) * math.Max(0, dirY*0.5+0.3) * 0.2
-	temporalBulge := math.Max(0, math.Abs(dirX)-0.3) * math.Max(0, -dirY*0.5+0.3) * math.Max(0, dirZ*0.5+0.5) * 0.25
-	occipitalBulge := math.Max(0, -dirZ*0.5+0.3) * math.Max(0, dirY*0.3+0.3) * 0.15
-	cerebellumBulge := math.Max(0, -dirZ*0.5+0.2) * math.Max(0, -dirY*0.5+0.2) * (1 - math.Abs(dirX)*0.8) * 0.2
-	bottomFlatten := math.Max(0, -dirY-0.5) * 0.15
-	shapeMod := grooveFactor + frontalBulge + temporalBulge + occipitalBulge + cerebellumBulge - bottomFlatten
-	finalR := r * shapeMod
-	return dirX * finalR * BRAIN_SCALE_X,
-		dirY * finalR * BRAIN_SCALE_Y,
-		dirZ * finalR * BRAIN_SCALE_Z
-}
-
-func generateUniformSpherePoint() (float64, float64, float64) {
-	for {
-		x := rand.Float64()*2 - 1
-		y := rand.Float64()*2 - 1
-		z := rand.Float64()*2 - 1
-		if x*x+y*y+z*z <= 1.0 {
-			return x, y, z
-		}
-	}
-}
-
-func findClosestRegion(x, y, z float64) string {
-	minDist := math.MaxFloat64
-	closestRegion := "unknown"
-	for _, region := range brainRegions {
-		dx := x - region.center[0]
-		dy := y - region.center[1]
-		dz := z - region.center[2]
-		dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
-		if dist < minDist && dist < region.radius {
-			minDist = dist
-			closestRegion = region.name
-		}
-	}
-	return closestRegion
 }
 
 func selectSynapseType() string {
@@ -132,17 +52,6 @@ func getSynapseConfig(typ string) synapseConfig {
 		}
 	}
 	return synapseConfig{points: 3000, agi: 5, eta: 3}
-}
-
-func getZone(y float64) string {
-	if y > 0.3 {
-		return "frontal"
-	} else if y > 0 {
-		return "parietal"
-	} else if y > -0.3 {
-		return "temporal"
-	}
-	return "occipital"
 }
 
 func main() {
@@ -186,9 +95,9 @@ func main() {
 
 		rows := make([][]interface{}, 0, thisBatch)
 		for i := int64(0); i < thisBatch; i++ {
-			rawX, rawY, rawZ := generateUniformSpherePoint()
-			posX, posY, posZ := constrainToBrainShape(rawX, rawY, rawZ)
-			region := findClosestRegion(posX, posY, posZ)
+			rawX, rawY, rawZ := brainshape.GenerateUniformSpherePoint()
+			posX, posY, posZ := brainshape.ConstrainToBrainShape(rawX, rawY, rawZ)
+			region := brainshape.FindClosestRegion(posX, posY, posZ)
 			synapseType := selectSynapseType()
 			cfg := getSynapseConfig(synapseType)
 
@@ -198,7 +107,7 @@ func main() {
 				posY,               // position_y
 				posZ,               // position_z
 				region,             // region
-				getZone(posY),      // zone
+				brainshape.GetZone(posY), // zone
 				1,                  // synapse_count
 				"undiscovered",     // state
 				synapseType,        // synapse_type

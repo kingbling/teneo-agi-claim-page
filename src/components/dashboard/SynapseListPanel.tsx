@@ -3,8 +3,9 @@ import { ChevronDown, ChevronUp, Zap, Compass, Filter, Lock } from 'lucide-solid
 import { shipStore, userStore, type SynapseCluster } from '@/stores'
 import type { SynapseType, UserLevel } from '@/types/game'
 import * as THREE from 'three'
-import { getDominantSynapseType, isSynapseTypeLocked } from '@/utils/synapseUtils'
-import { SYNAPSE_COLORS, SYNAPSE_TYPE_ORDER } from '@/constants/colors'
+import { getDominantSynapseType } from '@/utils/synapseUtils'
+import { SYNAPSE_COLORS } from '@/constants/colors'
+import { configStore } from '@/stores/configStore'
 
 interface SynapseListPanelProps {
   onNavigate: (cluster: SynapseCluster, position: THREE.Vector3) => void
@@ -31,12 +32,9 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
     const lod0 = shipStore.synapseClustersLod0
     let result = Array.isArray(lod0) ? lod0 : []
 
-    // Filter by user level if unlocked only is enabled
+    // Filter by user level if unlocked only is enabled (currently all types unlocked)
     if (showUnlockedOnly()) {
-      result = result.filter(cluster => {
-        const dominantType = getDominantSynapseType(cluster.typeCounts)
-        return !isSynapseTypeLocked(dominantType, userLevel())
-      })
+      // No-op: all types are unlocked in the current system
     }
 
     return result
@@ -136,20 +134,20 @@ export function SynapseListPanel(props: SynapseListPanelProps) {
               >
                 All
               </button>
-              <For each={SYNAPSE_TYPE_ORDER}>
-                {(type) => (
+              <For each={configStore.synapseTypes}>
+                {(st) => (
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
-                      props.onFilterChange(type)
+                      props.onFilterChange(st.name)
                     }}
                     class={`px-2 py-0.5 rounded text-[10px] capitalize transition-colors ${
-                      props.filterType === type
-                        ? `${SYNAPSE_COLORS[type].tw.bg} ${SYNAPSE_COLORS[type].tw.text} border border-current/50`
+                      props.filterType === st.name
+                        ? `${SYNAPSE_COLORS[st.name].tw.bg} ${SYNAPSE_COLORS[st.name].tw.text} border border-current/50`
                         : 'bg-gray-700/50 text-gray-400 border border-gray-600/50 hover:bg-gray-700'
                     }`}
                   >
-                    {type}
+                    {st.displayName}
                   </button>
                 )}
               </For>

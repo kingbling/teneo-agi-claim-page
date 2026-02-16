@@ -2,12 +2,12 @@ import { Show, createMemo, createSignal, createEffect, onCleanup } from 'solid-j
 import { X, Navigation, Clock, Users, Target, ArrowLeft, Pause, Zap } from 'lucide-solid'
 import { shipStore } from '@/stores/shipStore'
 import {
-  SYNAPSE_CONFIG,
   formatPoints,
   formatETA,
   getSynapseTypeLabel,
   type SynapseType,
 } from '@/types/game'
+import { configStore } from '@/stores/configStore'
 import { SHIP_STATUS_COLORS, getSynapseRgbColor } from '@/constants/colors'
 
 /**
@@ -131,7 +131,7 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
               {/* Exploring Synapse */}
               <Show when={currentShip().state === 'solving' && synapse()}>
                 {(currentSynapse) => {
-                  const config = () => SYNAPSE_CONFIG[currentSynapse().synapseType] || SYNAPSE_CONFIG.minor
+                  const typeConfig = () => configStore.getSynapseType(currentSynapse().synapseType)
                   const pct = () => currentSynapse().pointsRequired > 0
                     ? (currentSynapse().pointsAccumulated / currentSynapse().pointsRequired) * 100
                     : 0
@@ -168,7 +168,7 @@ export function ShipDetailPanel(props: ShipDetailPanelProps) {
                       {/* Reward */}
                       <div class="flex items-center justify-between text-xs">
                         <span class="text-gray-500">Reward</span>
-                        <span class="text-amber-400 font-medium">{formatPoints(config().agiReward)} $AGI</span>
+                        <span class="text-amber-400 font-medium">{typeConfig()?.agiRewardMin}–{typeConfig()?.agiRewardMax} $AGI</span>
                       </div>
 
                       {/* Explorers count */}

@@ -12,6 +12,7 @@ import {
   Database,
   Wrench,
   Calendar,
+  Shapes,
   Terminal,
   ArrowLeft,
 } from 'lucide-solid'
@@ -29,6 +30,7 @@ const navItems: NavItem[] = [
   { path: '/admin/data', icon: Database, label: 'Game Data' },
   { path: '/admin/interventions', icon: Wrench, label: 'Interventions' },
   { path: '/admin/events', icon: Calendar, label: 'Events' },
+  { path: '/admin/synapse-types', icon: Shapes, label: 'Synapse Types' },
   { path: '/admin/logs', icon: Terminal, label: 'Server Logs' },
 ]
 

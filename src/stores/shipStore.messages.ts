@@ -1,5 +1,6 @@
 import { produce, type SetStoreFunction } from 'solid-js/store'
 import { userStore } from './userStore'
+import { teneoStore } from './teneoStore'
 import { toast } from '@/components/ui/Toast'
 import { log, fmt } from '@/utils/logger'
 import type {
@@ -552,6 +553,16 @@ export function createMessageHandler(
         // Filter out own ships (ambient IDs start with "ambient-", real IDs are UUIDs)
         const ownIds = new Set(safeUserShips(state).map(s => s.id))
         setState('worldShips', batch.ships.filter(s => !ownIds.has(s.id)))
+        break
+      }
+
+      case 'teneo:points': {
+        teneoStore.handleTeneoPoints(message.data)
+        break
+      }
+
+      case 'teneo:burn': {
+        teneoStore.handleTeneoBurn(message.data)
         break
       }
 

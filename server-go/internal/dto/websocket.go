@@ -46,6 +46,8 @@ const (
 	ServerMessageTypeAuthSuccess         = "auth:success"
 	ServerMessageTypeAuthError           = "auth:error"
 	ServerMessageTypeError               = "error"
+	ServerMessageTypeTeneoPoints         = "teneo:points"
+	ServerMessageTypeTeneoBurn           = "teneo:burn"
 )
 
 // WorldState represents the full world state
@@ -236,4 +238,17 @@ type WorldShipUpdate struct {
 type WorldShipsBatch struct {
 	Ships     []WorldShipUpdate `json:"ships"`
 	Timestamp int64             `json:"t"`
+}
+
+// TeneoPointsEvent is sent when Teneo points are synced (on auth or refresh)
+type TeneoPointsEvent struct {
+	PointsTotal float64 `json:"pointsTotal" tstype:"number"`
+	Linked      bool    `json:"linked" tstype:"boolean"`
+}
+
+// TeneoBurnEvent is sent when Teneo points are burned (travel cost)
+type TeneoBurnEvent struct {
+	Amount     float64 `json:"amount" tstype:"number"`
+	Reason     string  `json:"reason" tstype:"string"`
+	NewBalance float64 `json:"newBalance" tstype:"number"`
 }

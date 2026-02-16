@@ -53,7 +53,7 @@ export default function AdminDashboard() {
       </div>
 
       {/* Loading state */}
-      <Show when={adminStore.isLoading}>
+      <Show when={adminStore.isLoadingAnalytics}>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <For each={[1, 2, 3, 4]}>
             {() => (
@@ -69,7 +69,7 @@ export default function AdminDashboard() {
       </Show>
 
       {/* Stats Grid */}
-      <Show when={!adminStore.isLoading && adminStore.analytics}>
+      <Show when={!adminStore.isLoadingAnalytics && adminStore.analytics}>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <For each={stats()}>
             {(stat) => (

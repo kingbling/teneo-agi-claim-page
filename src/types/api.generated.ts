@@ -138,18 +138,6 @@ export interface AutopilotPreferences {
 // source: config.go
 
 /**
- * SynapseConfig represents configuration for a synapse type
- */
-export interface SynapseConfig {
-  points: number /* int */;
-  maxPerMin: number /* int */;
-  etaMinutes: number /* int */;
-  maxExplorers: number /* int */;
-  distribution: string; // "fair_share" or "lottery"
-  agiReward: number /* float64 */;
-  unlockUserLevel: UserLevel;
-}
-/**
  * UserLevelConfig represents configuration for a user level
  */
 export interface UserLevelConfig {
@@ -157,16 +145,6 @@ export interface UserLevelConfig {
   multiplier: number /* float64 */;
   maxShips: number /* int */;
   label: string;
-}
-/**
- * GameConfig represents the full game configuration
- */
-export interface GameConfig {
-  synapseConfig: { [key: SynapseType]: SynapseConfig};
-  userLevelConfig: { [key: UserLevel]: UserLevelConfig};
-  worldBounds: WorldBounds;
-  tickInterval: number /* int */;
-  timeMultiplier: number /* float64 */;
 }
 /**
  * WorldBounds represents the brain boundaries
@@ -359,19 +337,33 @@ export interface ExplorerInfo {
 }
 
 //////////
+// source: synapse_type.go
+
+/**
+ * SynapseTypeDTO is the API representation of a synapse type
+ * tygo: SynapseTypeDTO
+ */
+export interface SynapseTypeDTO {
+  id: string;
+  name: string;
+  displayName: string;
+  colorR: number /* float32 */;
+  colorG: number /* float32 */;
+  colorB: number /* float32 */;
+  pointsRequired: number /* int */;
+  agiRewardMin: number /* int */;
+  agiRewardMax: number /* int */;
+  modelFilename?: string;
+  sortOrder: number /* int */;
+}
+
+//////////
 // source: types.go
 
 /**
- * SynapseType represents the type of synapse
+ * SynapseType represents the type of synapse (dynamic, managed via synapse_types table)
  */
 export type SynapseType = string;
-export const SynapseMinor: SynapseType = "minor";
-export const SynapseComplex: SynapseType = "complex";
-export const SynapseDeep: SynapseType = "deep";
-export const SynapseCore: SynapseType = "core";
-export const SynapseRare: SynapseType = "rare";
-export const SynapseLegendary: SynapseType = "legendary";
-export const SynapseUnique: SynapseType = "unique";
 /**
  * AgentState represents the internal state of an agent/ship
  */
@@ -558,6 +550,14 @@ export const ServerMessageTypeAuthError = "auth:error";
  * ServerMessage types
  */
 export const ServerMessageTypeError = "error";
+/**
+ * ServerMessage types
+ */
+export const ServerMessageTypeTeneoPoints = "teneo:points";
+/**
+ * ServerMessage types
+ */
+export const ServerMessageTypeTeneoBurn = "teneo:burn";
 /**
  * WorldState represents the full world state
  */
@@ -769,4 +769,19 @@ export interface WorldShipUpdate {
 export interface WorldShipsBatch {
   ships: WorldShipUpdate[];
   t: number /* int64 */;
+}
+/**
+ * TeneoPointsEvent is sent when Teneo points are synced (on auth or refresh)
+ */
+export interface TeneoPointsEvent {
+  pointsTotal: number;
+  linked: boolean;
+}
+/**
+ * TeneoBurnEvent is sent when Teneo points are burned (travel cost)
+ */
+export interface TeneoBurnEvent {
+  amount: number;
+  reason: string;
+  newBalance: number;
 }

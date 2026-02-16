@@ -27,6 +27,9 @@ func ResetShip(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to reset ship"})
 	}
 
+	adminID, _ := c.Locals("userId").(string)
+	WriteLog(store.Pool, "intervention", "reset_ship", "", adminID, shipID)
+
 	return c.JSON(fiber.Map{"success": true, "message": "Ship reset to idle"})
 }
 
@@ -84,6 +87,9 @@ func CompleteSynapse(c *fiber.Ctx) error {
 
 	// Delete all explorers for this synapse
 	store.Queries.ClearSynapseExplorers(ctx, spaceID)
+
+	adminID, _ := c.Locals("userId").(string)
+	WriteLog(store.Pool, "intervention", "complete_synapse", "", adminID, spaceID)
 
 	return c.JSON(fiber.Map{
 		"success":   true,

@@ -1,16 +1,5 @@
 package dto
 
-// SynapseConfig represents configuration for a synapse type
-type SynapseConfig struct {
-	Points           int              `json:"points"`
-	MaxPerMin        int              `json:"maxPerMin"`
-	ETAMinutes       int              `json:"etaMinutes"`
-	MaxExplorers     int              `json:"maxExplorers"`
-	Distribution     string           `json:"distribution"` // "fair_share" or "lottery"
-	AGIReward        float64          `json:"agiReward"`
-	UnlockUserLevel  UserLevel        `json:"unlockUserLevel"`
-}
-
 // UserLevelConfig represents configuration for a user level
 type UserLevelConfig struct {
 	MinUSDC    float64 `json:"minUSDC"`
@@ -19,90 +8,12 @@ type UserLevelConfig struct {
 	Label      string  `json:"label"`
 }
 
-// GameConfig represents the full game configuration
-type GameConfig struct {
-	SynapseConfig    map[SynapseType]SynapseConfig `json:"synapseConfig"`
-	UserLevelConfig  map[UserLevel]UserLevelConfig `json:"userLevelConfig"`
-	WorldBounds      WorldBounds                   `json:"worldBounds"`
-	TickInterval     int                           `json:"tickInterval"`
-	TimeMultiplier   float64                       `json:"timeMultiplier"`
-}
-
 // WorldBounds represents the brain boundaries
 type WorldBounds struct {
 	Min              float64 `json:"min"`
 	Max              float64 `json:"max"`
 	BoundaryMargin   float64 `json:"boundaryMargin"`
 	BoundarySteerStrength float64 `json:"boundarySteerStrength"`
-}
-
-// GetDefaultSynapseConfig returns the default synapse configurations
-func GetDefaultSynapseConfig() map[SynapseType]SynapseConfig {
-	return map[SynapseType]SynapseConfig{
-		SynapseMinor: {
-			Points:          6000,
-			MaxPerMin:       100,
-			ETAMinutes:      60,
-			MaxExplorers:    1,
-			Distribution:    "fair_share",
-			AGIReward:       10,
-			UnlockUserLevel: 1,
-		},
-		SynapseComplex: {
-			Points:          120000,
-			MaxPerMin:       200,
-			ETAMinutes:      720, // 12 hours
-			MaxExplorers:    1,
-			Distribution:    "fair_share",
-			AGIReward:       200,
-			UnlockUserLevel: 1,
-		},
-		SynapseDeep: {
-			Points:          2000000,
-			MaxPerMin:       300,
-			ETAMinutes:      2880, // 48 hours
-			MaxExplorers:    1,
-			Distribution:    "fair_share",
-			AGIReward:       4000,
-			UnlockUserLevel: 1,
-		},
-		SynapseCore: {
-			Points:          20000000,
-			MaxPerMin:       400,
-			ETAMinutes:      4320, // 72 hours
-			MaxExplorers:    1,
-			Distribution:    "fair_share",
-			AGIReward:       40000,
-			UnlockUserLevel: 1,
-		},
-		SynapseRare: {
-			Points:          50000000,
-			MaxPerMin:       500,
-			ETAMinutes:      10080, // 1 week
-			MaxExplorers:    1,
-			Distribution:    "fair_share",
-			AGIReward:       100000,
-			UnlockUserLevel: 2,
-		},
-		SynapseLegendary: {
-			Points:          100000000,
-			MaxPerMin:       600,
-			ETAMinutes:      20160, // 2 weeks
-			MaxExplorers:    1,
-			Distribution:    "fair_share",
-			AGIReward:       200000,
-			UnlockUserLevel: 3,
-		},
-		SynapseUnique: {
-			Points:          500000000,
-			MaxPerMin:       1000,
-			ETAMinutes:      43200, // 30 days
-			MaxExplorers:    1,
-			Distribution:    "fair_share",
-			AGIReward:       1000000,
-			UnlockUserLevel: 4,
-		},
-	}
 }
 
 // GetDefaultUserLevelConfig returns the default user level configurations

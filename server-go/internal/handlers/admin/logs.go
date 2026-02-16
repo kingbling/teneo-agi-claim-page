@@ -12,19 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ensureAdminLogsTable creates the admin_logs table if it doesn't exist (PostgreSQL)
-func ensureAdminLogsTable(ctx context.Context, pool *pgxpool.Pool) {
-	pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS admin_logs (
-		id TEXT PRIMARY KEY,
-		type TEXT NOT NULL DEFAULT '',
-		action TEXT NOT NULL DEFAULT '',
-		details TEXT NOT NULL DEFAULT '',
-		admin_id TEXT NOT NULL DEFAULT '',
-		target_id TEXT NOT NULL DEFAULT '',
-		created_at BIGINT NOT NULL DEFAULT 0
-	)`)
-}
-
 // GetLogs returns admin action logs
 func GetLogs(c *fiber.Ctx) error {
 	store := c.Locals("store").(*database.Store)
@@ -34,9 +21,6 @@ func GetLogs(c *fiber.Ctx) error {
 	limit, _ := strconv.Atoi(c.Query("limit", "100"))
 	logType := c.Query("type", "")
 	offset := (page - 1) * limit
-
-	// Ensure table exists
-	ensureAdminLogsTable(ctx, store.Pool)
 
 	var total int64
 	var args []interface{}
@@ -129,9 +113,6 @@ func ClearLogs(c *fiber.Ctx) error {
 // WriteLog writes an admin action log (internal helper)
 func WriteLog(pool *pgxpool.Pool, logType, action, details, adminID, targetID string) error {
 	ctx := context.Background()
-
-	// Ensure table exists
-	ensureAdminLogsTable(ctx, pool)
 
 	_, err := pool.Exec(ctx,
 		"INSERT INTO admin_logs (id, type, action, details, admin_id, target_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",

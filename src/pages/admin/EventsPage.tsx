@@ -185,17 +185,36 @@ export default function EventsPage() {
         </Card>
       </Show>
 
+      {/* Error */}
+      <Show when={adminStore.error}>
+        <div class="p-4 rounded-lg bg-red-500/10 border border-red-500/20">
+          <p class="text-red-500">Error: {adminStore.error}</p>
+        </div>
+      </Show>
+
+      {/* Loading */}
+      <Show when={adminStore.isLoadingEvents}>
+        <Card>
+          <CardContent class="py-12 text-center">
+            <div class="w-8 h-8 mx-auto mb-4 border-2 border-[var(--brand-teal-1)] border-t-transparent rounded-full animate-spin" />
+            <p class="text-[var(--text-secondary)]">Loading events...</p>
+          </CardContent>
+        </Card>
+      </Show>
+
       {/* Events List */}
       <Show
-        when={adminStore.events.length > 0}
+        when={!adminStore.isLoadingEvents && adminStore.events.length > 0}
         fallback={
-          <Card>
-            <CardContent class="py-12 text-center">
-              <Calendar class="w-12 h-12 mx-auto mb-4 text-[var(--text-tertiary)]" />
-              <p class="text-[var(--text-secondary)]">No events yet</p>
-              <p class="text-sm text-[var(--text-tertiary)]">Create your first event to get started</p>
-            </CardContent>
-          </Card>
+          <Show when={!adminStore.isLoadingEvents}>
+            <Card>
+              <CardContent class="py-12 text-center">
+                <Calendar class="w-12 h-12 mx-auto mb-4 text-[var(--text-tertiary)]" />
+                <p class="text-[var(--text-secondary)]">No events yet</p>
+                <p class="text-sm text-[var(--text-tertiary)]">Create your first event to get started</p>
+              </CardContent>
+            </Card>
+          </Show>
         }
       >
         <div class="space-y-4">

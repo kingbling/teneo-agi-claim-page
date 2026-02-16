@@ -140,6 +140,13 @@ export default function DataPage() {
         </button>
       </div>
 
+      {/* Error */}
+      <Show when={adminStore.error}>
+        <div class="p-4 rounded-lg bg-red-500/10 border border-red-500/20">
+          <p class="text-red-500">Error: {adminStore.error}</p>
+        </div>
+      </Show>
+
       {/* Spaces Tab */}
       <Show when={activeTab() === 'spaces'}>
         <Card>
@@ -187,7 +194,7 @@ export default function DataPage() {
           data={adminStore.spaces}
           columns={spaceColumns}
           keyExtractor={(s) => s.id}
-          isLoading={adminStore.isLoading}
+          isLoading={adminStore.isLoadingSpaces}
           pagination={{
             ...adminStore.spacesPagination,
             onPageChange: fetchSpaces,
@@ -229,7 +236,7 @@ export default function DataPage() {
           data={adminStore.agents}
           columns={agentColumns}
           keyExtractor={(a) => a.id}
-          isLoading={adminStore.isLoading}
+          isLoading={adminStore.isLoadingAgents}
           pagination={{
             ...adminStore.agentsPagination,
             onPageChange: fetchAgents,

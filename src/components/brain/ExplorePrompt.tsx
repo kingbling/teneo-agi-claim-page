@@ -2,8 +2,8 @@ import { type Component, createSignal, onMount, Show } from 'solid-js'
 import * as THREE from 'three'
 import { useThree, useFrame } from '@/three/hooks'
 import type { Ship, SynapseCluster, Synapse } from '@/stores/shipStore'
-import { SYNAPSE_TYPE_COLORS, SYNAPSE_CONFIG, getSynapseTypeLabel, formatPoints } from '@/types/game'
-import { userStore } from '@/stores'
+import { SYNAPSE_COLORS, getSynapseTypeLabel, formatPoints } from '@/types/game'
+import { userStore, configStore } from '@/stores'
 import { getDominantSynapseType } from '@/utils/synapseUtils'
 import { log, fmt } from '@/utils/logger'
 
@@ -43,14 +43,19 @@ export const ExplorePrompt: Component<ExplorePromptProps> = (props) => {
 
   // Get synapse type info
   const dominantType = () => getDominantSynapseType(props.cluster.typeCounts)
-  const config = () => SYNAPSE_CONFIG[dominantType()]
-  const typeColor = () => SYNAPSE_TYPE_COLORS[dominantType()]
+  const typeConfig = () => configStore.getSynapseType(dominantType())
+  const typeColor = () => SYNAPSE_COLORS[dominantType()]?.rgb || { r: 0.5, g: 0.7, b: 1.0 }
 
-  // Check if locked
-  const isLocked = () => userStore.userLevel < config().unlockUserLevel
+  // No level gating
+  const isLocked = () => false
 
-  // Default points per minute (use half of max as sensible default)
-  const pointsPerMin = () => Math.floor(config().maxPerMin / 2) || 50
+  // Default points per minute (derive from pointsRequired)
+  const pointsPerMin = () => {
+    const tc = typeConfig()
+    if (!tc) return 50
+    const maxPerMin = Math.max(100, tc.pointsRequired / 60)
+    return Math.floor(maxPerMin / 2)
+  }
 
   return (
     <Show when={screenPos()}>
@@ -90,7 +95,7 @@ export const ExplorePrompt: Component<ExplorePromptProps> = (props) => {
             </div>
             <div class="p-2 rounded bg-gray-800/50 border border-gray-700">
               <p class="text-gray-400">Reward</p>
-              <p class="font-bold text-amber-400">{formatPoints(config().agiReward)} AGI</p>
+              <p class="font-bold text-amber-400">{typeConfig()?.agiRewardMin}–{typeConfig()?.agiRewardMax} AGI</p>
             </div>
           </div>
 
@@ -102,7 +107,7 @@ export const ExplorePrompt: Component<ExplorePromptProps> = (props) => {
           {/* Lock warning */}
           <Show when={isLocked()}>
             <div class="p-2 rounded bg-red-900/30 border border-red-500/30 mb-3 text-xs text-red-400">
-              Requires Level {config().unlockUserLevel} (You: L{userStore.userLevel})
+              Locked
             </div>
           </Show>
 
