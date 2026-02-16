@@ -4,6 +4,7 @@
 
 import { type Component, createMemo, For, Show } from 'solid-js'
 import { FUNCTIONAL_BRAIN_REGIONS } from '@/constants/brainRegions'
+import { configStore } from '@/stores/configStore'
 
 interface BrainMinimapProps {
   // Camera position in world space (x, y, z)
@@ -120,36 +121,40 @@ export const BrainMinimap: Component<BrainMinimapProps> = (props) => {
                 stroke-width="1"
               />
 
-              {/* Region markers */}
+              {/* Region markers (enabled only) */}
               <For each={FUNCTIONAL_BRAIN_REGIONS}>
                 {(region, index) => {
+                  const enabledIds = () => new Set(configStore.enabledRegions.map((n: string) => n.replace(/_/g, '-')))
+                  const isEnabled = () => enabledIds().has(region.id)
                   const center = getRegionCenter(region.bounds, MINIMAP_SIZE)
                   const size = getRegionSize(region.bounds, MINIMAP_SIZE)
                   const isSelected = index() === props.selectedRegionIndex
                   const color = `rgb(${Math.round(region.color.r * 255)}, ${Math.round(region.color.g * 255)}, ${Math.round(region.color.b * 255)})`
 
                   return (
-                    <g>
-                      {/* Region area (subtle) */}
-                      <ellipse
-                        cx={center.x}
-                        cy={center.y}
-                        rx={size.width / 2}
-                        ry={size.height / 2}
-                        fill={color}
-                        fill-opacity={isSelected ? 0.5 : 0.15}
-                        stroke={isSelected ? color : 'transparent'}
-                        stroke-width={isSelected ? 2 : 0}
-                      />
-                      {/* Region center dot */}
-                      <circle
-                        cx={center.x}
-                        cy={center.y}
-                        r={isSelected ? 4 : 2}
-                        fill={color}
-                        fill-opacity={isSelected ? 1 : 0.6}
-                      />
-                    </g>
+                    <Show when={isEnabled()}>
+                      <g>
+                        {/* Region area (subtle) */}
+                        <ellipse
+                          cx={center.x}
+                          cy={center.y}
+                          rx={size.width / 2}
+                          ry={size.height / 2}
+                          fill={color}
+                          fill-opacity={isSelected ? 0.5 : 0.15}
+                          stroke={isSelected ? color : 'transparent'}
+                          stroke-width={isSelected ? 2 : 0}
+                        />
+                        {/* Region center dot */}
+                        <circle
+                          cx={center.x}
+                          cy={center.y}
+                          r={isSelected ? 4 : 2}
+                          fill={color}
+                          fill-opacity={isSelected ? 1 : 0.6}
+                        />
+                      </g>
+                    </Show>
                   )
                 }}
               </For>

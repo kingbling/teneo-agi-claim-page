@@ -1,36 +1,48 @@
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Go binary
+server-go/bin/
+
+# Go workspace
+server-go/data/
+
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log*
 pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# OS files
+.DS_Store
+Thumbs.db
 
-# Editor directories and files
+# Editors
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-logs/
 
-# Database files
+# Temp / local
+tmp/
+*.local
 *.db
 *.db-wal
 *.db-shm
-server-go/data/
 
-# Go binary
-server-go/bin/
-# Nightshift plan artifacts (keep out of version control)
+# Tooling
 .nightshift-plan

@@ -133,6 +133,20 @@ func main() {
 		return handlers.GetGameConfig(c, cfg)
 	})
 
+	// Enabled brain parts (public, no auth)
+	app.Get("/api/brain-parts", func(c *fiber.Ctx) error {
+		s := c.Locals("store").(*database.Store)
+		parts, err := s.Queries.ListEnabledBrainParts(c.Context())
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to list brain parts"})
+		}
+		names := make([]string, len(parts))
+		for i, p := range parts {
+			names[i] = p.Name
+		}
+		return c.JSON(fiber.Map{"enabledRegions": names})
+	})
+
 	// WebSocket endpoint
 	app.Use("/ws", func(c *fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {

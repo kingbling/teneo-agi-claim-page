@@ -119,11 +119,15 @@ export const DiscoveryDashboard: Component = () => {
         return
       }
 
-      // Number keys 1-9 for region selection
+      // Number keys 1-9 for region selection (maps to enabled regions only)
       if (key >= '1' && key <= '9') {
-        const regionIndex = parseInt(key) - 1
-        if (regionIndex < FUNCTIONAL_BRAIN_REGIONS.length) {
-          setSelectedRegionIndex(regionIndex)
+        const displayIndex = parseInt(key) - 1
+        const enabledIds = new Set(configStore.enabledRegions.map((n: string) => n.replace(/_/g, '-')))
+        const enabledIndices = FUNCTIONAL_BRAIN_REGIONS
+          .map((r, i) => ({ id: r.id, idx: i }))
+          .filter(({ id }) => enabledIds.has(id))
+        if (displayIndex < enabledIndices.length) {
+          setSelectedRegionIndex(enabledIndices[displayIndex].idx)
           setHighlightIntensity(1.0)
         }
         return

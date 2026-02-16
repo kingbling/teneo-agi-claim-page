@@ -64,6 +64,7 @@ interface ConfigState {
   gameConfig: GameConfig | null
   synapseTypes: SynapseTypeDTO[]
   shipTypes: ShipTypeDTO[]
+  enabledRegions: string[]
   isLoaded: boolean
   error: string | null
 }
@@ -73,6 +74,7 @@ function createConfigStore() {
     gameConfig: null,
     synapseTypes: [],
     shipTypes: [],
+    enabledRegions: [],
     isLoaded: false,
     error: null,
   })
@@ -80,11 +82,12 @@ function createConfigStore() {
   // Fetch config from server
   const fetchConfig = async () => {
     try {
-      // Fetch game config, synapse types, and ship types in parallel
-      const [configRes, typesRes, shipTypesRes] = await Promise.all([
+      // Fetch game config, synapse types, ship types, and enabled regions in parallel
+      const [configRes, typesRes, shipTypesRes, brainPartsRes] = await Promise.all([
         fetch(`${API_URL}/api/config`),
         fetch(`${API_URL}/api/synapse-types`),
         fetch(`${API_URL}/api/ship-types`),
+        fetch(`${API_URL}/api/brain-parts`),
       ])
 
       if (!configRes.ok) {
@@ -108,12 +111,20 @@ function createConfigStore() {
         log.config.warn('Failed to fetch ship types, using empty list')
       }
 
+      let enabledRegions: string[] = []
+      if (brainPartsRes.ok) {
+        const brainPartsData = await brainPartsRes.json()
+        enabledRegions = brainPartsData.enabledRegions || []
+      } else {
+        log.config.warn('Failed to fetch brain parts, using empty list')
+      }
+
       // Initialize color system from DB types
       if (synapseTypes.length > 0) {
         initSynapseColors(synapseTypes)
       }
 
-      setState({ gameConfig: config, synapseTypes, shipTypes, isLoaded: true, error: null })
+      setState({ gameConfig: config, synapseTypes, shipTypes, enabledRegions, isLoaded: true, error: null })
     } catch (error) {
       log.config.error('Failed to fetch game config:', error)
       setState({
@@ -143,6 +154,7 @@ function createConfigStore() {
     get gameConfig() { return state.gameConfig },
     get synapseTypes() { return state.synapseTypes },
     get shipTypes() { return state.shipTypes },
+    get enabledRegions() { return state.enabledRegions },
     get isLoaded() { return state.isLoaded },
     get error() { return state.error },
 
