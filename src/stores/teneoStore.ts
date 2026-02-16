@@ -54,22 +54,17 @@ function createTeneoStore() {
 
       const data = await response.json()
 
+      setState({
+        isLinked: data.linked,
+        pointsTotal: data.pointsTotal ?? 0,
+        isLinking: false,
+      })
       if (data.linked) {
-        setState({
-          isLinked: true,
-          pointsTotal: data.pointsTotal,
-          isLinking: false,
-        })
         log.auth.success('Teneo account linked, points:', data.pointsTotal)
-        return true
       } else {
-        setState({
-          isLinking: false,
-          linkError: data.error || 'No Teneo account found',
-        })
         log.auth.info('Teneo link skipped:', data.error)
-        return false
       }
+      return data.linked
     } catch (error) {
       const err = error as { message?: string }
       setState({

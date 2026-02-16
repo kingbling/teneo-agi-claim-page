@@ -47,14 +47,12 @@ export const DashboardHeader: Component<DashboardHeaderProps> = (props) => {
         {/* Right side */}
         <div class="flex items-center gap-3">
           {/* Teneo Points */}
-          <Show when={teneoStore.isLinked}>
-            <div class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--background-secondary)] border border-[var(--card-border)]">
-              <span class="text-xs font-medium text-[var(--text-primary)]">
-                {formatPoints(teneoStore.pointsTotal)}
-              </span>
-              <span class="text-[10px] text-[var(--text-muted)]">TP</span>
-            </div>
-          </Show>
+          <div class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--background-secondary)] border border-[var(--card-border)]">
+            <span class="text-xs font-medium text-[var(--text-primary)]">
+              {formatPoints(teneoStore.pointsTotal)}
+            </span>
+            <span class="text-[10px] text-[var(--text-muted)]">TP</span>
+          </div>
 
           {/* $AGI Earned */}
           <Show when={userStore.totalAgiEarned > 0}>

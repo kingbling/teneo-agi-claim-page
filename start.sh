@@ -5,6 +5,13 @@
 
 set -e
 
+# Load .env file for Go server (Vite loads it automatically, Go does not)
+if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
+fi
+
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
