@@ -34,8 +34,8 @@ export function mapServerShipState(serverState: string): ShipStatus {
 // Note: 'solving' was renamed from 'exploring' to better reflect ship is working on a synapse
 export type ShipStatus = 'idle' | 'solving' | 'traveling' | 'returning'
 
-// Ship Type (visual style)
-export type ShipType = 'neuron' | 'synapse' | 'dendrite' | 'axon' | 'cortex'
+// Ship Type (visual style) - now dynamic from DB, string-based
+export type ShipType = string
 
 // Equipped Item on a Ship
 export interface EquippedItem {

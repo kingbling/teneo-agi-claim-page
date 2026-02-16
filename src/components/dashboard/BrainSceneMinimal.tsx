@@ -11,6 +11,7 @@ import type { OrbitControls as OrbitControlsType } from 'three/examples/jsm/cont
 import { useThree } from '@/three/hooks'
 import { OrbitControls } from '@/three/components'
 import { SynapseParticlesMinimal } from '@/components/brain/SynapseParticlesMinimal'
+import { RegionBoundary } from '@/components/brain/RegionBoundary'
 import { SpaceMarkers } from '@/components/brain/SpaceMarkers'
 import { ShipMarkers } from '@/components/brain/AgentMarkers'
 import { SynapseNetwork } from '@/components/brain/SynapseNetwork'
@@ -394,6 +395,9 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
         shipPosition={null}
         isShipZoom={false}
       />
+
+      {/* Region boundary wireframe */}
+      <RegionBoundary selectedRegionIndex={selectedRegionIndex()} />
 
       {/* Synapse clusters - always mounted to avoid Three.js object destroy/recreate */}
       <SpaceMarkers

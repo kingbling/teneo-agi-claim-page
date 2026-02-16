@@ -1,22 +1,27 @@
+import type { JSX } from 'solid-js'
+import { splitProps } from 'solid-js'
 import { cn } from '@/lib/utils'
 
 interface SkeletonProps {
-  className?: string
-  style?: React.CSSProperties
+  class?: string
+  style?: JSX.CSSProperties
 }
 
-export function Skeleton({ className, style }: SkeletonProps) {
+export function Skeleton(props: SkeletonProps) {
+  const [local, others] = splitProps(props, ['class', 'style'])
+
   return (
     <div
-      className={cn(
+      class={cn(
         'animate-pulse bg-gradient-to-r from-[var(--background-tertiary)] via-[var(--background-secondary)] to-[var(--background-tertiary)] bg-[length:200%_100%]',
-        className
+        local.class
       )}
       style={{
         animation: 'shimmer 1.5s ease-in-out infinite',
-        borderRadius: 'var(--radius-md)',
-        ...style,
+        'border-radius': 'var(--radius-md)',
+        ...local.style,
       }}
+      {...others}
     />
   )
 }

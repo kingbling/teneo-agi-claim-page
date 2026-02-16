@@ -13,6 +13,8 @@ import {
   Wrench,
   Calendar,
   Shapes,
+  Brain,
+  Rocket,
   Terminal,
   ArrowLeft,
 } from 'lucide-solid'
@@ -31,6 +33,8 @@ const navItems: NavItem[] = [
   { path: '/admin/interventions', icon: Wrench, label: 'Interventions' },
   { path: '/admin/events', icon: Calendar, label: 'Events' },
   { path: '/admin/synapse-types', icon: Shapes, label: 'Synapse Types' },
+  { path: '/admin/brain-parts', icon: Brain, label: 'Brain Parts' },
+  { path: '/admin/ship-types', icon: Rocket, label: 'Ship Types' },
   { path: '/admin/logs', icon: Terminal, label: 'Server Logs' },
 ]
 

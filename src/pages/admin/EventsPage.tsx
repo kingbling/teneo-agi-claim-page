@@ -4,7 +4,8 @@
 
 import { onMount, createSignal, Show, For } from 'solid-js'
 import { Plus, Calendar, Trash2, Play, Pause } from 'lucide-solid'
-import { adminStore, AdminEvent } from '@/stores/adminStore'
+import { adminStore } from '@/stores/adminStore'
+import type { AdminEvent } from '@/stores/adminStore'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'

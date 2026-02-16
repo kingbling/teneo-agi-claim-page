@@ -193,6 +193,9 @@ func main() {
 	// Synapse types (public)
 	app.Get("/api/synapse-types", func(c *fiber.Ctx) error { return handlers.ListPublicSynapseTypes(c, store) })
 
+	// Ship types (public)
+	app.Get("/api/ship-types", func(c *fiber.Ctx) error { return handlers.ListPublicShipTypes(c, store) })
+
 	// World state
 	app.Get("/api/world", func(c *fiber.Ctx) error { return handlers.GetWorldState(c, store) })
 
@@ -255,15 +258,31 @@ func main() {
 	adminGroup.Post("/events/:id/activate", admin.ActivateEvent)
 	adminGroup.Post("/events/:id/deactivate", admin.DeactivateEvent)
 
+	// Admin - Ship Types
+	adminGroup.Get("/ship-types", admin.ListShipTypes)
+	adminGroup.Get("/ship-types/:id", admin.GetShipTypeDetail)
+	adminGroup.Post("/ship-types", admin.CreateShipType)
+	adminGroup.Patch("/ship-types/:id", admin.UpdateShipType)
+	adminGroup.Delete("/ship-types/:id", admin.DeleteShipType)
+	adminGroup.Post("/ship-types/:id/model", admin.UploadShipTypeModel)
+
+	// Admin - Brain Parts
+	adminGroup.Get("/brain-parts", admin.ListBrainParts)
+	adminGroup.Post("/brain-parts", admin.CreateBrainPart)
+	adminGroup.Patch("/brain-parts/:id", admin.UpdateBrainPart)
+	adminGroup.Delete("/brain-parts/:id", admin.DeleteBrainPart)
+	adminGroup.Post("/brain-parts/:id/toggle", admin.ToggleBrainPart)
+	adminGroup.Post("/brain-parts/:id/generate", admin.GenerateSynapsesForBrainPart)
+	adminGroup.Post("/brain-parts/wipe", admin.WipeSynapses)
+	adminGroup.Post("/brain-parts/recompute-clusters", admin.RecomputeClusters)
+
 	// Admin - Synapse Types
 	adminGroup.Get("/synapse-types", admin.ListSynapseTypes)
 	adminGroup.Get("/synapse-types/:id", admin.GetSynapseTypeDetail)
 	adminGroup.Post("/synapse-types", admin.CreateSynapseType)
 	adminGroup.Patch("/synapse-types/:id", admin.UpdateSynapseType)
 	adminGroup.Delete("/synapse-types/:id", admin.DeleteSynapseType)
-	adminGroup.Post("/synapse-types/:id/generate", admin.GenerateSynapses)
 	adminGroup.Post("/synapse-types/:id/model", admin.UploadSynapseTypeModel)
-	adminGroup.Post("/synapse-types/wipe", admin.WipeSynapses)
 
 	// Admin - Logs
 	adminGroup.Get("/logs", admin.GetLogs)

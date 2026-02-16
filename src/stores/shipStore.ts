@@ -151,7 +151,7 @@ function createShipStore() {
 
   // ============ SHIP ACTIONS ============
 
-  const createShip = async (name: string): Promise<Ship | null> => {
+  const createShip = async (name: string, shipType: string = 'neuron'): Promise<Ship | null> => {
     const userId = userStore.userId
     if (!userId) {
       throw new Error('Please login first')
@@ -160,7 +160,7 @@ function createShipStore() {
     const response = await fetch(`${API_URL}/api/ships`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, name }),
+      body: JSON.stringify({ userId, name, shipType }),
     })
 
     if (!response.ok) {

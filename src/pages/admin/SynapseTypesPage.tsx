@@ -3,8 +3,9 @@
  */
 
 import { onMount, createSignal, Show, For } from 'solid-js'
-import { Plus, Trash2, Zap, Upload, RefreshCw } from 'lucide-solid'
-import { adminStore, AdminSynapseType } from '@/stores/adminStore'
+import { Plus, Trash2, Zap, Upload } from 'lucide-solid'
+import { adminStore } from '@/stores/adminStore'
+import type { AdminSynapseType } from '@/stores/adminStore'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { formatPoints } from '@/types/game'
@@ -13,9 +14,6 @@ export default function SynapseTypesPage() {
   const [showCreateForm, setShowCreateForm] = createSignal(false)
   const [editingId, setEditingId] = createSignal<string | null>(null)
   const [isSubmitting, setIsSubmitting] = createSignal(false)
-  const [generateDialogId, setGenerateDialogId] = createSignal<string | null>(null)
-  const [generateCount, setGenerateCount] = createSignal(10000)
-  const [generateResult, setGenerateResult] = createSignal<string | null>(null)
 
   const defaultForm = () => ({
     name: '',
@@ -83,28 +81,6 @@ export default function SynapseTypesPage() {
     }
     const success = await adminStore.deleteSynapseType(st.id)
     if (success) adminStore.fetchSynapseTypes()
-  }
-
-  const handleGenerate = async () => {
-    const typeId = generateDialogId()
-    if (!typeId) return
-    setIsSubmitting(true)
-    setGenerateResult(null)
-    const result = await adminStore.generateSynapses(typeId, generateCount())
-    if (result.error) {
-      setGenerateResult(`Error: ${result.error}`)
-    } else {
-      setGenerateResult(`Generated ${result.generated?.toLocaleString()} synapses`)
-      adminStore.fetchSynapseTypes()
-    }
-    setIsSubmitting(false)
-  }
-
-  const handleWipe = async () => {
-    const success = await adminStore.wipeSynapses()
-    if (success) {
-      adminStore.fetchSynapseTypes()
-    }
   }
 
   const handleModelUpload = async (typeId: string) => {
@@ -259,18 +235,12 @@ export default function SynapseTypesPage() {
       <div class="flex items-center justify-between">
         <div>
           <h1 class="text-2xl font-bold text-[var(--text-primary)]">Synapse Types</h1>
-          <p class="text-[var(--text-secondary)] mt-1">Manage synapse types and generate synapses</p>
+          <p class="text-[var(--text-secondary)] mt-1">Manage synapse type definitions</p>
         </div>
-        <div class="flex gap-2">
-          <Button variant="outline" onClick={handleWipe}>
-            <RefreshCw class="w-4 h-4 mr-2" />
-            Wipe All Synapses
-          </Button>
-          <Button onClick={() => setShowCreateForm(true)}>
-            <Plus class="w-4 h-4 mr-2" />
-            New Type
-          </Button>
-        </div>
+        <Button onClick={() => setShowCreateForm(true)}>
+          <Plus class="w-4 h-4 mr-2" />
+          New Type
+        </Button>
       </div>
 
       {/* Create Form */}
@@ -281,41 +251,6 @@ export default function SynapseTypesPage() {
           </CardHeader>
           <CardContent>
             <FormFields onSubmit={handleCreate} submitLabel="Create Type" />
-          </CardContent>
-        </Card>
-      </Show>
-
-      {/* Generate Dialog */}
-      <Show when={generateDialogId()}>
-        <Card>
-          <CardHeader>
-            <CardTitle>Generate Synapses</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div class="space-y-4">
-              <div>
-                <label class="text-xs text-[var(--text-tertiary)] mb-1 block">Count (1 - 100,000)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="100000"
-                  value={generateCount()}
-                  onInput={(e) => setGenerateCount(parseInt(e.currentTarget.value) || 1000)}
-                  class="w-full px-3 py-2 rounded border border-[var(--card-border)] bg-[var(--background-primary)] text-[var(--text-primary)]"
-                />
-              </div>
-              <Show when={generateResult()}>
-                <p class="text-sm text-[var(--text-secondary)]">{generateResult()}</p>
-              </Show>
-              <div class="flex gap-2">
-                <Button onClick={handleGenerate} disabled={isSubmitting()}>
-                  {isSubmitting() ? 'Generating...' : 'Generate'}
-                </Button>
-                <Button variant="outline" onClick={() => { setGenerateDialogId(null); setGenerateResult(null) }}>
-                  Close
-                </Button>
-              </div>
-            </div>
           </CardContent>
         </Card>
       </Show>
@@ -363,9 +298,6 @@ export default function SynapseTypesPage() {
                           </div>
                         </div>
                         <div class="flex gap-2">
-                          <Button size="sm" variant="outline" onClick={() => setGenerateDialogId(st.id)}>
-                            <Zap class="w-4 h-4 mr-1" /> Generate
-                          </Button>
                           <Button size="sm" variant="outline" onClick={() => handleModelUpload(st.id)}>
                             <Upload class="w-4 h-4 mr-1" /> GLB
                           </Button>

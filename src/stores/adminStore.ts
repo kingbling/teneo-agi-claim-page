@@ -106,6 +106,43 @@ export interface AdminSynapseType {
   updatedAt: number
 }
 
+export interface AdminBrainPart {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  centerX: number
+  centerY: number
+  centerZ: number
+  radius: number
+  colorR: number
+  colorG: number
+  colorB: number
+  isEnabled: boolean
+  sortOrder: number
+  synapseCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface AdminShipType {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  creationCost: number
+  speedMultiplier: number
+  solveSpeedMultiplier: number
+  fuelCapacity: number
+  detectionRadius: number
+  modelFilename: string | null
+  isActive: boolean
+  sortOrder: number
+  agentCount: number
+  createdAt: number
+  updatedAt: number
+}
+
 export interface Pagination {
   page: number
   limit: number
@@ -141,9 +178,17 @@ export interface AdminState {
   // Events
   events: AdminEvent[]
 
+  // Brain Parts
+  brainParts: AdminBrainPart[]
+  isLoadingBrainParts: boolean
+
   // Synapse Types
   synapseTypes: AdminSynapseType[]
   isLoadingSynapseTypes: boolean
+
+  // Ship Types
+  shipTypes: AdminShipType[]
+  isLoadingShipTypes: boolean
 }
 
 const initialState: AdminState = {
@@ -153,6 +198,7 @@ const initialState: AdminState = {
   isLoadingSpaces: false,
   isLoadingAgents: false,
   isLoadingEvents: false,
+  isLoadingBrainParts: false,
   isLoadingSynapseTypes: false,
   error: null,
 
@@ -170,7 +216,12 @@ const initialState: AdminState = {
 
   events: [],
 
+  brainParts: [],
+
   synapseTypes: [],
+
+  shipTypes: [],
+  isLoadingShipTypes: false,
 }
 
 function createAdminStore() {
@@ -203,8 +254,9 @@ function createAdminStore() {
     }
   }
 
-  // Admin access check
+  // Admin access check (cached — reset() clears it)
   async function checkAdminAccess(): Promise<boolean> {
+    if (state.isAdmin) return true
     const { data, error } = await apiCall<{ isAdmin: boolean }>('/api/admin/check')
     const isAdmin = !error && data?.isAdmin === true
     setState({ isAdmin })
@@ -487,15 +539,6 @@ function createAdminStore() {
     return !error
   }
 
-  async function generateSynapses(typeId: string, count: number): Promise<{ generated?: number; error?: string }> {
-    const { data, error } = await apiCall<{ generated: number; totalForType: number }>(
-      `/api/admin/synapse-types/${typeId}/generate`,
-      { method: 'POST', body: JSON.stringify({ count }) }
-    )
-    if (error) return { error }
-    return { generated: data?.generated }
-  }
-
   async function uploadSynapseTypeModel(typeId: string, file: File): Promise<boolean> {
     const formData = new FormData()
     formData.append('model', file)
@@ -512,8 +555,135 @@ function createAdminStore() {
   }
 
   async function wipeSynapses(): Promise<boolean> {
-    const { error } = await apiCall('/api/admin/synapse-types/wipe', { method: 'POST' })
+    const { error } = await apiCall('/api/admin/brain-parts/wipe', { method: 'POST' })
     return !error
+  }
+
+  // Brain Parts
+  async function fetchBrainParts(): Promise<void> {
+    setState({ isLoadingBrainParts: true, error: null })
+    const { data, error } = await apiCall<{ brainParts: AdminBrainPart[] }>('/api/admin/brain-parts')
+    if (error) {
+      setState({ isLoadingBrainParts: false, error })
+    } else if (data) {
+      setState({ brainParts: data.brainParts, isLoadingBrainParts: false })
+    }
+  }
+
+  async function createBrainPart(bp: {
+    name: string
+    displayName: string
+    description: string
+    centerX: number
+    centerY: number
+    centerZ: number
+    radius: number
+    colorR: number
+    colorG: number
+    colorB: number
+    isEnabled?: boolean
+    sortOrder: number
+  }): Promise<boolean> {
+    const { error } = await apiCall('/api/admin/brain-parts', {
+      method: 'POST',
+      body: JSON.stringify(bp),
+    })
+    return !error
+  }
+
+  async function updateBrainPart(id: string, updates: Record<string, unknown>): Promise<boolean> {
+    const { error } = await apiCall(`/api/admin/brain-parts/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    })
+    return !error
+  }
+
+  async function deleteBrainPart(id: string): Promise<boolean> {
+    const { error } = await apiCall(`/api/admin/brain-parts/${id}`, {
+      method: 'DELETE',
+    })
+    return !error
+  }
+
+  async function toggleBrainPart(id: string): Promise<boolean> {
+    const { error } = await apiCall(`/api/admin/brain-parts/${id}/toggle`, {
+      method: 'POST',
+    })
+    return !error
+  }
+
+  async function generateSynapsesForBrainPart(
+    brainPartId: string,
+    synapseTypeId: string,
+    count: number
+  ): Promise<{ generated?: number; error?: string }> {
+    const { data, error } = await apiCall<{ generated: number; totalForPart: number }>(
+      `/api/admin/brain-parts/${brainPartId}/generate`,
+      { method: 'POST', body: JSON.stringify({ synapseTypeId, count }) }
+    )
+    if (error) return { error }
+    return { generated: data?.generated }
+  }
+
+  // Ship Types
+  async function fetchShipTypes(): Promise<void> {
+    setState({ isLoadingShipTypes: true, error: null })
+    const { data, error } = await apiCall<{ shipTypes: AdminShipType[] }>('/api/admin/ship-types')
+    if (error) {
+      setState({ isLoadingShipTypes: false, error })
+    } else if (data) {
+      setState({ shipTypes: data.shipTypes, isLoadingShipTypes: false })
+    }
+  }
+
+  async function createShipType(st: {
+    name: string
+    displayName: string
+    description: string
+    creationCost: number
+    speedMultiplier: number
+    solveSpeedMultiplier: number
+    fuelCapacity: number
+    detectionRadius: number
+    isActive?: boolean
+    sortOrder: number
+  }): Promise<boolean> {
+    const { error } = await apiCall('/api/admin/ship-types', {
+      method: 'POST',
+      body: JSON.stringify(st),
+    })
+    return !error
+  }
+
+  async function updateShipType(id: string, updates: Record<string, unknown>): Promise<boolean> {
+    const { error } = await apiCall(`/api/admin/ship-types/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    })
+    return !error
+  }
+
+  async function deleteShipType(id: string): Promise<boolean> {
+    const { error } = await apiCall(`/api/admin/ship-types/${id}`, {
+      method: 'DELETE',
+    })
+    return !error
+  }
+
+  async function uploadShipTypeModel(typeId: string, file: File): Promise<boolean> {
+    const formData = new FormData()
+    formData.append('model', file)
+    try {
+      const response = await fetch(`${API_URL}/api/admin/ship-types/${typeId}/model`, {
+        method: 'POST',
+        headers: authStore.getAuthHeader(),
+        body: formData,
+      })
+      return response.ok
+    } catch {
+      return false
+    }
   }
 
   // Reset store
@@ -545,8 +715,14 @@ function createAdminStore() {
 
     get events() { return state.events },
 
+    get brainParts() { return state.brainParts },
+    get isLoadingBrainParts() { return state.isLoadingBrainParts },
+
     get synapseTypes() { return state.synapseTypes },
     get isLoadingSynapseTypes() { return state.isLoadingSynapseTypes },
+
+    get shipTypes() { return state.shipTypes },
+    get isLoadingShipTypes() { return state.isLoadingShipTypes },
 
     // Actions
     checkAdminAccess,
@@ -580,14 +756,28 @@ function createAdminStore() {
     activateEvent,
     deactivateEvent,
 
+    // Brain Parts
+    fetchBrainParts,
+    createBrainPart,
+    updateBrainPart,
+    deleteBrainPart,
+    toggleBrainPart,
+    generateSynapsesForBrainPart,
+    wipeSynapses,
+
     // Synapse Types
     fetchSynapseTypes,
     createSynapseType,
     updateSynapseType,
     deleteSynapseType,
-    generateSynapses,
     uploadSynapseTypeModel,
-    wipeSynapses,
+
+    // Ship Types
+    fetchShipTypes,
+    createShipType,
+    updateShipType,
+    deleteShipType,
+    uploadShipTypeModel,
   }
 }
 

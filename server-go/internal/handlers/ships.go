@@ -37,13 +37,17 @@ func calculateDistance(x1, y1, z1, x2, y2, z2 float64) float64 {
 	return math.Sqrt(dx*dx + dy*dy + dz*dz)
 }
 
-// calculateTravelParams computes travel cost, duration and timing
-func calculateTravelParams(distance float64, cfg *config.Config) TravelParams {
+// calculateTravelParams computes travel cost, duration and timing.
+// speedMultiplier applies to travel speed (e.g. 1.5 = 50% faster).
+func calculateTravelParams(distance float64, cfg *config.Config, speedMultiplier float64) TravelParams {
 	// Calculate travel cost
 	travelCost := math.Max(distance*cfg.TravelCostPerUnit, cfg.TravelCostMinimum)
 
-	// Game time travel, scaled by time multiplier
-	gameDuration := distance * cfg.TravelTimePerUnit
+	// Game time travel, scaled by time multiplier and ship speed
+	if speedMultiplier <= 0 {
+		speedMultiplier = 1.0
+	}
+	gameDuration := distance * cfg.TravelTimePerUnit / speedMultiplier
 	travelDuration := int64(gameDuration / cfg.TimeMultiplier)
 	if travelDuration < 2000 {
 		travelDuration = 2000
@@ -55,6 +59,22 @@ func calculateTravelParams(distance float64, cfg *config.Config) TravelParams {
 		TravelDuration: travelDuration,
 		StartTime:      time.Now().UnixMilli(),
 	}
+}
+
+// lookupShipSpeedMultiplier looks up the speed multiplier for a ship type from DB.
+// Falls back to 1.0 if not found.
+func lookupShipSpeedMultiplier(c *fiber.Ctx, store *database.Store, shipTypeName string) float64 {
+	if shipTypeName == "" {
+		return 1.0
+	}
+	st, err := store.Queries.GetShipTypeByName(c.Context(), shipTypeName)
+	if err != nil {
+		return 1.0
+	}
+	if st.SpeedMultiplier <= 0 {
+		return 1.0
+	}
+	return float64(st.SpeedMultiplier)
 }
 
 // buildTravelUpdateParams creates UpdateAgentParams for an agent starting travel to a target
@@ -108,7 +128,7 @@ func ConvertGenAgentToShipDTO(agent generated.Agent) dto.ShipDTO {
 	// Default to "neuron" if ShipType is empty (backwards compatibility)
 	shipType := agent.ShipType
 	if shipType == "" {
-		shipType = string(config.ShipTypeNeuron)
+		shipType = "neuron"
 	}
 
 	// Calculate rotationY (yaw) toward target if available
@@ -171,8 +191,9 @@ func CreateShip(c *fiber.Ctx, store *database.Store) error {
 	ctx := c.Context()
 
 	var req struct {
-		UserID string `json:"userId"`
-		Name   string `json:"name"`
+		UserID   string `json:"userId"`
+		Name     string `json:"name"`
+		ShipType string `json:"shipType"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -181,6 +202,23 @@ func CreateShip(c *fiber.Ctx, store *database.Store) error {
 
 	if req.UserID == "" || req.Name == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "userId and name are required"})
+	}
+
+	// Default to neuron if no ship type specified (backwards compatibility)
+	if req.ShipType == "" {
+		req.ShipType = "neuron"
+	}
+
+	// Look up ship type from DB
+	shipType, err := store.Queries.GetShipTypeByName(ctx, req.ShipType)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.Status(400).JSON(fiber.Map{"error": fmt.Sprintf("Unknown ship type: %s", req.ShipType)})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to look up ship type"})
+	}
+	if !shipType.IsActive {
+		return c.Status(400).JSON(fiber.Map{"error": "This ship type is not currently available"})
 	}
 
 	// Check if user exists
@@ -212,13 +250,31 @@ func CreateShip(c *fiber.Ctx, store *database.Store) error {
 		})
 	}
 
-	// Create ship with random ship type
+	// Check and deduct creation cost
+	creationCost := float64(shipType.CreationCost)
+	if creationCost > 0 {
+		if user.Points < creationCost {
+			return c.Status(400).JSON(fiber.Map{
+				"error":     "Insufficient points to create this ship",
+				"required":  creationCost,
+				"available": user.Points,
+			})
+		}
+		if err := store.Queries.DecrementUserPoints(ctx, generated.DecrementUserPointsParams{
+			ID:     req.UserID,
+			Points: creationCost,
+		}); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct creation cost"})
+		}
+	}
+
+	// Create ship with chosen ship type
 	newAgent, err := store.Queries.CreateAgent(ctx, generated.CreateAgentParams{
 		ID:                    uuid.New().String(),
 		OwnerID:               req.UserID,
 		Name:                  req.Name,
 		State:                 string(dto.AgentIdle),
-		ShipType:              string(config.RandomShipType()),
+		ShipType:              req.ShipType,
 		PositionX:             0,
 		PositionY:             0,
 		PositionZ:             0,
@@ -232,7 +288,7 @@ func CreateShip(c *fiber.Ctx, store *database.Store) error {
 		SpacesDiscovered:      0,
 		DistanceTraveled:      0,
 		CreatedAt:             time.Now().UnixMilli(),
-		CreationCost:          0,
+		CreationCost:          int32(shipType.CreationCost),
 		NeedsRepair:           false,
 		TranceActive:          false,
 		TranceLevel:           0,
@@ -253,8 +309,9 @@ func CreateShip(c *fiber.Ctx, store *database.Store) error {
 	shipDTO := ConvertGenAgentToShipDTO(newAgent)
 
 	return c.Status(201).JSON(fiber.Map{
-		"success": true,
-		"ship":    shipDTO,
+		"success":      true,
+		"ship":         shipDTO,
+		"creationCost": creationCost,
 	})
 }
 
@@ -332,7 +389,8 @@ func DeployShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *config
 		// Calculate travel parameters using helpers
 		distance := calculateDistance(agent.PositionX, agent.PositionY, agent.PositionZ,
 			space.PositionX, space.PositionY, space.PositionZ)
-		params := calculateTravelParams(distance, cfg)
+		speedMult := lookupShipSpeedMultiplier(c, store, agent.ShipType)
+		params := calculateTravelParams(distance, cfg, speedMult)
 
 		// Get user and check points balance
 		user, err := store.Queries.GetUser(ctx, agent.OwnerID)
@@ -529,7 +587,8 @@ func TravelToSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *c
 	// Calculate travel parameters using helpers
 	distance := calculateDistance(agent.PositionX, agent.PositionY, agent.PositionZ,
 		space.PositionX, space.PositionY, space.PositionZ)
-	params := calculateTravelParams(distance, cfg)
+	speedMult := lookupShipSpeedMultiplier(c, store, agent.ShipType)
+	params := calculateTravelParams(distance, cfg, speedMult)
 
 	// Get user and check points balance
 	user, err := store.Queries.GetUser(ctx, agent.OwnerID)
@@ -642,4 +701,34 @@ func getAutopilotMessage(enabled bool) string {
 		return "Autopilot enabled"
 	}
 	return "Autopilot disabled"
+}
+
+// ListPublicShipTypes returns active ship types for the frontend (public, no auth required)
+func ListPublicShipTypes(c *fiber.Ctx, store *database.Store) error {
+	ctx := c.Context()
+
+	types, err := store.Queries.ListActiveShipTypes(ctx)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to list ship types"})
+	}
+
+	result := make([]dto.ShipTypeDTO, len(types))
+	for i, t := range types {
+		result[i] = dto.ShipTypeDTO{
+			ID:                   t.ID,
+			Name:                 t.Name,
+			DisplayName:          t.DisplayName,
+			Description:          t.Description,
+			CreationCost:         int(t.CreationCost),
+			SpeedMultiplier:      float64(t.SpeedMultiplier),
+			SolveSpeedMultiplier: float64(t.SolveSpeedMultiplier),
+			FuelCapacity:         int(t.FuelCapacity),
+			DetectionRadius:      float64(t.DetectionRadius),
+			ModelFilename:        t.ModelFilename,
+			IsActive:             t.IsActive,
+			SortOrder:            int(t.SortOrder),
+		}
+	}
+
+	return c.JSON(fiber.Map{"shipTypes": result})
 }

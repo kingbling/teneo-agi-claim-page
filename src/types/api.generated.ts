@@ -135,6 +135,29 @@ export interface AutopilotPreferences {
 }
 
 //////////
+// source: brain_part.go
+
+/**
+ * BrainPartDTO is the API representation of a brain part
+ * tygo: BrainPartDTO
+ */
+export interface BrainPartDTO {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string;
+  centerX: number /* float64 */;
+  centerY: number /* float64 */;
+  centerZ: number /* float64 */;
+  radius: number /* float64 */;
+  colorR: number /* float64 */;
+  colorG: number /* float64 */;
+  colorB: number /* float64 */;
+  isEnabled: boolean;
+  sortOrder: number /* int */;
+}
+
+//////////
 // source: config.go
 
 /**
@@ -226,6 +249,28 @@ export interface TierConfig {
 export interface StakingBonus {
   threshold: number /* int */;
   bonus: number /* int */;
+}
+
+//////////
+// source: ship_type.go
+
+/**
+ * ShipTypeDTO is the API representation of a ship type
+ * tygo: ShipTypeDTO
+ */
+export interface ShipTypeDTO {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string;
+  creationCost: number /* int */;
+  speedMultiplier: number /* float64 */;
+  solveSpeedMultiplier: number /* float64 */;
+  fuelCapacity: number /* int */;
+  detectionRadius: number /* float64 */;
+  modelFilename?: string;
+  isActive: boolean;
+  sortOrder: number /* int */;
 }
 
 //////////

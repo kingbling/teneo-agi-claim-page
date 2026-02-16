@@ -19,7 +19,7 @@ import (
 // immediately pick a new target so they never vanish from broadcasts.
 type AmbientShip struct {
 	ID       string
-	ShipType config.ShipType
+	ShipType string
 
 	// Current position (interpolated)
 	CurrentX, CurrentY, CurrentZ float64
@@ -93,7 +93,7 @@ func (am *AmbientManager) Init() {
 
 		ship := &AmbientShip{
 			ID:             fmt.Sprintf("ambient-%d", i),
-			ShipType:       config.RandomShipType(),
+			ShipType:       randomShipTypeName(),
 			StartX:         start.PositionX,
 			StartY:         start.PositionY,
 			StartZ:         start.PositionZ,
@@ -220,7 +220,7 @@ func (am *AmbientManager) AdjustCount(realTravelingCount int) {
 		idx := len(am.ships)
 		ship := &AmbientShip{
 			ID:       fmt.Sprintf("ambient-%d", idx),
-			ShipType: config.RandomShipType(),
+			ShipType: randomShipTypeName(),
 		}
 		// Pick a random starting position
 		ctx := context.Background()

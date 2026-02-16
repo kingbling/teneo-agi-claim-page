@@ -1,9 +1,49 @@
 package config
 
 import (
+	"bufio"
 	"os"
 	"strconv"
+	"strings"
 )
+
+func init() {
+	loadDotEnv()
+}
+
+// loadDotEnv reads .env from the current directory or parent directory.
+// Only sets variables that are not already in the environment.
+func loadDotEnv() {
+	for _, path := range []string{".env", "../.env"} {
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			key, val, ok := strings.Cut(line, "=")
+			if !ok {
+				continue
+			}
+			key = strings.TrimSpace(key)
+			val = strings.TrimSpace(val)
+			// Strip surrounding quotes
+			if len(val) >= 2 && (val[0] == '"' || val[0] == '\'') && val[len(val)-1] == val[0] {
+				val = val[1 : len(val)-1]
+			}
+			// Don't override existing env vars
+			if os.Getenv(key) == "" {
+				os.Setenv(key, val)
+			}
+		}
+		f.Close()
+		return // loaded one file, done
+	}
+}
 
 // Config holds all configuration for the server
 type Config struct {

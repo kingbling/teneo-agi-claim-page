@@ -79,6 +79,24 @@ type AgentCluster struct {
 	UpdatedAt     int64   `json:"updated_at"`
 }
 
+type BrainPart struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	DisplayName string  `json:"display_name"`
+	Description string  `json:"description"`
+	CenterX     float64 `json:"center_x"`
+	CenterY     float64 `json:"center_y"`
+	CenterZ     float64 `json:"center_z"`
+	Radius      float64 `json:"radius"`
+	ColorR      float32 `json:"color_r"`
+	ColorG      float32 `json:"color_g"`
+	ColorB      float32 `json:"color_b"`
+	IsEnabled   bool    `json:"is_enabled"`
+	SortOrder   int32   `json:"sort_order"`
+	CreatedAt   int64   `json:"created_at"`
+	UpdatedAt   int64   `json:"updated_at"`
+}
+
 type LiveEvent struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
@@ -118,6 +136,23 @@ type Sector struct {
 	TotalAgiRewards       int32   `json:"total_agi_rewards"`
 	DistributedAgiRewards int32   `json:"distributed_agi_rewards"`
 	ParticipantCount      int32   `json:"participant_count"`
+}
+
+type ShipType struct {
+	ID                   string  `json:"id"`
+	Name                 string  `json:"name"`
+	DisplayName          string  `json:"display_name"`
+	Description          string  `json:"description"`
+	CreationCost         int32   `json:"creation_cost"`
+	SpeedMultiplier      float32 `json:"speed_multiplier"`
+	SolveSpeedMultiplier float32 `json:"solve_speed_multiplier"`
+	FuelCapacity         int32   `json:"fuel_capacity"`
+	DetectionRadius      float32 `json:"detection_radius"`
+	ModelFilename        *string `json:"model_filename"`
+	IsActive             bool    `json:"is_active"`
+	SortOrder            int32   `json:"sort_order"`
+	CreatedAt            int64   `json:"created_at"`
+	UpdatedAt            int64   `json:"updated_at"`
 }
 
 type SimulationState struct {

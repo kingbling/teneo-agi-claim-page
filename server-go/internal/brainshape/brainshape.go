@@ -75,6 +75,19 @@ func GenerateUniformSpherePoint() (float64, float64, float64) {
 	}
 }
 
+// GeneratePointInSphere generates a random point within a sphere defined by center + radius
+// using rejection sampling. Returns pre-brain-shape coordinates suitable for ConstrainToBrainShape.
+func GeneratePointInSphere(cx, cy, cz, radius float64) (float64, float64, float64) {
+	for {
+		x := rand.Float64()*2 - 1
+		y := rand.Float64()*2 - 1
+		z := rand.Float64()*2 - 1
+		if x*x+y*y+z*z <= 1.0 {
+			return cx + x*radius, cy + y*radius, cz + z*radius
+		}
+	}
+}
+
 // FindClosestRegion returns the name of the brain region closest to the given point
 func FindClosestRegion(x, y, z float64) string {
 	minDist := math.MaxFloat64

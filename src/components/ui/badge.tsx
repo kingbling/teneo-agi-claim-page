@@ -1,5 +1,6 @@
 import { cva, type VariantProps } from 'class-variance-authority'
-import type * as React from 'react'
+import type { JSX } from 'solid-js'
+import { Show, splitProps } from 'solid-js'
 import { cn } from '@/lib/utils'
 
 const badgeVariants = cva(
@@ -56,11 +57,11 @@ const badgeVariants = cva(
 )
 
 export interface BadgeProps
-  extends React.HTMLAttributes<HTMLDivElement>,
+  extends JSX.HTMLAttributes<HTMLDivElement>,
     VariantProps<typeof badgeVariants> {
   pulse?: boolean
   glow?: boolean
-  icon?: React.ReactNode
+  icon?: JSX.Element
   dot?: boolean
   dotColor?: 'green' | 'red' | 'yellow' | 'blue' | 'purple'
 }
@@ -73,41 +74,46 @@ const dotColors = {
   purple: 'bg-[hsl(var(--secondary))]',
 }
 
-function Badge({
-  className,
-  variant,
-  size,
-  pulse,
-  glow,
-  icon,
-  dot,
-  dotColor = 'green',
-  children,
-  ...props
-}: BadgeProps) {
+function Badge(props: BadgeProps) {
+  const [local, others] = splitProps(props, [
+    'class',
+    'variant',
+    'size',
+    'pulse',
+    'glow',
+    'icon',
+    'dot',
+    'dotColor',
+    'children',
+  ])
+
+  const color = () => local.dotColor ?? 'green'
+
   return (
     <div
-      className={cn(
-        badgeVariants({ variant, size }),
-        pulse && 'animate-pulse',
-        glow && 'shadow-lg',
-        className
+      class={cn(
+        badgeVariants({ variant: local.variant, size: local.size }),
+        local.pulse && 'animate-pulse',
+        local.glow && 'shadow-lg',
+        local.class
       )}
-      {...props}
+      {...others}
     >
-      {dot && (
-        <span className="relative flex h-2 w-2">
-          {pulse && (
-            <span className={cn(
+      <Show when={local.dot}>
+        <span class="relative flex h-2 w-2">
+          <Show when={local.pulse}>
+            <span class={cn(
               'animate-ping absolute inline-flex h-full w-full rounded-full opacity-75',
-              dotColors[dotColor]
+              dotColors[color()]
             )} />
-          )}
-          <span className={cn('relative inline-flex rounded-full h-2 w-2', dotColors[dotColor])} />
+          </Show>
+          <span class={cn('relative inline-flex rounded-full h-2 w-2', dotColors[color()])} />
         </span>
-      )}
-      {icon && <span className="shrink-0 [&>svg]:h-3.5 [&>svg]:w-3.5">{icon}</span>}
-      {children}
+      </Show>
+      <Show when={local.icon}>
+        <span class="shrink-0 [&>svg]:h-3.5 [&>svg]:w-3.5">{local.icon}</span>
+      </Show>
+      {local.children}
     </div>
   )
 }
@@ -119,12 +125,16 @@ interface CountBadgeProps extends Omit<BadgeProps, 'children'> {
   showPlus?: boolean
 }
 
-function CountBadge({ count, max = 99, showPlus = true, size = 'sm', ...props }: CountBadgeProps) {
-  const displayCount = count > max ? `${max}${showPlus ? '+' : ''}` : count.toString()
+function CountBadge(props: CountBadgeProps) {
+  const [local, others] = splitProps(props, ['count', 'max', 'showPlus', 'size'])
+
+  const max = () => local.max ?? 99
+  const showPlus = () => local.showPlus ?? true
+  const displayCount = () => local.count > max() ? `${max()}${showPlus() ? '+' : ''}` : local.count.toString()
 
   return (
-    <Badge size={size} {...props}>
-      <span className="tabular-nums font-bold">{displayCount}</span>
+    <Badge size={local.size ?? 'sm'} {...others}>
+      <span class="tabular-nums font-bold">{displayCount()}</span>
     </Badge>
   )
 }
@@ -149,18 +159,20 @@ const statusConfig = {
   resting: { variant: 'resting' as const, dotColor: 'purple' as const, label: 'Resting' },
 }
 
-function StatusBadge({ status, label, showDot = true, ...props }: StatusBadgeProps) {
-  const config = statusConfig[status]
+function StatusBadge(props: StatusBadgeProps) {
+  const [local, others] = splitProps(props, ['status', 'label', 'showDot'])
+
+  const config = () => statusConfig[local.status]
 
   return (
     <Badge
-      variant={config.variant}
-      dot={showDot}
-      dotColor={config.dotColor}
-      pulse={status === 'active' || status === 'solving' || status === 'traveling'}
-      {...props}
+      variant={config().variant}
+      dot={local.showDot ?? true}
+      dotColor={config().dotColor}
+      pulse={local.status === 'active' || local.status === 'solving' || local.status === 'traveling'}
+      {...others}
     >
-      {label || config.label}
+      {local.label || config().label}
     </Badge>
   )
 }
@@ -180,14 +192,18 @@ const rarityLabels = {
   mythic: 'Mythic',
 }
 
-function RarityBadge({ rarity, showLabel = true, ...props }: RarityBadgeProps) {
+function RarityBadge(props: RarityBadgeProps) {
+  const [local, others] = splitProps(props, ['rarity', 'showLabel'])
+
+  const showLabel = () => local.showLabel ?? true
+
   return (
     <Badge
-      variant={rarity}
-      glow={rarity === 'legendary' || rarity === 'mythic'}
-      {...props}
+      variant={local.rarity}
+      glow={local.rarity === 'legendary' || local.rarity === 'mythic'}
+      {...others}
     >
-      {showLabel && rarityLabels[rarity]}
+      <Show when={showLabel()}>{rarityLabels[local.rarity]}</Show>
     </Badge>
   )
 }
@@ -198,11 +214,15 @@ interface MultiplierBadgeProps extends Omit<BadgeProps, 'children'> {
   prefix?: string
 }
 
-function MultiplierBadge({ value, prefix = 'x', variant = 'reward', ...props }: MultiplierBadgeProps) {
+function MultiplierBadge(props: MultiplierBadgeProps) {
+  const [local, others] = splitProps(props, ['value', 'prefix', 'variant'])
+
+  const prefix = () => local.prefix ?? 'x'
+
   return (
-    <Badge variant={variant} glow={value >= 2} {...props}>
-      <span className="tabular-nums font-bold">
-        {prefix}{value.toFixed(value % 1 === 0 ? 0 : 1)}
+    <Badge variant={local.variant ?? 'reward'} glow={local.value >= 2} {...others}>
+      <span class="tabular-nums font-bold">
+        {prefix()}{local.value.toFixed(local.value % 1 === 0 ? 0 : 1)}
       </span>
     </Badge>
   )
@@ -214,18 +234,22 @@ interface LevelBadgeProps extends Omit<BadgeProps, 'children'> {
   maxLevel?: number
 }
 
-function LevelBadge({ level, maxLevel, variant = 'default', ...props }: LevelBadgeProps) {
-  const isMax = maxLevel !== undefined && level >= maxLevel
+function LevelBadge(props: LevelBadgeProps) {
+  const [local, others] = splitProps(props, ['level', 'maxLevel', 'variant'])
+
+  const isMax = () => local.maxLevel !== undefined && local.level >= local.maxLevel
 
   return (
     <Badge
-      variant={isMax ? 'legendary' : variant}
-      glow={isMax || undefined}
-      {...props}
+      variant={isMax() ? 'legendary' : (local.variant ?? 'default')}
+      glow={isMax() || undefined}
+      {...others}
     >
-      <span className="tabular-nums font-bold">
-        Lv.{level}
-        {maxLevel && <span className="text-[var(--text-muted)]">/{maxLevel}</span>}
+      <span class="tabular-nums font-bold">
+        Lv.{local.level}
+        <Show when={local.maxLevel}>
+          <span class="text-[var(--text-muted)]">/{local.maxLevel}</span>
+        </Show>
       </span>
     </Badge>
   )

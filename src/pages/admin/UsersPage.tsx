@@ -5,8 +5,10 @@
 import { onMount, createSignal, Show } from 'solid-js'
 import { useNavigate } from '@solidjs/router'
 import { Search, Ban, CheckCircle } from 'lucide-solid'
-import { adminStore, AdminUser } from '@/stores/adminStore'
-import { DataTable, Column } from '@/components/admin/DataTable'
+import { adminStore } from '@/stores/adminStore'
+import type { AdminUser } from '@/stores/adminStore'
+import { DataTable } from '@/components/admin/DataTable'
+import type { Column } from '@/components/admin/DataTable'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 

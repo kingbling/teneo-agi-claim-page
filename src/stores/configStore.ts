@@ -9,7 +9,7 @@ import { createStore } from 'solid-js/store'
 import { API_URL } from '@/constants/api'
 import { log } from '@/utils/logger'
 import { initSynapseColors } from '@/constants/colors'
-import type { SynapseTypeDTO } from '@/types/api.generated'
+import type { SynapseTypeDTO, ShipTypeDTO } from '@/types/api.generated'
 
 // ============ TYPES ============
 
@@ -63,6 +63,7 @@ export interface TraitEffect {
 interface ConfigState {
   gameConfig: GameConfig | null
   synapseTypes: SynapseTypeDTO[]
+  shipTypes: ShipTypeDTO[]
   isLoaded: boolean
   error: string | null
 }
@@ -71,6 +72,7 @@ function createConfigStore() {
   const [state, setState] = createStore<ConfigState>({
     gameConfig: null,
     synapseTypes: [],
+    shipTypes: [],
     isLoaded: false,
     error: null,
   })
@@ -78,10 +80,11 @@ function createConfigStore() {
   // Fetch config from server
   const fetchConfig = async () => {
     try {
-      // Fetch game config and synapse types in parallel
-      const [configRes, typesRes] = await Promise.all([
+      // Fetch game config, synapse types, and ship types in parallel
+      const [configRes, typesRes, shipTypesRes] = await Promise.all([
         fetch(`${API_URL}/api/config`),
         fetch(`${API_URL}/api/synapse-types`),
+        fetch(`${API_URL}/api/ship-types`),
       ])
 
       if (!configRes.ok) {
@@ -97,12 +100,20 @@ function createConfigStore() {
         log.config.warn('Failed to fetch synapse types, using empty list')
       }
 
+      let shipTypes: ShipTypeDTO[] = []
+      if (shipTypesRes.ok) {
+        const shipTypesData = await shipTypesRes.json()
+        shipTypes = shipTypesData.shipTypes || []
+      } else {
+        log.config.warn('Failed to fetch ship types, using empty list')
+      }
+
       // Initialize color system from DB types
       if (synapseTypes.length > 0) {
         initSynapseColors(synapseTypes)
       }
 
-      setState({ gameConfig: config, synapseTypes, isLoaded: true, error: null })
+      setState({ gameConfig: config, synapseTypes, shipTypes, isLoaded: true, error: null })
     } catch (error) {
       log.config.error('Failed to fetch game config:', error)
       setState({
@@ -122,10 +133,16 @@ function createConfigStore() {
     return state.synapseTypes[index]
   }
 
+  // Get ship type config by name
+  const getShipType = (name: string): ShipTypeDTO | undefined => {
+    return state.shipTypes.find(t => t.name === name)
+  }
+
   return {
     // State accessors (reactive getters)
     get gameConfig() { return state.gameConfig },
     get synapseTypes() { return state.synapseTypes },
+    get shipTypes() { return state.shipTypes },
     get isLoaded() { return state.isLoaded },
     get error() { return state.error },
 
@@ -133,6 +150,7 @@ function createConfigStore() {
     fetchConfig,
     getSynapseType,
     getSynapseTypeByIndex,
+    getShipType,
   }
 }
 

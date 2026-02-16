@@ -1,5 +1,6 @@
 import { Show, onMount, createEffect, lazy, Suspense } from 'solid-js'
 import { Router, Route } from '@solidjs/router'
+import type { RouteSectionProps } from '@solidjs/router'
 import { Landing } from './pages/Landing'
 import { DiscoveryDashboard } from './pages/DiscoveryDashboard'
 import { configStore } from './stores/configStore'
@@ -17,10 +18,24 @@ const InterventionsPage = lazy(() => import('./pages/admin/InterventionsPage'))
 const EventsPage = lazy(() => import('./pages/admin/EventsPage'))
 const LogsPage = lazy(() => import('./pages/admin/LogsPage'))
 const SynapseTypesPage = lazy(() => import('./pages/admin/SynapseTypesPage'))
+const BrainPartsPage = lazy(() => import('./pages/admin/BrainPartsPage'))
+const ShipTypesPage = lazy(() => import('./pages/admin/ShipTypesPage'))
 
 // Admin components
 import { AdminGuard } from './components/admin/AdminGuard'
 import { AdminLayout } from './components/admin/AdminLayout'
+
+function AdminShell(props: RouteSectionProps) {
+  return (
+    <AdminGuard>
+      <AdminLayout>
+        <Suspense fallback={<div class="p-8">Loading...</div>}>
+          {props.children}
+        </Suspense>
+      </AdminLayout>
+    </AdminGuard>
+  )
+}
 
 /**
  * Attempt auto-login with stored token and wallet address
@@ -100,88 +115,20 @@ function App() {
           <Route path="/" component={Landing} />
           <Route path="/discovery" component={DiscoveryDashboard} />
 
-          {/* Admin routes - wrapped with guard and layout */}
-          <Route path="/admin" component={() => (
-            <AdminGuard>
-              <AdminLayout>
-                <Suspense fallback={<div class="p-8">Loading...</div>}>
-                  <AdminDashboard />
-                </Suspense>
-              </AdminLayout>
-            </AdminGuard>
-          )} />
-          <Route path="/admin/users" component={() => (
-            <AdminGuard>
-              <AdminLayout>
-                <Suspense fallback={<div class="p-8">Loading...</div>}>
-                  <UsersPage />
-                </Suspense>
-              </AdminLayout>
-            </AdminGuard>
-          )} />
-          <Route path="/admin/users/:id" component={() => (
-            <AdminGuard>
-              <AdminLayout>
-                <Suspense fallback={<div class="p-8">Loading...</div>}>
-                  <UserDetailPage />
-                </Suspense>
-              </AdminLayout>
-            </AdminGuard>
-          )} />
-          <Route path="/admin/analytics" component={() => (
-            <AdminGuard>
-              <AdminLayout>
-                <Suspense fallback={<div class="p-8">Loading...</div>}>
-                  <AnalyticsPage />
-                </Suspense>
-              </AdminLayout>
-            </AdminGuard>
-          )} />
-          <Route path="/admin/data" component={() => (
-            <AdminGuard>
-              <AdminLayout>
-                <Suspense fallback={<div class="p-8">Loading...</div>}>
-                  <DataPage />
-                </Suspense>
-              </AdminLayout>
-            </AdminGuard>
-          )} />
-          <Route path="/admin/interventions" component={() => (
-            <AdminGuard>
-              <AdminLayout>
-                <Suspense fallback={<div class="p-8">Loading...</div>}>
-                  <InterventionsPage />
-                </Suspense>
-              </AdminLayout>
-            </AdminGuard>
-          )} />
-          <Route path="/admin/events" component={() => (
-            <AdminGuard>
-              <AdminLayout>
-                <Suspense fallback={<div class="p-8">Loading...</div>}>
-                  <EventsPage />
-                </Suspense>
-              </AdminLayout>
-            </AdminGuard>
-          )} />
-          <Route path="/admin/synapse-types" component={() => (
-            <AdminGuard>
-              <AdminLayout>
-                <Suspense fallback={<div class="p-8">Loading...</div>}>
-                  <SynapseTypesPage />
-                </Suspense>
-              </AdminLayout>
-            </AdminGuard>
-          )} />
-          <Route path="/admin/logs" component={() => (
-            <AdminGuard>
-              <AdminLayout>
-                <Suspense fallback={<div class="p-8">Loading...</div>}>
-                  <LogsPage />
-                </Suspense>
-              </AdminLayout>
-            </AdminGuard>
-          )} />
+          {/* Admin routes - nested under shared shell so AdminGuard + AdminLayout stay mounted */}
+          <Route path="/admin" component={AdminShell}>
+            <Route path="/" component={AdminDashboard} />
+            <Route path="/users" component={UsersPage} />
+            <Route path="/users/:id" component={UserDetailPage} />
+            <Route path="/analytics" component={AnalyticsPage} />
+            <Route path="/data" component={DataPage} />
+            <Route path="/interventions" component={InterventionsPage} />
+            <Route path="/events" component={EventsPage} />
+            <Route path="/synapse-types" component={SynapseTypesPage} />
+            <Route path="/brain-parts" component={BrainPartsPage} />
+            <Route path="/ship-types" component={ShipTypesPage} />
+            <Route path="/logs" component={LogsPage} />
+          </Route>
         </Router>
       </Show>
   )

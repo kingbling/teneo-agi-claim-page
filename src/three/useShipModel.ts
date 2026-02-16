@@ -8,9 +8,8 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { log } from '@/utils/logger'
+import { configStore } from '@/stores/configStore'
 import type { ShipType } from '@/stores/shipStore.types'
-
-const ALL_SHIP_TYPES: ShipType[] = ['neuron', 'synapse', 'dendrite', 'axon', 'cortex']
 
 // Per-type cached models
 const cachedModels = new Map<ShipType, THREE.Group>()
@@ -73,11 +72,17 @@ export async function loadShipModel(type: ShipType = 'neuron'): Promise<THREE.Gr
 
 /**
  * Preloads all ship type models in parallel.
+ * Uses configStore.shipTypes if available, falls back to default list.
  * Returns a map of ShipType → model clone.
  */
 export async function loadAllShipModels(): Promise<Map<ShipType, THREE.Group>> {
+  const shipTypes = configStore.shipTypes
+  const typeNames: ShipType[] = shipTypes.length > 0
+    ? shipTypes.map(t => t.name)
+    : ['neuron', 'synapse', 'dendrite', 'axon', 'cortex']
+
   const results = await Promise.allSettled(
-    ALL_SHIP_TYPES.map(async (type) => {
+    typeNames.map(async (type) => {
       const model = await loadShipModel(type)
       return [type, model] as const
     })

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -40,6 +41,14 @@ type synapseTypeConfig struct {
 	AGIRewardMax   int
 }
 
+// shipTypeConfig caches a ship type's gameplay parameters
+type shipTypeConfig struct {
+	SpeedMultiplier      float64
+	SolveSpeedMultiplier float64
+	FuelCapacity         int
+	DetectionRadius      float64
+}
+
 // Engine handles the game simulation tick loop
 type Engine struct {
 	store     *database.Store
@@ -53,6 +62,10 @@ type Engine struct {
 	// Synapse type cache (loaded from DB, refreshed periodically)
 	synapseTypeCache map[string]synapseTypeConfig // name -> config
 	synapseTypeMu    sync.RWMutex
+
+	// Ship type cache (loaded from DB, refreshed periodically)
+	shipTypeCache map[string]shipTypeConfig // name -> config
+	shipTypeMu    sync.RWMutex
 
 	// Delta tracking for efficient synapse state updates
 	synapseDeltaQueue []dto.SynapseDelta
@@ -80,6 +93,14 @@ type Engine struct {
 
 // lodGridSizes references the shared config for LOD cluster computation
 var lodGridSizes = config.LODGridSizes
+
+// defaultShipTypeNames is a fallback list for ambient ships when DB is unavailable
+var defaultShipTypeNames = []string{"neuron", "synapse", "dendrite", "axon", "cortex"}
+
+// randomShipTypeName returns a random ship type name from the default list
+func randomShipTypeName() string {
+	return defaultShipTypeNames[rand.Intn(len(defaultShipTypeNames))]
+}
 
 // --- pgtype.UUID conversion helpers ---
 
@@ -181,10 +202,12 @@ func New(store *database.Store, hub *wshub.Hub, cfg *config.Config) *Engine {
 		stopCh:           make(chan struct{}),
 		spaceOrderIndex:  make(map[string]uint32),
 		synapseTypeCache: make(map[string]synapseTypeConfig),
+		shipTypeCache:    make(map[string]shipTypeConfig),
 		ambient:          NewAmbientManager(cfg, store),
 	}
-	// Load synapse type cache from DB
+	// Load caches from DB
 	e.loadSynapseTypeCache()
+	e.loadShipTypeCache()
 	// Build space order index for delta tracking
 	e.buildSpaceOrderIndex()
 	return e
@@ -242,6 +265,46 @@ func (e *Engine) getSynapseTypeConfig(typeName string) synapseTypeConfig {
 		ETAMinutes:     60,
 		AGIRewardMin:   3,
 		AGIRewardMax:   10,
+	}
+}
+
+// loadShipTypeCache loads ship types from DB into the in-memory cache
+func (e *Engine) loadShipTypeCache() {
+	ctx := context.Background()
+	types, err := e.store.Queries.ListShipTypes(ctx)
+	if err != nil {
+		log.Printf("[Engine] Failed to load ship type cache: %v", err)
+		return
+	}
+
+	e.shipTypeMu.Lock()
+	defer e.shipTypeMu.Unlock()
+
+	e.shipTypeCache = make(map[string]shipTypeConfig, len(types))
+	for _, t := range types {
+		e.shipTypeCache[t.Name] = shipTypeConfig{
+			SpeedMultiplier:      float64(t.SpeedMultiplier),
+			SolveSpeedMultiplier: float64(t.SolveSpeedMultiplier),
+			FuelCapacity:         int(t.FuelCapacity),
+			DetectionRadius:      float64(t.DetectionRadius),
+		}
+	}
+	log.Printf("[Engine] Loaded %d ship types into cache", len(e.shipTypeCache))
+}
+
+// getShipTypeConfig returns the cached config for a ship type name.
+// Falls back to baseline (1.0 multipliers) if the type is not found.
+func (e *Engine) getShipTypeConfig(typeName string) shipTypeConfig {
+	e.shipTypeMu.RLock()
+	defer e.shipTypeMu.RUnlock()
+	if cfg, ok := e.shipTypeCache[typeName]; ok {
+		return cfg
+	}
+	return shipTypeConfig{
+		SpeedMultiplier:      1.0,
+		SolveSpeedMultiplier: 1.0,
+		FuelCapacity:         100,
+		DetectionRadius:      2.0,
 	}
 }
 
@@ -376,9 +439,10 @@ func (e *Engine) processTick() {
 		go e.recomputeClusters()
 	}
 
-	// Refresh synapse type cache every 300 ticks (~15 seconds)
+	// Refresh type caches every 300 ticks (~15 seconds)
 	if e.tickCount%300 == 0 {
 		e.loadSynapseTypeCache()
+		e.loadShipTypeCache()
 	}
 
 	// Adjust ambient ship count every 30 ticks based on real ship activity
@@ -632,7 +696,7 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 		})
 
 		// Get item effects
-		speedBoost := e.getShipSpeedBoost(exp.ShipID)
+		speedBoost := e.getShipSolveBoost(exp.ShipID)
 		speedMultiplier := 1.0 + speedBoost
 
 		stConfig := e.getSynapseTypeConfig(space.SynapseType)
@@ -665,7 +729,7 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 	}
 
 	stCfg := e.getSynapseTypeConfig(space.SynapseType)
-	speedBoost := e.getShipSpeedBoost(exp.shipID)
+	speedBoost := e.getShipSolveBoost(exp.shipID)
 	currentETA := dto.CalculateFinalETA(stCfg.ETAMinutes, int(userLevel), speedBoost)
 
 	newState := "being_solved"
@@ -913,12 +977,19 @@ func (e *Engine) redirectToNearbySynapse(shipID, userID string, currentX, curren
 	// Take the nearest one
 	nextSpace := nearbySpaces[0]
 
-	// Game time travel, scaled by time multiplier
+	// Look up agent to get ship type for speed multiplier
+	agent, agentErr := e.store.Queries.GetAgent(ctx, shipID)
+	speedMult := 1.0
+	if agentErr == nil {
+		speedMult = e.getShipTravelSpeedMultiplier(agent.ShipType)
+	}
+
+	// Game time travel, scaled by time multiplier and ship speed
 	dx := nextSpace.PositionX - currentX
 	dy := nextSpace.PositionY - currentY
 	dz := nextSpace.PositionZ - currentZ
 	distance := math.Sqrt(dx*dx + dy*dy + dz*dz)
-	gameDuration := distance * e.cfg.TravelTimePerUnit
+	gameDuration := distance * e.cfg.TravelTimePerUnit / speedMult
 	travelDuration := int64(gameDuration / e.cfg.TimeMultiplier)
 	if travelDuration < 2000 {
 		travelDuration = 2000
@@ -987,12 +1058,13 @@ func (e *Engine) processAutopilot(shipID, userID string, currentX, currentY, cur
 		}
 	}
 
-	// Game time travel, scaled by time multiplier
+	// Game time travel, scaled by time multiplier and ship speed
+	speedMult := e.getShipTravelSpeedMultiplier(agent.ShipType)
 	dx := nextSpace.PositionX - currentX
 	dy := nextSpace.PositionY - currentY
 	dz := nextSpace.PositionZ - currentZ
 	distance := math.Sqrt(dx*dx + dy*dy + dz*dz)
-	gameDuration := distance * e.cfg.TravelTimePerUnit
+	gameDuration := distance * e.cfg.TravelTimePerUnit / speedMult
 	travelDuration := int64(gameDuration / e.cfg.TimeMultiplier)
 	if travelDuration < 2000 {
 		travelDuration = 2000
@@ -1088,10 +1160,25 @@ func (e *Engine) applyBrainBounds(posX, posY, posZ, dirX, dirY, dirZ float64) (f
 	return dirX, dirY, dirZ
 }
 
-// getShipSpeedBoost returns the cumulative speed boost for a ship from purchased items.
-// Item shop has been removed — always returns 0 (no boost).
-func (e *Engine) getShipSpeedBoost(shipID string) float64 {
-	return 0
+// getShipSolveBoost returns the solve speed bonus for a ship based on its type.
+// Returns the bonus above baseline (e.g. 0.4 for a 1.4x solve multiplier).
+func (e *Engine) getShipSolveBoost(shipID string) float64 {
+	ctx := context.Background()
+	agent, err := e.store.Queries.GetAgent(ctx, shipID)
+	if err != nil {
+		return 0
+	}
+	stc := e.getShipTypeConfig(agent.ShipType)
+	return stc.SolveSpeedMultiplier - 1.0
+}
+
+// getShipTravelSpeedMultiplier returns the travel speed multiplier for a ship based on its type.
+func (e *Engine) getShipTravelSpeedMultiplier(shipType string) float64 {
+	stc := e.getShipTypeConfig(shipType)
+	if stc.SpeedMultiplier <= 0 {
+		return 1.0
+	}
+	return stc.SpeedMultiplier
 }
 
 // getShipXPMultiplier returns the cumulative XP multiplier for a ship from purchased items.
