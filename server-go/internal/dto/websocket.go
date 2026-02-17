@@ -153,6 +153,8 @@ type ExplorationProgressEvent struct {
 	ETAMinutes        float64     `json:"etaMinutes"`
 	ExplorerCount     int         `json:"explorerCount"`
 	Timestamp         int64       `json:"timestamp"`
+	UserID            string      `json:"userId,omitempty"`
+	UserPoints        float64     `json:"userPoints,omitempty"`
 }
 
 // UserLevelUpEvent for engine callbacks

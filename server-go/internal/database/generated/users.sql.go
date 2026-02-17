@@ -107,16 +107,16 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 }
 
 const decrementUserPoints = `-- name: DecrementUserPoints :exec
-UPDATE users SET points = points - $2 WHERE id = $1
+UPDATE users SET points = GREATEST(points - $1::float8, 0) WHERE id = $2
 `
 
 type DecrementUserPointsParams struct {
+	Amount float64 `json:"amount"`
 	ID     string  `json:"id"`
-	Points float64 `json:"points"`
 }
 
 func (q *Queries) DecrementUserPoints(ctx context.Context, arg DecrementUserPointsParams) error {
-	_, err := q.db.Exec(ctx, decrementUserPoints, arg.ID, arg.Points)
+	_, err := q.db.Exec(ctx, decrementUserPoints, arg.Amount, arg.ID)
 	return err
 }
 

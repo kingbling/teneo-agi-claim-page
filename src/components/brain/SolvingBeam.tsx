@@ -37,15 +37,13 @@ function getAnimationSpeedMultiplier(synapseType: SynapseType | undefined): numb
   const typeConfig = configStore.getSynapseType(synapseType)
   if (!typeConfig) return 1.0
 
-  // Derive ETA from pointsRequired / maxPerMin (same formula as engine)
-  const maxPerMin = Math.max(100, typeConfig.pointsRequired / 60)
-  const etaMinutes = typeConfig.pointsRequired / maxPerMin
+  // Use ETA range midpoint from type config
+  const etaMinutes = (typeConfig.etaMinutesMin + typeConfig.etaMinutesMax) / 2
 
-  // Base reference: first type's ETA = 1.0x speed
+  // Base reference: first type's ETA midpoint = 1.0x speed
   const types = configStore.synapseTypes
   const firstType = types[0]
-  const baseMaxPerMin = firstType ? Math.max(100, firstType.pointsRequired / 60) : 100
-  const baseEta = firstType ? firstType.pointsRequired / baseMaxPerMin : 60
+  const baseEta = firstType ? (firstType.etaMinutesMin + firstType.etaMinutesMax) / 2 : 20
   const ratio = baseEta / etaMinutes
 
   // Use sqrt for gradual scaling, clamp minimum to 0.1x

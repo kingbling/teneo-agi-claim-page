@@ -125,9 +125,6 @@ export interface Synapse {
   explorerCount: number
   maxExplorers: number
 
-  // Rewards
-  agiReward: number
-
   // Sector
   sectorId: string | null
 }

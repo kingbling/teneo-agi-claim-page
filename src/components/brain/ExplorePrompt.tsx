@@ -49,12 +49,11 @@ export const ExplorePrompt: Component<ExplorePromptProps> = (props) => {
   // No level gating
   const isLocked = () => false
 
-  // Default points per minute (derive from pointsRequired)
+  // Default points per minute
   const pointsPerMin = () => {
     const tc = typeConfig()
     if (!tc) return 50
-    const maxPerMin = Math.max(100, tc.pointsRequired / 60)
-    return Math.floor(maxPerMin / 2)
+    return Math.floor(tc.maxPointsPerMin / 2)
   }
 
   return (

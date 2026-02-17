@@ -14,6 +14,7 @@ import { ToastContainer } from '@/components/ui/Toast'
 import { ShipNavigator } from '@/components/ships/ShipNavigator'
 import { CreateShipDialog } from '@/components/ships/CreateShipDialog'
 import { ShipDetailPanel } from '@/components/ships/ShipDetailPanel'
+import { DeploymentScreen } from '@/components/ships/DeploymentScreen'
 import { ExplorePrompt } from '@/components/brain/ExplorePrompt'
 import { RegionLegend } from '@/components/dashboard/RegionLegend'
 import type { CameraUpdate } from '@/components/dashboard/BrainSceneMinimal'
@@ -23,29 +24,9 @@ import { useWebSocketConnection } from '@/hooks'
 import { FUNCTIONAL_BRAIN_REGIONS } from '@/constants/brainRegions'
 import { CAMERA_CONFIG } from '@/components/brain/core/brainConstants'
 import { filterByRegion } from '@/lib/regionFilter'
-import {
-  SYNAPSE_COLORS,
-  formatPoints,
-  formatETA,
-  getSynapseTypeLabel,
-  type SynapseType,
-} from '@/types/game'
+import type { SynapseType } from '@/types/game'
 import { configStore } from '@/stores/configStore'
-import { getDominantSynapseType } from '@/utils/synapseUtils'
 import { log, fmt } from '@/utils/logger'
-
-// Helper to get brain region from position
-function getRegionFromPosition(x: number, y: number, z: number): string {
-  for (const region of FUNCTIONAL_BRAIN_REGIONS) {
-    const b = region.bounds
-    if (x >= b.xMin && x <= b.xMax &&
-        y >= b.yMin && y <= b.yMax &&
-        z >= b.zMin && z <= b.zMax) {
-      return region.name
-    }
-  }
-  return 'Unknown Region'
-}
 
 export const DiscoveryDashboard: Component = () => {
   // UI panel state — grouped to prevent cascade re-renders between unrelated panels
@@ -111,13 +92,6 @@ export const DiscoveryDashboard: Component = () => {
   onMount(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
-
-      // DEV: Ctrl+Shift+D to bypass login for testing
-      if (e.ctrlKey && e.shiftKey && key === 'd') {
-        e.preventDefault()
-        userStore.loginUser('0xDEV0000000000000000000000000000000000001')
-        return
-      }
 
       // Number keys 1-9 for region selection (maps to enabled regions only)
       if (key >= '1' && key <= '9') {
@@ -272,7 +246,7 @@ export const DiscoveryDashboard: Component = () => {
               const target = shipStore.explorationTarget
               if (ship && target) {
                 const tc = configStore.getSynapseType(target.synapseType)
-                const maxPerMin = tc ? Math.max(100, tc.pointsRequired / 60) : 100
+                const maxPerMin = tc ? tc.maxPointsPerMin : 100
                 const pointsPerMin = Math.floor(maxPerMin / 2) || 50
                 const success = await shipStore.travelToSynapse(ship.id, target.id, pointsPerMin)
                 if (success) {
@@ -373,137 +347,32 @@ export const DiscoveryDashboard: Component = () => {
         </div>
       </Show>
 
-      {/* Enhanced Ship Deployment Dialog */}
+      {/* Ship Deployment Screen (Gran Turismo-style) */}
       <Show when={deployTarget()}>
-        {(() => {
-          const target = deployTarget()!
-          const cluster = target.cluster
-          const dominantType = getDominantSynapseType(cluster.typeCounts)
-          const typeConfig = configStore.getSynapseType(dominantType)
-          const typeColor = SYNAPSE_COLORS[dominantType]?.rgb || { r: 0.5, g: 0.7, b: 1.0 }
-          const regionName = getRegionFromPosition(cluster.positionX, cluster.positionY, cluster.positionZ)
-          const isLocked = false  // No level gating
-          const idleShips = shipStore.idleShips
-
-          return (
-            <div
-              class="absolute inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50"
-              onClick={() => setDeployTarget(null)}
-            >
-              <div
-                class="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-md w-full mx-4"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {/* Header with synapse type */}
-                <div class="flex items-center gap-3 mb-4">
-                  <div
-                    class="w-12 h-12 rounded-lg flex items-center justify-center"
-                    style={{
-                      background: `rgba(${Math.round(typeColor.r * 255)}, ${Math.round(typeColor.g * 255)}, ${Math.round(typeColor.b * 255)}, 0.2)`,
-                      border: `2px solid rgba(${Math.round(typeColor.r * 255)}, ${Math.round(typeColor.g * 255)}, ${Math.round(typeColor.b * 255)}, 0.6)`,
-                    }}
-                  >
-                    <span class="text-2xl">🧠</span>
-                  </div>
-                  <div>
-                    <h3 class="text-lg font-bold text-white">{getSynapseTypeLabel(dominantType)} Synapse</h3>
-                    <p class="text-sm text-gray-400">{regionName}</p>
-                  </div>
-                </div>
-
-                {/* Synapse info grid */}
-                <div class="grid grid-cols-2 gap-3 mb-4">
-                  <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
-                    <p class="text-xs text-gray-400">Synapses</p>
-                    <p class="text-lg font-bold text-white">{cluster.synapseCount}</p>
-                  </div>
-                  <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
-                    <p class="text-xs text-gray-400">Exploring</p>
-                    <p class="text-lg font-bold text-yellow-400">{cluster.beingExploredCount || 0}</p>
-                  </div>
-                  <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
-                    <p class="text-xs text-gray-400">Points Required</p>
-                    <p class="text-lg font-bold text-cyan-400">{formatPoints(typeConfig?.pointsRequired)}</p>
-                  </div>
-                  <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
-                    <p class="text-xs text-gray-400">Reward</p>
-                    <p class="text-lg font-bold text-purple-400">{typeConfig?.agiRewardMin}–{typeConfig?.agiRewardMax} AGI</p>
-                  </div>
-                </div>
-
-                {/* Rewards section */}
-                {typeConfig && (
-                <div class="p-3 rounded-lg bg-gradient-to-r from-amber-900/30 to-purple-900/30 border border-amber-500/30 mb-4">
-                  <p class="text-xs text-gray-400 mb-2">Completion Rewards</p>
-                  <div class="flex justify-between items-center">
-                    <div>
-                      <span class="text-amber-400 font-bold">{typeConfig.agiRewardMin}–{typeConfig.agiRewardMax}</span>
-                      <span class="text-xs text-gray-400 ml-1">$AGI</span>
-                    </div>
-                    <div class="px-2 py-1 rounded text-xs font-medium bg-green-500/20 text-green-400">
-                      Fair Share
-                    </div>
-                  </div>
-                </div>
-                )}
-
-                {/* Lock warning */}
-                <Show when={isLocked}>
-                  <div class="p-3 rounded-lg bg-red-900/20 border border-red-500/30 mb-4">
-                    <p class="text-sm text-red-400">Locked</p>
-                  </div>
-                </Show>
-
-                {/* Ship selection */}
-                <div class="mb-4 p-3 rounded-lg bg-gray-800/50 border border-gray-700">
-                  <p class="text-xs text-gray-400 mb-2">Available Ships</p>
-                  <p class="text-xl font-bold text-teal-400">
-                    {idleShips.length}
-                    <span class="text-sm font-normal text-gray-400"> / {shipStore.userShips.length}</span>
-                  </p>
-                </div>
-
-                {/* Action buttons */}
-                <div class="flex gap-2">
-                  <button
-                    class="flex-1 py-3 bg-teal-500 hover:bg-teal-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-                    disabled={idleShips.length === 0 || isLocked}
-                    onClick={async () => {
-                      const ship = idleShips[0]
-                      const target = deployTarget()
-                      if (ship && target) {
-                        // Find nearest synapse and travel directly to it
-                        const synapse = await shipStore.fetchSynapseByPosition(
-                          target.cluster.positionX,
-                          target.cluster.positionY,
-                          target.cluster.positionZ
-                        )
-                        if (synapse) {
-                          const stc = configStore.getSynapseType(synapse.synapseType)
-                          const sMaxPerMin = stc ? Math.max(100, stc.pointsRequired / 60) : 100
-                          const pointsPerMin = Math.floor(sMaxPerMin / 2) || 50
-                          const success = await shipStore.travelToSynapse(ship.id, synapse.id, pointsPerMin)
-                          if (success) {
-                            setDeployTarget(null)
-                            shipStore.selectShip(ship.id)
-                          }
-                        }
-                      }
-                    }}
-                  >
-                    {isLocked ? 'Locked' : 'Deploy Ship'}
-                  </button>
-                  <button
-                    class="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white font-medium rounded-lg transition-colors"
-                    onClick={() => setDeployTarget(null)}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
-          )
-        })()}
+        <DeploymentScreen
+          cluster={deployTarget()!.cluster}
+          position={deployTarget()!.position}
+          onDeploy={async (shipId) => {
+            const target = deployTarget()
+            if (!target) return
+            const synapse = await shipStore.fetchSynapseByPosition(
+              target.cluster.positionX,
+              target.cluster.positionY,
+              target.cluster.positionZ
+            )
+            if (synapse) {
+              const stc = configStore.getSynapseType(synapse.synapseType)
+              const sMaxPerMin = stc ? stc.maxPointsPerMin : 100
+              const pointsPerMin = Math.floor(sMaxPerMin / 2) || 50
+              const success = await shipStore.travelToSynapse(shipId, synapse.id, pointsPerMin)
+              if (success) {
+                setDeployTarget(null)
+                shipStore.selectShip(shipId)
+              }
+            }
+          }}
+          onClose={() => setDeployTarget(null)}
+        />
       </Show>
 
       {/* Ship Detail Panel - shown when a ship is selected, positioned on right side */}

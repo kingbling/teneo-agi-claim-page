@@ -28,24 +28,28 @@ func ListSynapseTypes(c *fiber.Ctx) error {
 
 	result := make([]fiber.Map, len(types))
 	for i, t := range types {
-		// Count synapses for this type
+		// Count synapses and total AGI for this type
 		count, _ := store.Queries.CountSpacesBySynapseType(ctx, t.Name)
+		totalAgi, _ := store.Queries.SumAGIBySynapseType(ctx, t.Name)
 
 		result[i] = fiber.Map{
-			"id":             t.ID,
-			"name":           t.Name,
-			"displayName":    t.DisplayName,
-			"colorR":         t.ColorR,
-			"colorG":         t.ColorG,
-			"colorB":         t.ColorB,
-			"pointsRequired": t.PointsRequired,
-			"agiRewardMin":   t.AgiRewardMin,
-			"agiRewardMax":   t.AgiRewardMax,
-			"modelFilename":  t.ModelFilename,
-			"sortOrder":      t.SortOrder,
-			"synapseCount":   count,
-			"createdAt":      t.CreatedAt,
-			"updatedAt":      t.UpdatedAt,
+			"id":              t.ID,
+			"name":            t.Name,
+			"displayName":     t.DisplayName,
+			"colorR":          t.ColorR,
+			"colorG":          t.ColorG,
+			"colorB":          t.ColorB,
+			"etaMinutesMin":   t.EtaMinutesMin,
+			"etaMinutesMax":   t.EtaMinutesMax,
+			"maxPointsPerMin": t.MaxPointsPerMin,
+			"agiRewardMin":    t.AgiRewardMin,
+			"agiRewardMax":    t.AgiRewardMax,
+			"modelFilename":   t.ModelFilename,
+			"sortOrder":       t.SortOrder,
+			"synapseCount":    count,
+			"totalAgi":        totalAgi,
+			"createdAt":       t.CreatedAt,
+			"updatedAt":       t.UpdatedAt,
 		}
 	}
 
@@ -67,22 +71,26 @@ func GetSynapseTypeDetail(c *fiber.Ctx) error {
 	}
 
 	count, _ := store.Queries.CountSpacesBySynapseType(ctx, t.Name)
+	totalAgi, _ := store.Queries.SumAGIBySynapseType(ctx, t.Name)
 
 	return c.JSON(fiber.Map{
-		"id":             t.ID,
-		"name":           t.Name,
-		"displayName":    t.DisplayName,
-		"colorR":         t.ColorR,
-		"colorG":         t.ColorG,
-		"colorB":         t.ColorB,
-		"pointsRequired": t.PointsRequired,
-		"agiRewardMin":   t.AgiRewardMin,
-		"agiRewardMax":   t.AgiRewardMax,
-		"modelFilename":  t.ModelFilename,
-		"sortOrder":      t.SortOrder,
-		"synapseCount":   count,
-		"createdAt":      t.CreatedAt,
-		"updatedAt":      t.UpdatedAt,
+		"id":              t.ID,
+		"name":            t.Name,
+		"displayName":     t.DisplayName,
+		"colorR":          t.ColorR,
+		"colorG":          t.ColorG,
+		"colorB":          t.ColorB,
+		"etaMinutesMin":   t.EtaMinutesMin,
+		"etaMinutesMax":   t.EtaMinutesMax,
+		"maxPointsPerMin": t.MaxPointsPerMin,
+		"agiRewardMin":    t.AgiRewardMin,
+		"agiRewardMax":    t.AgiRewardMax,
+		"modelFilename":   t.ModelFilename,
+		"sortOrder":       t.SortOrder,
+		"synapseCount":    count,
+		"totalAgi":        totalAgi,
+		"createdAt":       t.CreatedAt,
+		"updatedAt":       t.UpdatedAt,
 	})
 }
 
@@ -92,16 +100,18 @@ func CreateSynapseType(c *fiber.Ctx) error {
 	ctx := c.Context()
 
 	var req struct {
-		Name           string   `json:"name"`
-		DisplayName    string   `json:"displayName"`
-		ColorR         float32  `json:"colorR"`
-		ColorG         float32  `json:"colorG"`
-		ColorB         float32  `json:"colorB"`
-		PointsRequired int      `json:"pointsRequired"`
-		AGIRewardMin   int      `json:"agiRewardMin"`
-		AGIRewardMax   int      `json:"agiRewardMax"`
-		ModelFilename  *string  `json:"modelFilename"`
-		SortOrder      int      `json:"sortOrder"`
+		Name            string  `json:"name"`
+		DisplayName     string  `json:"displayName"`
+		ColorR          float32 `json:"colorR"`
+		ColorG          float32 `json:"colorG"`
+		ColorB          float32 `json:"colorB"`
+		EtaMinutesMin   int     `json:"etaMinutesMin"`
+		EtaMinutesMax   int     `json:"etaMinutesMax"`
+		MaxPointsPerMin int     `json:"maxPointsPerMin"`
+		AGIRewardMin    int     `json:"agiRewardMin"`
+		AGIRewardMax    int     `json:"agiRewardMax"`
+		ModelFilename   *string `json:"modelFilename"`
+		SortOrder       int     `json:"sortOrder"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -114,8 +124,14 @@ func CreateSynapseType(c *fiber.Ctx) error {
 	if req.DisplayName == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Display name is required"})
 	}
-	if req.PointsRequired <= 0 {
-		return c.Status(400).JSON(fiber.Map{"error": "Points required must be positive"})
+	if req.EtaMinutesMin <= 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "ETA min must be positive"})
+	}
+	if req.EtaMinutesMax < req.EtaMinutesMin {
+		return c.Status(400).JSON(fiber.Map{"error": "ETA max must be >= ETA min"})
+	}
+	if req.MaxPointsPerMin <= 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "Max points/min must be positive"})
 	}
 	if req.AGIRewardMin < 0 || req.AGIRewardMax < req.AGIRewardMin {
 		return c.Status(400).JSON(fiber.Map{"error": "AGI reward range is invalid"})
@@ -129,19 +145,21 @@ func CreateSynapseType(c *fiber.Ctx) error {
 
 	now := time.Now().UnixMilli()
 	t, err := store.Queries.CreateSynapseType(ctx, generated.CreateSynapseTypeParams{
-		ID:             uuid.New().String(),
-		Name:           req.Name,
-		DisplayName:    req.DisplayName,
-		ColorR:         req.ColorR,
-		ColorG:         req.ColorG,
-		ColorB:         req.ColorB,
-		PointsRequired: int32(req.PointsRequired),
-		AgiRewardMin:   int32(req.AGIRewardMin),
-		AgiRewardMax:   int32(req.AGIRewardMax),
-		ModelFilename:  req.ModelFilename,
-		SortOrder:      int32(req.SortOrder),
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:              uuid.New().String(),
+		Name:            req.Name,
+		DisplayName:     req.DisplayName,
+		ColorR:          req.ColorR,
+		ColorG:          req.ColorG,
+		ColorB:          req.ColorB,
+		EtaMinutesMin:   int32(req.EtaMinutesMin),
+		EtaMinutesMax:   int32(req.EtaMinutesMax),
+		MaxPointsPerMin: int32(req.MaxPointsPerMin),
+		AgiRewardMin:    int32(req.AGIRewardMin),
+		AgiRewardMax:    int32(req.AGIRewardMax),
+		ModelFilename:   req.ModelFilename,
+		SortOrder:       int32(req.SortOrder),
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	})
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to create synapse type"})
@@ -157,16 +175,18 @@ func UpdateSynapseType(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	var req struct {
-		Name           *string  `json:"name"`
-		DisplayName    *string  `json:"displayName"`
-		ColorR         *float32 `json:"colorR"`
-		ColorG         *float32 `json:"colorG"`
-		ColorB         *float32 `json:"colorB"`
-		PointsRequired *int     `json:"pointsRequired"`
-		AGIRewardMin   *int     `json:"agiRewardMin"`
-		AGIRewardMax   *int     `json:"agiRewardMax"`
-		ModelFilename  *string  `json:"modelFilename"`
-		SortOrder      *int     `json:"sortOrder"`
+		Name            *string  `json:"name"`
+		DisplayName     *string  `json:"displayName"`
+		ColorR          *float32 `json:"colorR"`
+		ColorG          *float32 `json:"colorG"`
+		ColorB          *float32 `json:"colorB"`
+		EtaMinutesMin   *int     `json:"etaMinutesMin"`
+		EtaMinutesMax   *int     `json:"etaMinutesMax"`
+		MaxPointsPerMin *int     `json:"maxPointsPerMin"`
+		AGIRewardMin    *int     `json:"agiRewardMin"`
+		AGIRewardMax    *int     `json:"agiRewardMax"`
+		ModelFilename   *string  `json:"modelFilename"`
+		SortOrder       *int     `json:"sortOrder"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -182,18 +202,20 @@ func UpdateSynapseType(c *fiber.Ctx) error {
 	}
 
 	params := generated.UpdateSynapseTypeParams{
-		ID:             existing.ID,
-		Name:           existing.Name,
-		DisplayName:    existing.DisplayName,
-		ColorR:         existing.ColorR,
-		ColorG:         existing.ColorG,
-		ColorB:         existing.ColorB,
-		PointsRequired: existing.PointsRequired,
-		AgiRewardMin:   existing.AgiRewardMin,
-		AgiRewardMax:   existing.AgiRewardMax,
-		ModelFilename:  existing.ModelFilename,
-		SortOrder:      existing.SortOrder,
-		UpdatedAt:      time.Now().UnixMilli(),
+		ID:              existing.ID,
+		Name:            existing.Name,
+		DisplayName:     existing.DisplayName,
+		ColorR:          existing.ColorR,
+		ColorG:          existing.ColorG,
+		ColorB:          existing.ColorB,
+		EtaMinutesMin:   existing.EtaMinutesMin,
+		EtaMinutesMax:   existing.EtaMinutesMax,
+		MaxPointsPerMin: existing.MaxPointsPerMin,
+		AgiRewardMin:    existing.AgiRewardMin,
+		AgiRewardMax:    existing.AgiRewardMax,
+		ModelFilename:   existing.ModelFilename,
+		SortOrder:       existing.SortOrder,
+		UpdatedAt:       time.Now().UnixMilli(),
 	}
 
 	if req.Name != nil {
@@ -218,8 +240,14 @@ func UpdateSynapseType(c *fiber.Ctx) error {
 	if req.ColorB != nil {
 		params.ColorB = *req.ColorB
 	}
-	if req.PointsRequired != nil {
-		params.PointsRequired = int32(*req.PointsRequired)
+	if req.EtaMinutesMin != nil {
+		params.EtaMinutesMin = int32(*req.EtaMinutesMin)
+	}
+	if req.EtaMinutesMax != nil {
+		params.EtaMinutesMax = int32(*req.EtaMinutesMax)
+	}
+	if req.MaxPointsPerMin != nil {
+		params.MaxPointsPerMin = int32(*req.MaxPointsPerMin)
 	}
 	if req.AGIRewardMin != nil {
 		params.AgiRewardMin = int32(*req.AGIRewardMin)
@@ -327,18 +355,20 @@ func UploadSynapseTypeModel(c *fiber.Ctx) error {
 
 	// Update DB record
 	if err := store.Queries.UpdateSynapseType(ctx, generated.UpdateSynapseTypeParams{
-		ID:             t.ID,
-		Name:           t.Name,
-		DisplayName:    t.DisplayName,
-		ColorR:         t.ColorR,
-		ColorG:         t.ColorG,
-		ColorB:         t.ColorB,
-		PointsRequired: t.PointsRequired,
-		AgiRewardMin:   t.AgiRewardMin,
-		AgiRewardMax:   t.AgiRewardMax,
-		ModelFilename:  &filename,
-		SortOrder:      t.SortOrder,
-		UpdatedAt:      time.Now().UnixMilli(),
+		ID:              t.ID,
+		Name:            t.Name,
+		DisplayName:     t.DisplayName,
+		ColorR:          t.ColorR,
+		ColorG:          t.ColorG,
+		ColorB:          t.ColorB,
+		EtaMinutesMin:   t.EtaMinutesMin,
+		EtaMinutesMax:   t.EtaMinutesMax,
+		MaxPointsPerMin: t.MaxPointsPerMin,
+		AgiRewardMin:    t.AgiRewardMin,
+		AgiRewardMax:    t.AgiRewardMax,
+		ModelFilename:   &filename,
+		SortOrder:       t.SortOrder,
+		UpdatedAt:       time.Now().UnixMilli(),
 	}); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update model filename"})
 	}

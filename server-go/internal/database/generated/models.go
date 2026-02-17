@@ -205,19 +205,21 @@ type SynapseExplorer struct {
 }
 
 type SynapseType struct {
-	ID             string  `json:"id"`
-	Name           string  `json:"name"`
-	DisplayName    string  `json:"display_name"`
-	ColorR         float32 `json:"color_r"`
-	ColorG         float32 `json:"color_g"`
-	ColorB         float32 `json:"color_b"`
-	PointsRequired int32   `json:"points_required"`
-	AgiRewardMin   int32   `json:"agi_reward_min"`
-	AgiRewardMax   int32   `json:"agi_reward_max"`
-	ModelFilename  *string `json:"model_filename"`
-	SortOrder      int32   `json:"sort_order"`
-	CreatedAt      int64   `json:"created_at"`
-	UpdatedAt      int64   `json:"updated_at"`
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	DisplayName     string  `json:"display_name"`
+	ColorR          float32 `json:"color_r"`
+	ColorG          float32 `json:"color_g"`
+	ColorB          float32 `json:"color_b"`
+	AgiRewardMin    int32   `json:"agi_reward_min"`
+	AgiRewardMax    int32   `json:"agi_reward_max"`
+	ModelFilename   *string `json:"model_filename"`
+	SortOrder       int32   `json:"sort_order"`
+	CreatedAt       int64   `json:"created_at"`
+	UpdatedAt       int64   `json:"updated_at"`
+	EtaMinutesMin   int32   `json:"eta_minutes_min"`
+	EtaMinutesMax   int32   `json:"eta_minutes_max"`
+	MaxPointsPerMin int32   `json:"max_points_per_min"`
 }
 
 type User struct {

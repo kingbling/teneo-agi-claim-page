@@ -53,7 +53,6 @@ type Synapse struct {
 	CurrentETAMinutes   float64       `json:"currentEtaMinutes"`
 	ExplorerCount       int           `json:"explorerCount"`
 	MaxExplorers        int           `json:"maxExplorers"`
-	AGIReward           float64       `json:"agiReward"`
 	SectorID            *string       `json:"sectorId,omitempty"`
 	Explorers           []ExplorerInfo `json:"explorers,omitempty"`
 }
@@ -75,7 +74,6 @@ func SpaceToSynapse(space Space) Synapse {
 		CurrentETAMinutes: safeFloat64(space.CurrentETAMinutes),
 		ExplorerCount:     0, // Loaded from DB separately
 		MaxExplorers:      1, // V1 Masterplan: Single player
-		AGIReward:         space.AGIReward,
 		SectorID:          space.SectorID,
 	}
 }

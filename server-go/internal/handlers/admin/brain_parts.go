@@ -367,25 +367,32 @@ func GenerateSynapsesForBrainPart(c *fiber.Ctx) error {
 			posX, posY, posZ := brainshape.ConstrainToBrainShape(rawX, rawY, rawZ)
 			zone := brainshape.GetZone(posY)
 
+			// Randomize ETA and derive points_required
+			etaMinutes := int(st.EtaMinutesMin)
+			if st.EtaMinutesMax > st.EtaMinutesMin {
+				etaMinutes = int(st.EtaMinutesMin) + rand.Intn(int(st.EtaMinutesMax-st.EtaMinutesMin)+1)
+			}
+			pointsRequired := etaMinutes * int(st.MaxPointsPerMin)
+
 			agiReward := int(st.AgiRewardMin)
 			if st.AgiRewardMax > st.AgiRewardMin {
 				agiReward = int(st.AgiRewardMin) + rand.Intn(int(st.AgiRewardMax-st.AgiRewardMin)+1)
 			}
 
 			rows = append(rows, []interface{}{
-				uuid.New().String(),         // id
-				posX,                        // position_x
-				posY,                        // position_y
-				posZ,                        // position_z
-				bp.Name,                     // region = brain part name
-				zone,                        // zone
-				1,                           // synapse_count
-				"undiscovered",              // state
-				st.Name,                     // synapse_type
-				int(st.PointsRequired),      // points_required
-				0,                           // points_accumulated
-				agiReward,                   // agi_reward
-				int(st.PointsRequired) / 20, // brain_xp_reward
+				uuid.New().String(), // id
+				posX,                // position_x
+				posY,                // position_y
+				posZ,                // position_z
+				bp.Name,             // region = brain part name
+				zone,                // zone
+				1,                   // synapse_count
+				"undiscovered",      // state
+				st.Name,             // synapse_type
+				pointsRequired,      // points_required
+				0,                   // points_accumulated
+				agiReward,           // agi_reward
+				pointsRequired / 20, // brain_xp_reward
 			})
 		}
 

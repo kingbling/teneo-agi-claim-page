@@ -335,7 +335,6 @@ export interface Synapse {
   currentEtaMinutes: number /* float64 */;
   explorerCount: number /* int */;
   maxExplorers: number /* int */;
-  agiReward: number /* float64 */;
   sectorId?: string;
   explorers?: ExplorerInfo[];
 }
@@ -395,7 +394,9 @@ export interface SynapseTypeDTO {
   colorR: number /* float32 */;
   colorG: number /* float32 */;
   colorB: number /* float32 */;
-  pointsRequired: number /* int */;
+  etaMinutesMin: number /* int */;
+  etaMinutesMax: number /* int */;
+  maxPointsPerMin: number /* int */;
   agiRewardMin: number /* int */;
   agiRewardMax: number /* int */;
   modelFilename?: string;
@@ -718,6 +719,8 @@ export interface ExplorationProgressEvent {
   etaMinutes: number /* float64 */;
   explorerCount: number /* int */;
   timestamp: number /* int64 */;
+  userId?: string;
+  userPoints?: number /* float64 */;
 }
 /**
  * UserLevelUpEvent for engine callbacks

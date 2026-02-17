@@ -262,7 +262,7 @@ func CreateShip(c *fiber.Ctx, store *database.Store) error {
 		}
 		if err := store.Queries.DecrementUserPoints(ctx, generated.DecrementUserPointsParams{
 			ID:     req.UserID,
-			Points: creationCost,
+			Amount: creationCost,
 		}); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct creation cost"})
 		}
@@ -423,7 +423,7 @@ func DeployShip(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *config
 			}
 			if err := store.Queries.DecrementUserPoints(ctx, generated.DecrementUserPointsParams{
 				ID:     agent.OwnerID,
-				Points: params.TravelCost,
+				Amount: params.TravelCost,
 			}); err != nil {
 				return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct travel cost"})
 			}
@@ -621,7 +621,7 @@ func TravelToSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub, cfg *c
 		}
 		if err := store.Queries.DecrementUserPoints(ctx, generated.DecrementUserPointsParams{
 			ID:     agent.OwnerID,
-			Points: params.TravelCost,
+			Amount: params.TravelCost,
 		}); err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Failed to deduct travel cost"})
 		}

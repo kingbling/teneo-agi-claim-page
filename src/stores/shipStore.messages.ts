@@ -475,10 +475,15 @@ export function createMessageHandler(
       }
 
       case 'exploration:progress': {
-        const { synapseId, pointsAccumulated, eta, currentETAMinutes, etaMinutes: serverEtaMinutes } = message.data
+        const { synapseId, pointsAccumulated, eta, currentETAMinutes, etaMinutes: serverEtaMinutes, userId, userPoints } = message.data
         // Support multiple field names: etaMinutes (server), eta (legacy), currentETAMinutes (alternative)
         const etaMinutes = serverEtaMinutes ?? eta ?? currentETAMinutes
         log.ws.debug(`exploration:progress - synapse ${fmt.shortId(synapseId)}, points: ${pointsAccumulated}, eta: ${etaMinutes}`)
+
+        // Sync user points balance if this event is for our user
+        if (userId && userId === userStore.userId && userPoints !== undefined) {
+          userStore.setUserPoints(userPoints)
+        }
 
         // Update if we have matching synapse loaded
         if (state.currentExplorationSynapse?.id === synapseId) {

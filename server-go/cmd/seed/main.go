@@ -21,17 +21,19 @@ var synapseTypes = []struct {
 	weight float64
 	config synapseConfig
 }{
-	{"minor", 0.60, synapseConfig{points: 3000, agi: 5, eta: 3}},
-	{"complex", 0.25, synapseConfig{points: 6000, agi: 10, eta: 6}},
-	{"deep", 0.10, synapseConfig{points: 12000, agi: 25, eta: 12}},
-	{"core", 0.04, synapseConfig{points: 25000, agi: 50, eta: 25}},
-	{"rare", 0.01, synapseConfig{points: 50000, agi: 100, eta: 50}},
+	{"minor", 0.60, synapseConfig{etaMin: 10, etaMax: 30, maxPerMin: 100, agiMin: 3, agiMax: 10}},
+	{"complex", 0.25, synapseConfig{etaMin: 60, etaMax: 180, maxPerMin: 500, agiMin: 50, agiMax: 200}},
+	{"deep", 0.10, synapseConfig{etaMin: 360, etaMax: 1440, maxPerMin: 2000, agiMin: 500, agiMax: 4000}},
+	{"core", 0.04, synapseConfig{etaMin: 60, etaMax: 120, maxPerMin: 300, agiMin: 25, agiMax: 100}},
+	{"rare", 0.01, synapseConfig{etaMin: 120, etaMax: 360, maxPerMin: 1000, agiMin: 100, agiMax: 500}},
 }
 
 type synapseConfig struct {
-	points int
-	agi    int
-	eta    int
+	etaMin    int
+	etaMax    int
+	maxPerMin int
+	agiMin    int
+	agiMax    int
 }
 
 func selectSynapseType() string {
@@ -52,7 +54,7 @@ func getSynapseConfig(typ string) synapseConfig {
 			return st.config
 		}
 	}
-	return synapseConfig{points: 3000, agi: 5, eta: 3}
+	return synapseConfig{etaMin: 10, etaMax: 30, maxPerMin: 100, agiMin: 3, agiMax: 10}
 }
 
 func main() {
@@ -102,20 +104,33 @@ func main() {
 			synapseType := selectSynapseType()
 			cfg := getSynapseConfig(synapseType)
 
+			// Randomize ETA and derive points_required
+			etaMinutes := cfg.etaMin
+			if cfg.etaMax > cfg.etaMin {
+				etaMinutes = cfg.etaMin + rand.Intn(cfg.etaMax-cfg.etaMin+1)
+			}
+			pointsRequired := etaMinutes * cfg.maxPerMin
+
+			// Randomize AGI reward
+			agiReward := cfg.agiMin
+			if cfg.agiMax > cfg.agiMin {
+				agiReward = cfg.agiMin + rand.Intn(cfg.agiMax-cfg.agiMin+1)
+			}
+
 			rows = append(rows, []interface{}{
-				uuid.New().String(), // id
-				posX,               // position_x
-				posY,               // position_y
-				posZ,               // position_z
-				region,             // region
+				uuid.New().String(),      // id
+				posX,                     // position_x
+				posY,                     // position_y
+				posZ,                     // position_z
+				region,                   // region
 				brainshape.GetZone(posY), // zone
-				1,                  // synapse_count
-				"undiscovered",     // state
-				synapseType,        // synapse_type
-				cfg.points,         // points_required
-				0,                  // points_accumulated
-				cfg.agi,            // agi_reward
-				cfg.points / 20,    // brain_xp_reward
+				1,                        // synapse_count
+				"undiscovered",           // state
+				synapseType,              // synapse_type
+				pointsRequired,           // points_required
+				0,                        // points_accumulated
+				agiReward,                // agi_reward
+				pointsRequired / 20,      // brain_xp_reward
 			})
 		}
 

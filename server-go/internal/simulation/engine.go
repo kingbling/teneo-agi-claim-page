@@ -33,12 +33,10 @@ type explorerData struct {
 
 // synapseTypeConfig caches a synapse type's gameplay parameters
 type synapseTypeConfig struct {
-	Name           string
-	PointsRequired int
-	MaxPerMin      int
-	ETAMinutes     int
-	AGIRewardMin   int
-	AGIRewardMax   int
+	Name         string
+	MaxPerMin    int // from DB: max_points_per_min
+	AGIRewardMin int
+	AGIRewardMax int
 }
 
 // shipTypeConfig caches a ship type's gameplay parameters
@@ -227,23 +225,11 @@ func (e *Engine) loadSynapseTypeCache() {
 
 	e.synapseTypeCache = make(map[string]synapseTypeConfig, len(types))
 	for _, t := range types {
-		pts := int(t.PointsRequired)
-		// Derive MaxPerMin and ETAMinutes from points_required
-		maxPerMin := pts / 60
-		if maxPerMin < 100 {
-			maxPerMin = 100
-		}
-		etaMinutes := pts / maxPerMin
-		if etaMinutes < 1 {
-			etaMinutes = 1
-		}
 		e.synapseTypeCache[t.Name] = synapseTypeConfig{
-			Name:           t.Name,
-			PointsRequired: pts,
-			MaxPerMin:      maxPerMin,
-			ETAMinutes:     etaMinutes,
-			AGIRewardMin:   int(t.AgiRewardMin),
-			AGIRewardMax:   int(t.AgiRewardMax),
+			Name:         t.Name,
+			MaxPerMin:    int(t.MaxPointsPerMin),
+			AGIRewardMin: int(t.AgiRewardMin),
+			AGIRewardMax: int(t.AgiRewardMax),
 		}
 	}
 	log.Printf("[Engine] Loaded %d synapse types into cache", len(e.synapseTypeCache))
@@ -259,12 +245,10 @@ func (e *Engine) getSynapseTypeConfig(typeName string) synapseTypeConfig {
 	}
 	// Fallback for unknown types
 	return synapseTypeConfig{
-		Name:           typeName,
-		PointsRequired: 6000,
-		MaxPerMin:      100,
-		ETAMinutes:     60,
-		AGIRewardMin:   3,
-		AGIRewardMax:   10,
+		Name:         typeName,
+		MaxPerMin:    100,
+		AGIRewardMin: 3,
+		AGIRewardMax: 10,
 	}
 }
 
@@ -683,17 +667,19 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 
 	now := time.Now().UnixMilli()
 	var totalPointsThisTick float64
+	var progressUserID string
+	var progressUserPoints float64
 
-	// Calculate points from each explorer
+	// Calculate points from each explorer, deducting from user balance
 	var explorerDataList []explorerData
+	var ejectedExplorers []generated.SynapseExplorer
 	for _, exp := range explorers {
-		explorerDataList = append(explorerDataList, explorerData{
-			id:                exp.ID,
-			shipID:            exp.ShipID,
-			userID:            exp.UserID,
-			pointsPerMin:      float64(exp.PointsPerMinute),
-			pointsContributed: float64(exp.PointsContributed),
-		})
+		// Fetch user balance to cap spending
+		user, err := e.store.Queries.GetUser(ctx, exp.UserID)
+		if err != nil {
+			log.Printf("[Engine] Failed to get user %s for explorer %s: %v", exp.UserID[:8], exp.ID[:8], err)
+			continue
+		}
 
 		// Get item effects
 		speedBoost := e.getShipSolveBoost(exp.ShipID)
@@ -704,7 +690,39 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 		effectiveRate := math.Min(boostedRate, float64(stConfig.MaxPerMin))
 		pointsThisTick := (effectiveRate / 60.0) * deltaSeconds
 
+		// Cap to user's available balance
+		if pointsThisTick > user.Points {
+			pointsThisTick = user.Points
+		}
+
+		// If user has no points, eject them
+		if pointsThisTick <= 0 {
+			log.Printf("[Engine] User %s has no points, ejecting from synapse %s", exp.UserID[:8], synapseID[:8])
+			ejectedExplorers = append(ejectedExplorers, exp)
+			continue
+		}
+
+		// Deduct points from user balance
+		if err := e.store.Queries.DecrementUserPoints(ctx, generated.DecrementUserPointsParams{
+			ID:     exp.UserID,
+			Amount: pointsThisTick,
+		}); err != nil {
+			log.Printf("[Engine] Failed to deduct points for user %s: %v", exp.UserID[:8], err)
+		}
+
+		explorerDataList = append(explorerDataList, explorerData{
+			id:                exp.ID,
+			shipID:            exp.ShipID,
+			userID:            exp.UserID,
+			pointsPerMin:      float64(exp.PointsPerMinute),
+			pointsContributed: float64(exp.PointsContributed),
+		})
+
 		totalPointsThisTick += pointsThisTick
+
+		// Track user info for progress event
+		progressUserID = exp.UserID
+		progressUserPoints = user.Points - pointsThisTick
 
 		// Update explorer contribution
 		if err := e.store.Queries.UpdateExplorerPoints(ctx, generated.UpdateExplorerPointsParams{
@@ -716,21 +734,61 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 		}
 	}
 
+	// Eject explorers who ran out of points
+	for _, exp := range ejectedExplorers {
+		// Remove explorer from synapse
+		if err := e.store.Queries.RemoveSynapseExplorer(ctx, exp.ShipID); err != nil {
+			log.Printf("[Engine] Failed to remove explorer %s: %v", exp.ID[:8], err)
+		}
+		// Set ship to idle
+		if err := e.store.Queries.UpdateAgentToIdle(ctx, exp.ShipID); err != nil {
+			log.Printf("[Engine] Failed to set agent idle %s: %v", exp.ShipID[:8], err)
+		}
+		// Broadcast agent state change
+		if e.OnAgentsUpdated != nil {
+			e.OnAgentsUpdated([]dto.AgentUpdate{{
+				ID:    exp.ShipID,
+				State: dto.AgentIdle,
+			}})
+		}
+		// Send ships:sync to the user
+		if e.OnUserShipUpdated != nil {
+			e.OnUserShipUpdated(exp.ShipID, exp.UserID)
+		}
+	}
+
+	// If all explorers were ejected, revert synapse to undiscovered
+	if len(explorerDataList) == 0 {
+		if space.State == "being_solved" {
+			if err := e.store.Queries.UpdateSpaceState(ctx, generated.UpdateSpaceStateParams{
+				ID:    synapseID,
+				State: "undiscovered",
+			}); err != nil {
+				log.Printf("[Engine] Failed to revert space state %s: %v", synapseID[:8], err)
+			}
+			e.trackSynapseStateChange(synapseID, 0) // 0 = undiscovered
+			e.updateClusterCounts(space.PositionX, space.PositionY, space.PositionZ, -1, 0)
+			e.broadcastClusterUpdate(space.PositionX, space.PositionY, space.PositionZ)
+		}
+		return
+	}
+
 	// Update synapse points
 	newAccumulated := float64(space.PointsAccumulated) + totalPointsThisTick
 	isCompleted := newAccumulated >= float64(space.PointsRequired)
 
 	// Calculate ETA
 	exp := explorerDataList[0]
-	user, err := e.store.Queries.GetUser(ctx, exp.userID)
 	userLevel := int32(1)
-	if err == nil && user.UserLevel > 0 {
+	if user, err := e.store.Queries.GetUser(ctx, exp.userID); err == nil && user.UserLevel > 0 {
 		userLevel = user.UserLevel
 	}
 
 	stCfg := e.getSynapseTypeConfig(space.SynapseType)
 	speedBoost := e.getShipSolveBoost(exp.shipID)
-	currentETA := dto.CalculateFinalETA(stCfg.ETAMinutes, int(userLevel), speedBoost)
+	// Derive per-synapse base ETA from its own points_required
+	baseETAMinutes := float64(space.PointsRequired) / float64(stCfg.MaxPerMin)
+	currentETA := dto.CalculateFinalETA(int(baseETAMinutes), int(userLevel), speedBoost)
 
 	newState := "being_solved"
 	if isCompleted {
@@ -748,7 +806,7 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 		log.Printf("[Engine] Failed to update space points %s: %v", synapseID, err)
 	}
 
-	// Emit progress event
+	// Emit progress event (includes user balance for frontend sync)
 	if e.OnExplorationProgress != nil {
 		e.OnExplorationProgress(dto.ExplorationProgressEvent{
 			SynapseID:         synapseID,
@@ -756,8 +814,10 @@ func (e *Engine) updateSynapseProgress(synapseID string, deltaSeconds float64) {
 			PointsAccumulated: newAccumulated,
 			PointsRequired:    float64(space.PointsRequired),
 			ETAMinutes:        currentETA,
-			ExplorerCount:     len(explorers),
+			ExplorerCount:     len(explorerDataList),
 			Timestamp:         now,
+			UserID:            progressUserID,
+			UserPoints:        progressUserPoints,
 		})
 	}
 
@@ -906,6 +966,12 @@ func (e *Engine) joinSynapseExploration(synapseID, shipID, userID string, points
 		return false
 	}
 	if count >= 1 {
+		return false
+	}
+
+	// Check user has points to spend
+	user, err := e.store.Queries.GetUser(ctx, userID)
+	if err != nil || user.Points <= 0 {
 		return false
 	}
 

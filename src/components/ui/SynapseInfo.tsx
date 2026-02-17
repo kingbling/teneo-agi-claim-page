@@ -1,5 +1,5 @@
 import { Show } from 'solid-js'
-import { Clock, Trophy, CheckCircle } from 'lucide-solid'
+import { Clock, CheckCircle } from 'lucide-solid'
 import { cn } from '@/lib/utils'
 import {
   type SynapseType,
@@ -171,21 +171,7 @@ export function SynapseInfo(props: SynapseInfoProps) {
           </div>
         </div>
 
-        {/* Rewards */}
-        <Show when={props.showRewards !== false}>
-          <div class="p-3 rounded-lg bg-[var(--background-primary)] border border-[var(--card-border)]/20">
-            <div class="flex items-center gap-2 mb-2">
-              <Trophy class="h-4 w-4 text-yellow-400" />
-              <span class="text-sm font-semibold text-[var(--text-primary)]">Rewards</span>
-            </div>
-            <div class="text-sm">
-              <span class="text-[var(--text-muted)]">$AGI: </span>
-              <span class="font-bold text-yellow-400">
-                {formatPoints(props.synapse.agiReward)}
-              </span>
-            </div>
-          </div>
-        </Show>
+        {/* Rewards - AGI reward hidden until completion */}
 
         {/* V1 Masterplan: Single player info */}
         <div class="mt-3 p-2 rounded-lg text-xs bg-emerald-500/10 border border-emerald-500/20 text-emerald-300">

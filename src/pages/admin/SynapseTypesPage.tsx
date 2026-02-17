@@ -21,7 +21,9 @@ export default function SynapseTypesPage() {
     colorR: 0.5,
     colorG: 0.7,
     colorB: 1.0,
-    pointsRequired: 6000,
+    etaMinutesMin: 10,
+    etaMinutesMax: 30,
+    maxPointsPerMin: 100,
     agiRewardMin: 3,
     agiRewardMax: 10,
     sortOrder: 1,
@@ -53,7 +55,9 @@ export default function SynapseTypesPage() {
       colorR: st.colorR,
       colorG: st.colorG,
       colorB: st.colorB,
-      pointsRequired: st.pointsRequired,
+      etaMinutesMin: st.etaMinutesMin,
+      etaMinutesMax: st.etaMinutesMax,
+      maxPointsPerMin: st.maxPointsPerMin,
       agiRewardMin: st.agiRewardMin,
       agiRewardMax: st.agiRewardMax,
       sortOrder: st.sortOrder,
@@ -182,13 +186,35 @@ export default function SynapseTypesPage() {
           />
         </div>
         <div>
-          <label class="text-xs text-[var(--text-tertiary)] mb-1 block">Points Required</label>
+          <label class="text-xs text-[var(--text-tertiary)] mb-1 block">ETA Min (min)</label>
           <input
             type="number"
             required
             min="1"
-            value={formData().pointsRequired}
-            onInput={(e) => setFormData({ ...formData(), pointsRequired: parseInt(e.currentTarget.value) || 0 })}
+            value={formData().etaMinutesMin}
+            onInput={(e) => setFormData({ ...formData(), etaMinutesMin: parseInt(e.currentTarget.value) || 0 })}
+            class="w-full px-3 py-2 rounded border border-[var(--card-border)] bg-[var(--background-primary)] text-[var(--text-primary)]"
+          />
+        </div>
+        <div>
+          <label class="text-xs text-[var(--text-tertiary)] mb-1 block">ETA Max (min)</label>
+          <input
+            type="number"
+            required
+            min="1"
+            value={formData().etaMinutesMax}
+            onInput={(e) => setFormData({ ...formData(), etaMinutesMax: parseInt(e.currentTarget.value) || 0 })}
+            class="w-full px-3 py-2 rounded border border-[var(--card-border)] bg-[var(--background-primary)] text-[var(--text-primary)]"
+          />
+        </div>
+        <div>
+          <label class="text-xs text-[var(--text-tertiary)] mb-1 block">Max Points/Min</label>
+          <input
+            type="number"
+            required
+            min="1"
+            value={formData().maxPointsPerMin}
+            onInput={(e) => setFormData({ ...formData(), maxPointsPerMin: parseInt(e.currentTarget.value) || 0 })}
             class="w-full px-3 py-2 rounded border border-[var(--card-border)] bg-[var(--background-primary)] text-[var(--text-primary)]"
           />
         </div>
@@ -288,7 +314,7 @@ export default function SynapseTypesPage() {
                               </span>
                             </div>
                             <p class="text-sm text-[var(--text-secondary)] mt-1">
-                              {formatPoints(st.pointsRequired)} points &middot; {st.agiRewardMin}–{st.agiRewardMax} AGI &middot; {st.synapseCount.toLocaleString()} synapses
+                              {st.etaMinutesMin}–{st.etaMinutesMax} min &middot; {st.agiRewardMin}–{st.agiRewardMax} AGI &middot; {formatPoints(st.totalAgi)} total &middot; {st.synapseCount.toLocaleString()} synapses
                             </p>
                             <Show when={st.modelFilename}>
                               <p class="text-xs text-[var(--text-tertiary)] mt-0.5">

@@ -230,6 +230,12 @@ function createUserStore() {
     setState('nftCount', (count) => count + 1)
   }
 
+  // ============ POINTS ============
+
+  const setUserPoints = (points: number) => {
+    setState('userPoints', points)
+  }
+
   // ============ SHIPS ============
 
   const setCurrentShipCount = (count: number) => {
@@ -308,6 +314,9 @@ function createUserStore() {
 
     // NFTs
     addNFT,
+
+    // Points
+    setUserPoints,
 
     // Ships
     setCurrentShipCount,

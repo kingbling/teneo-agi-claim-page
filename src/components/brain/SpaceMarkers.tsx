@@ -1076,8 +1076,8 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
                   {typeConfig && (
                     <div class="mt-2 space-y-1">
                       <div class="flex justify-between text-[var(--text-secondary)]">
-                        <span>Points:</span>
-                        <span class="text-[var(--text-primary)]">{formatPoints(typeConfig.pointsRequired)}</span>
+                        <span>ETA:</span>
+                        <span class="text-[var(--text-primary)]">{typeConfig.etaMinutesMin}–{typeConfig.etaMinutesMax} min</span>
                       </div>
                       <div class="flex justify-between text-[var(--text-secondary)]">
                         <span>Reward:</span>

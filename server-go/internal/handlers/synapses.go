@@ -197,14 +197,18 @@ func ExploreSynapse(c *fiber.Ctx, store *database.Store, hub *wshub.Hub) error {
 		})
 	}
 
-	// Derive max rate from synapse type config in DB
-	maxPerMin := int(space.PointsRequired) / 60
-	if maxPerMin < 100 {
-		maxPerMin = 100
+	// Get max rate from synapse type config in DB
+	st, stErr := store.Queries.GetSynapseTypeByName(ctx, space.SynapseType)
+	maxPerMin := 100
+	if stErr == nil {
+		maxPerMin = int(st.MaxPointsPerMin)
 	}
 
-	// Check user level
+	// Check user level and balance
 	user, _ := store.Queries.GetUser(ctx, req.UserID)
+	if user.Points <= 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "Insufficient points to explore"})
+	}
 	userLevel := dto.CalculateUserLevel(user.UsdcSpent)
 
 	// Check if synapse is already being explored
@@ -427,9 +431,10 @@ func UpdateExplorationRate(c *fiber.Ctx, store *database.Store) error {
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Synapse not found"})
 	}
-	maxPerMinRate := int(space.PointsRequired) / 60
-	if maxPerMinRate < 100 {
-		maxPerMinRate = 100
+	stType, stErr := store.Queries.GetSynapseTypeByName(ctx, space.SynapseType)
+	maxPerMinRate := 100
+	if stErr == nil {
+		maxPerMinRate = int(stType.MaxPointsPerMin)
 	}
 	cappedRate := int(math.Min(req.PointsPerMin, float64(maxPerMinRate)))
 
@@ -514,7 +519,6 @@ func convertGenSpaceToSynapseDTO(space generated.Space, explorers []generated.Sy
 		PointsRequired:    int(space.PointsRequired),
 		PointsAccumulated: int(space.PointsAccumulated),
 		CurrentETAMinutes: currentETAMinutes,
-		AGIReward:         float64(space.AgiReward),
 		SectorID:          PgUUIDToStringPtr(space.SectorID),
 	}
 

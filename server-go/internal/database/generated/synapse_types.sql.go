@@ -21,25 +21,27 @@ func (q *Queries) CountSpacesBySynapseType(ctx context.Context, synapseType stri
 }
 
 const createSynapseType = `-- name: CreateSynapseType :one
-INSERT INTO synapse_types (id, name, display_name, color_r, color_g, color_b, points_required, agi_reward_min, agi_reward_max, model_filename, sort_order, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, name, display_name, color_r, color_g, color_b, points_required, agi_reward_min, agi_reward_max, model_filename, sort_order, created_at, updated_at
+INSERT INTO synapse_types (id, name, display_name, color_r, color_g, color_b, eta_minutes_min, eta_minutes_max, max_points_per_min, agi_reward_min, agi_reward_max, model_filename, sort_order, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+RETURNING id, name, display_name, color_r, color_g, color_b, agi_reward_min, agi_reward_max, model_filename, sort_order, created_at, updated_at, eta_minutes_min, eta_minutes_max, max_points_per_min
 `
 
 type CreateSynapseTypeParams struct {
-	ID             string  `json:"id"`
-	Name           string  `json:"name"`
-	DisplayName    string  `json:"display_name"`
-	ColorR         float32 `json:"color_r"`
-	ColorG         float32 `json:"color_g"`
-	ColorB         float32 `json:"color_b"`
-	PointsRequired int32   `json:"points_required"`
-	AgiRewardMin   int32   `json:"agi_reward_min"`
-	AgiRewardMax   int32   `json:"agi_reward_max"`
-	ModelFilename  *string `json:"model_filename"`
-	SortOrder      int32   `json:"sort_order"`
-	CreatedAt      int64   `json:"created_at"`
-	UpdatedAt      int64   `json:"updated_at"`
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	DisplayName     string  `json:"display_name"`
+	ColorR          float32 `json:"color_r"`
+	ColorG          float32 `json:"color_g"`
+	ColorB          float32 `json:"color_b"`
+	EtaMinutesMin   int32   `json:"eta_minutes_min"`
+	EtaMinutesMax   int32   `json:"eta_minutes_max"`
+	MaxPointsPerMin int32   `json:"max_points_per_min"`
+	AgiRewardMin    int32   `json:"agi_reward_min"`
+	AgiRewardMax    int32   `json:"agi_reward_max"`
+	ModelFilename   *string `json:"model_filename"`
+	SortOrder       int32   `json:"sort_order"`
+	CreatedAt       int64   `json:"created_at"`
+	UpdatedAt       int64   `json:"updated_at"`
 }
 
 func (q *Queries) CreateSynapseType(ctx context.Context, arg CreateSynapseTypeParams) (SynapseType, error) {
@@ -50,7 +52,9 @@ func (q *Queries) CreateSynapseType(ctx context.Context, arg CreateSynapseTypePa
 		arg.ColorR,
 		arg.ColorG,
 		arg.ColorB,
-		arg.PointsRequired,
+		arg.EtaMinutesMin,
+		arg.EtaMinutesMax,
+		arg.MaxPointsPerMin,
 		arg.AgiRewardMin,
 		arg.AgiRewardMax,
 		arg.ModelFilename,
@@ -66,13 +70,15 @@ func (q *Queries) CreateSynapseType(ctx context.Context, arg CreateSynapseTypePa
 		&i.ColorR,
 		&i.ColorG,
 		&i.ColorB,
-		&i.PointsRequired,
 		&i.AgiRewardMin,
 		&i.AgiRewardMax,
 		&i.ModelFilename,
 		&i.SortOrder,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EtaMinutesMin,
+		&i.EtaMinutesMax,
+		&i.MaxPointsPerMin,
 	)
 	return i, err
 }
@@ -87,7 +93,7 @@ func (q *Queries) DeleteSynapseType(ctx context.Context, id string) error {
 }
 
 const getSynapseType = `-- name: GetSynapseType :one
-SELECT id, name, display_name, color_r, color_g, color_b, points_required, agi_reward_min, agi_reward_max, model_filename, sort_order, created_at, updated_at FROM synapse_types WHERE id = $1
+SELECT id, name, display_name, color_r, color_g, color_b, agi_reward_min, agi_reward_max, model_filename, sort_order, created_at, updated_at, eta_minutes_min, eta_minutes_max, max_points_per_min FROM synapse_types WHERE id = $1
 `
 
 func (q *Queries) GetSynapseType(ctx context.Context, id string) (SynapseType, error) {
@@ -100,19 +106,21 @@ func (q *Queries) GetSynapseType(ctx context.Context, id string) (SynapseType, e
 		&i.ColorR,
 		&i.ColorG,
 		&i.ColorB,
-		&i.PointsRequired,
 		&i.AgiRewardMin,
 		&i.AgiRewardMax,
 		&i.ModelFilename,
 		&i.SortOrder,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EtaMinutesMin,
+		&i.EtaMinutesMax,
+		&i.MaxPointsPerMin,
 	)
 	return i, err
 }
 
 const getSynapseTypeByName = `-- name: GetSynapseTypeByName :one
-SELECT id, name, display_name, color_r, color_g, color_b, points_required, agi_reward_min, agi_reward_max, model_filename, sort_order, created_at, updated_at FROM synapse_types WHERE name = $1
+SELECT id, name, display_name, color_r, color_g, color_b, agi_reward_min, agi_reward_max, model_filename, sort_order, created_at, updated_at, eta_minutes_min, eta_minutes_max, max_points_per_min FROM synapse_types WHERE name = $1
 `
 
 func (q *Queries) GetSynapseTypeByName(ctx context.Context, name string) (SynapseType, error) {
@@ -125,19 +133,21 @@ func (q *Queries) GetSynapseTypeByName(ctx context.Context, name string) (Synaps
 		&i.ColorR,
 		&i.ColorG,
 		&i.ColorB,
-		&i.PointsRequired,
 		&i.AgiRewardMin,
 		&i.AgiRewardMax,
 		&i.ModelFilename,
 		&i.SortOrder,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EtaMinutesMin,
+		&i.EtaMinutesMax,
+		&i.MaxPointsPerMin,
 	)
 	return i, err
 }
 
 const listSynapseTypes = `-- name: ListSynapseTypes :many
-SELECT id, name, display_name, color_r, color_g, color_b, points_required, agi_reward_min, agi_reward_max, model_filename, sort_order, created_at, updated_at FROM synapse_types ORDER BY sort_order ASC, name ASC
+SELECT id, name, display_name, color_r, color_g, color_b, agi_reward_min, agi_reward_max, model_filename, sort_order, created_at, updated_at, eta_minutes_min, eta_minutes_max, max_points_per_min FROM synapse_types ORDER BY sort_order ASC, name ASC
 `
 
 func (q *Queries) ListSynapseTypes(ctx context.Context) ([]SynapseType, error) {
@@ -156,13 +166,15 @@ func (q *Queries) ListSynapseTypes(ctx context.Context) ([]SynapseType, error) {
 			&i.ColorR,
 			&i.ColorG,
 			&i.ColorB,
-			&i.PointsRequired,
 			&i.AgiRewardMin,
 			&i.AgiRewardMax,
 			&i.ModelFilename,
 			&i.SortOrder,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.EtaMinutesMin,
+			&i.EtaMinutesMax,
+			&i.MaxPointsPerMin,
 		); err != nil {
 			return nil, err
 		}
@@ -174,6 +186,17 @@ func (q *Queries) ListSynapseTypes(ctx context.Context) ([]SynapseType, error) {
 	return items, nil
 }
 
+const sumAGIBySynapseType = `-- name: SumAGIBySynapseType :one
+SELECT COALESCE(SUM(agi_reward), 0)::BIGINT as total_agi FROM spaces WHERE synapse_type = $1
+`
+
+func (q *Queries) SumAGIBySynapseType(ctx context.Context, synapseType string) (int64, error) {
+	row := q.db.QueryRow(ctx, sumAGIBySynapseType, synapseType)
+	var total_agi int64
+	err := row.Scan(&total_agi)
+	return total_agi, err
+}
+
 const updateSynapseType = `-- name: UpdateSynapseType :exec
 UPDATE synapse_types SET
     name = $2,
@@ -181,28 +204,32 @@ UPDATE synapse_types SET
     color_r = $4,
     color_g = $5,
     color_b = $6,
-    points_required = $7,
-    agi_reward_min = $8,
-    agi_reward_max = $9,
-    model_filename = $10,
-    sort_order = $11,
-    updated_at = $12
+    eta_minutes_min = $7,
+    eta_minutes_max = $8,
+    max_points_per_min = $9,
+    agi_reward_min = $10,
+    agi_reward_max = $11,
+    model_filename = $12,
+    sort_order = $13,
+    updated_at = $14
 WHERE id = $1
 `
 
 type UpdateSynapseTypeParams struct {
-	ID             string  `json:"id"`
-	Name           string  `json:"name"`
-	DisplayName    string  `json:"display_name"`
-	ColorR         float32 `json:"color_r"`
-	ColorG         float32 `json:"color_g"`
-	ColorB         float32 `json:"color_b"`
-	PointsRequired int32   `json:"points_required"`
-	AgiRewardMin   int32   `json:"agi_reward_min"`
-	AgiRewardMax   int32   `json:"agi_reward_max"`
-	ModelFilename  *string `json:"model_filename"`
-	SortOrder      int32   `json:"sort_order"`
-	UpdatedAt      int64   `json:"updated_at"`
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	DisplayName     string  `json:"display_name"`
+	ColorR          float32 `json:"color_r"`
+	ColorG          float32 `json:"color_g"`
+	ColorB          float32 `json:"color_b"`
+	EtaMinutesMin   int32   `json:"eta_minutes_min"`
+	EtaMinutesMax   int32   `json:"eta_minutes_max"`
+	MaxPointsPerMin int32   `json:"max_points_per_min"`
+	AgiRewardMin    int32   `json:"agi_reward_min"`
+	AgiRewardMax    int32   `json:"agi_reward_max"`
+	ModelFilename   *string `json:"model_filename"`
+	SortOrder       int32   `json:"sort_order"`
+	UpdatedAt       int64   `json:"updated_at"`
 }
 
 func (q *Queries) UpdateSynapseType(ctx context.Context, arg UpdateSynapseTypeParams) error {
@@ -213,7 +240,9 @@ func (q *Queries) UpdateSynapseType(ctx context.Context, arg UpdateSynapseTypePa
 		arg.ColorR,
 		arg.ColorG,
 		arg.ColorB,
-		arg.PointsRequired,
+		arg.EtaMinutesMin,
+		arg.EtaMinutesMax,
+		arg.MaxPointsPerMin,
 		arg.AgiRewardMin,
 		arg.AgiRewardMax,
 		arg.ModelFilename,

@@ -25,17 +25,19 @@ func ListPublicSynapseTypes(c *fiber.Ctx, store *database.Store) error {
 			modelFilename = t.ModelFilename
 		}
 		result[i] = dto.SynapseTypeDTO{
-			ID:             t.ID,
-			Name:           t.Name,
-			DisplayName:    t.DisplayName,
-			ColorR:         t.ColorR,
-			ColorG:         t.ColorG,
-			ColorB:         t.ColorB,
-			PointsRequired: int(t.PointsRequired),
-			AGIRewardMin:   int(t.AgiRewardMin),
-			AGIRewardMax:   int(t.AgiRewardMax),
-			ModelFilename:  modelFilename,
-			SortOrder:      int(t.SortOrder),
+			ID:              t.ID,
+			Name:            t.Name,
+			DisplayName:     t.DisplayName,
+			ColorR:          t.ColorR,
+			ColorG:          t.ColorG,
+			ColorB:          t.ColorB,
+			EtaMinutesMin:   int(t.EtaMinutesMin),
+			EtaMinutesMax:   int(t.EtaMinutesMax),
+			MaxPointsPerMin: int(t.MaxPointsPerMin),
+			AGIRewardMin:    int(t.AgiRewardMin),
+			AGIRewardMax:    int(t.AgiRewardMax),
+			ModelFilename:   modelFilename,
+			SortOrder:       int(t.SortOrder),
 		}
 	}
 

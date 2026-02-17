@@ -37,7 +37,7 @@ UPDATE users SET total_agi_earned = COALESCE(total_agi_earned, 0) + $2 WHERE id 
 UPDATE users SET points = points + $2 WHERE id = $1;
 
 -- name: DecrementUserPoints :exec
-UPDATE users SET points = points - $2 WHERE id = $1;
+UPDATE users SET points = GREATEST(points - @amount::float8, 0) WHERE id = @id;
 
 -- name: GetUserCount :one
 SELECT COUNT(*) FROM users;

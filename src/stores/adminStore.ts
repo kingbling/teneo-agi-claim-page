@@ -96,12 +96,15 @@ export interface AdminSynapseType {
   colorR: number
   colorG: number
   colorB: number
-  pointsRequired: number
+  etaMinutesMin: number
+  etaMinutesMax: number
+  maxPointsPerMin: number
   agiRewardMin: number
   agiRewardMax: number
   modelFilename: string | null
   sortOrder: number
   synapseCount: number
+  totalAgi: number
   createdAt: number
   updatedAt: number
 }
@@ -512,7 +515,9 @@ function createAdminStore() {
     colorR: number
     colorG: number
     colorB: number
-    pointsRequired: number
+    etaMinutesMin: number
+    etaMinutesMax: number
+    maxPointsPerMin: number
     agiRewardMin: number
     agiRewardMax: number
     sortOrder: number
