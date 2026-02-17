@@ -21,10 +21,6 @@ import { API_URL } from '@/constants/api'
 import { log } from '@/utils/logger'
 import { teneoStore } from './teneoStore'
 
-// DEV BYPASS: Skip MetaMask and use test wallet
-const DEV_AUTH_BYPASS = import.meta.env.VITE_DEV_AUTH_BYPASS === 'true'
-const DEV_TEST_WALLET = import.meta.env.VITE_DEV_TEST_WALLET || '0xC17Df543f330eF88C30C9862BFcBcF0564aE43BE'
-
 export interface AuthState {
   // Wallet connection
   isConnected: boolean
@@ -66,26 +62,12 @@ function createAuthStore() {
    * Initialize the auth store
    * - Watches for wallet connection changes
    * - Attempts to reconnect previously connected wallet
-   * - DEV BYPASS: Auto-login with test wallet
    */
   async function init(): Promise<{ token: string | null; walletAddress: string | null }> {
-    // DEV BYPASS: Auto-login immediately with test wallet
-    if (DEV_AUTH_BYPASS) {
-      log.auth.info('DEV BYPASS: Auto-login enabled, using test wallet', DEV_TEST_WALLET)
-      setState({
-        isConnected: true,
-        walletAddress: DEV_TEST_WALLET,
-        isInitialized: true,
-      })
-      // Auto-authenticate
-      const result = await authenticate()
-      if (result.success) {
-        log.auth.success('DEV BYPASS: Auto-login successful')
-        return { token: state.token, walletAddress: DEV_TEST_WALLET }
-      } else {
-        log.auth.error('DEV BYPASS: Auto-login failed')
-      }
-      return { token: null, walletAddress: DEV_TEST_WALLET }
+    // Restore token from localStorage before anything else
+    const savedToken = localStorage.getItem('auth_token')
+    if (savedToken) {
+      setState({ token: savedToken, isAuthenticated: true })
     }
 
     // Watch for account changes (disconnect, switch account)
@@ -153,21 +135,10 @@ function createAuthStore() {
   }
 
   /**
-   * Connect to MetaMask wallet (or use dev bypass)
+   * Connect to MetaMask wallet
    */
   async function connectWallet(): Promise<boolean> {
     setState({ isConnecting: true, connectionError: null })
-
-    // DEV BYPASS: Skip MetaMask entirely
-    if (DEV_AUTH_BYPASS) {
-      log.auth.info('DEV BYPASS: Using test wallet', DEV_TEST_WALLET)
-      setState({
-        isConnected: true,
-        walletAddress: DEV_TEST_WALLET,
-        isConnecting: false,
-      })
-      return true
-    }
 
     try {
       const result = await connect(wagmiConfig, {
@@ -208,6 +179,7 @@ function createAuthStore() {
    * Clear all authentication state
    */
   function clearAuth() {
+    localStorage.removeItem('auth_token')
     setState({
       isConnected: false,
       walletAddress: null,
@@ -223,8 +195,6 @@ function createAuthStore() {
    * 1. Request nonce from server
    * 2. Sign message with MetaMask
    * 3. Verify signature and get JWT
-   *
-   * DEV BYPASS: Skip steps 1-2 and send devBypass flag
    */
   async function authenticate(): Promise<{ success: boolean; user?: unknown }> {
     if (!state.walletAddress) {
@@ -235,39 +205,6 @@ function createAuthStore() {
     setState({ isAuthenticating: true, authError: null })
 
     try {
-      // DEV BYPASS: Skip nonce and signature
-      if (DEV_AUTH_BYPASS) {
-        log.auth.info('DEV BYPASS: Skipping signature for wallet', state.walletAddress)
-
-        const verifyResponse = await fetch(`${API_URL}/api/auth/verify`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            wallet: state.walletAddress,
-            devBypass: true,
-          }),
-        })
-
-        if (!verifyResponse.ok) {
-          const error = await verifyResponse.json()
-          throw new Error(error.error || 'Authentication failed')
-        }
-
-        const { token, user } = await verifyResponse.json()
-
-        setState({
-          isAuthenticated: true,
-          token,
-          isAuthenticating: false,
-        })
-
-        // Link Teneo account (non-blocking)
-        teneoStore.linkTeneoAccount()
-
-        return { success: true, user }
-      }
-
-      // Production flow: Request nonce, sign, verify
       // Step 1: Request nonce
       const nonceResponse = await fetch(
         `${API_URL}/api/auth/nonce?wallet=${encodeURIComponent(state.walletAddress)}`
@@ -302,6 +239,7 @@ function createAuthStore() {
 
       const { token, user } = await verifyResponse.json()
 
+      localStorage.setItem('auth_token', token)
       setState({
         isAuthenticated: true,
         token,

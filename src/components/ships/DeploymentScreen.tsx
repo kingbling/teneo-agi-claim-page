@@ -14,6 +14,7 @@ import { X, Zap, Gauge, Fuel, Radio, ChevronLeft, ChevronRight, Rocket, Ship as 
 import { ShipPreview3D } from './ShipPreview3D'
 import { shipStore } from '@/stores/shipStore'
 import { configStore } from '@/stores/configStore'
+import { userStore } from '@/stores/userStore'
 import { cn } from '@/lib/utils'
 import {
   SYNAPSE_COLORS,
@@ -62,7 +63,7 @@ function DeployStatBar(props: { label: string; value: number; max: number; icon:
 export interface DeploymentScreenProps {
   cluster: SynapseCluster
   position: THREE.Vector3
-  onDeploy: (shipId: string) => void
+  onDeploy: (shipId: string) => void | Promise<void>
   onClose: () => void
 }
 
@@ -137,7 +138,11 @@ export const DeploymentScreen: Component<DeploymentScreenProps> = (props) => {
     if (!ship || isDeploying()) return
 
     setIsDeploying(true)
-    props.onDeploy(ship.id)
+    try {
+      await props.onDeploy(ship.id)
+    } finally {
+      setIsDeploying(false)
+    }
   }
 
   const col = () => {
@@ -279,6 +284,13 @@ export const DeploymentScreen: Component<DeploymentScreenProps> = (props) => {
                 </Show>
               </div>
             </div>
+
+            {/* Points balance */}
+            <div class="flex items-center justify-between px-1">
+              <span class="text-xs text-gray-500">Your balance</span>
+              <span class="text-sm font-semibold text-amber-400">{formatPoints(userStore.userPoints)} $AGI</span>
+            </div>
+            <p class="text-[10px] text-gray-600 px-1 -mt-2">Travel costs points based on distance</p>
 
             {/* Deploy button */}
             <button

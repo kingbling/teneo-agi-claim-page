@@ -4,7 +4,7 @@ tmp_dir = "tmp"
 [build]
   cmd = "go build -o bin/server ./cmd/server"
   bin = "./bin/server"
-  full_bin = "DEV_AUTH_BYPASS=true ./bin/server"
+  full_bin = "./bin/server"
   include_ext = ["go", "sh"]
   exclude_dir = ["tmp", "vendor", "data"]
   delay = 1000

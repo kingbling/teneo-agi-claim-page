@@ -12,7 +12,7 @@ import { ThreeCanvas } from '@/three'
 import { DashboardHeader, BrainSceneMinimal, BrainMinimap, QualitySettings, LoginOverlay, SynapseListPanel, type QualityPreset } from '@/components/dashboard'
 import { ToastContainer } from '@/components/ui/Toast'
 import { ShipNavigator } from '@/components/ships/ShipNavigator'
-import { CreateShipDialog } from '@/components/ships/CreateShipDialog'
+import { CreateShipScreen } from '@/components/ships/CreateShipScreen'
 import { ShipDetailPanel } from '@/components/ships/ShipDetailPanel'
 import { DeploymentScreen } from '@/components/ships/DeploymentScreen'
 import { ExplorePrompt } from '@/components/brain/ExplorePrompt'
@@ -425,11 +425,10 @@ export const DiscoveryDashboard: Component = () => {
         </Show>
       </div>
 
-      {/* Create Ship Dialog */}
-      <CreateShipDialog
-        open={panels.showCreateShipDialog}
-        onOpenChange={(v: boolean) => setPanels('showCreateShipDialog', v)}
-      />
+      {/* Create Ship Screen */}
+      <Show when={panels.showCreateShipDialog}>
+        <CreateShipScreen onClose={() => setPanels('showCreateShipDialog', false)} />
+      </Show>
     </div>
   )
 }

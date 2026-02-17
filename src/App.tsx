@@ -85,9 +85,6 @@ function App() {
     // Auto-login if both token and wallet are available immediately
     if (token && walletAddress) {
       await tryAutoLogin(walletAddress)
-    } else if (walletAddress && authStore.isAuthenticated) {
-      // DEV_AUTH_BYPASS case: authenticated but token might not be returned immediately
-      await userStore.loginUser(walletAddress)
     }
   })
 

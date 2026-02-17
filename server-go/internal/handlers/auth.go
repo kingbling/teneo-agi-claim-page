@@ -144,7 +144,6 @@ func VerifySignature(c *fiber.Ctx, store *database.Store) error {
 	var req struct {
 		Wallet    string `json:"wallet"`
 		Signature string `json:"signature"`
-		DevBypass bool   `json:"devBypass"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -155,49 +154,41 @@ func VerifySignature(c *fiber.Ctx, store *database.Store) error {
 		return c.Status(400).JSON(fiber.Map{"error": "wallet is required"})
 	}
 
-	// DEV BYPASS: Skip signature verification in development
-	// Set DEV_AUTH_BYPASS=true in environment to enable
-	devBypassEnabled := os.Getenv("DEV_AUTH_BYPASS") == "true"
-	if devBypassEnabled && req.DevBypass {
-		log.Printf("[AUTH] DEV BYPASS: Skipping signature verification for wallet: %s", req.Wallet)
-	} else {
-		// Production: require proper signature verification
-		if req.Signature == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "signature is required"})
-		}
-
-		// Get the stored nonce for this wallet
-		noncesMutex.RLock()
-		nonce, exists := nonces[req.Wallet]
-		noncesMutex.RUnlock()
-
-		if !exists {
-			return c.Status(400).JSON(fiber.Map{"error": "No nonce found. Please request a new nonce first."})
-		}
-
-		// Reconstruct the message that was signed
-		message := `Sign this message to verify your wallet ownership.\n\nNonce: ` + nonce + `\n\nThis will not trigger a blockchain transaction or cost any fees.`
-
-		// Verify the signature
-		recoveredAddr, err := verifyEthSignature(message, req.Signature)
-		if err != nil {
-			log.Printf("[AUTH] Signature verification failed for wallet %s: %v", req.Wallet, err)
-			return c.Status(401).JSON(fiber.Map{"error": "Invalid signature"})
-		}
-
-		// Compare recovered address with claimed wallet (case-insensitive)
-		if !strings.EqualFold(recoveredAddr.Hex(), req.Wallet) {
-			log.Printf("[AUTH] Address mismatch: recovered %s, claimed %s", recoveredAddr.Hex(), req.Wallet)
-			return c.Status(401).JSON(fiber.Map{"error": "Signature does not match wallet address"})
-		}
-
-		// Clear the used nonce (one-time use)
-		noncesMutex.Lock()
-		delete(nonces, req.Wallet)
-		noncesMutex.Unlock()
-
-		log.Printf("[AUTH] Signature verified for wallet: %s", req.Wallet)
+	if req.Signature == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "signature is required"})
 	}
+
+	// Get the stored nonce for this wallet
+	noncesMutex.RLock()
+	nonce, exists := nonces[req.Wallet]
+	noncesMutex.RUnlock()
+
+	if !exists {
+		return c.Status(400).JSON(fiber.Map{"error": "No nonce found. Please request a new nonce first."})
+	}
+
+	// Reconstruct the message that was signed
+	message := `Sign this message to verify your wallet ownership.\n\nNonce: ` + nonce + `\n\nThis will not trigger a blockchain transaction or cost any fees.`
+
+	// Verify the signature
+	recoveredAddr, err := verifyEthSignature(message, req.Signature)
+	if err != nil {
+		log.Printf("[AUTH] Signature verification failed for wallet %s: %v", req.Wallet, err)
+		return c.Status(401).JSON(fiber.Map{"error": "Invalid signature"})
+	}
+
+	// Compare recovered address with claimed wallet (case-insensitive)
+	if !strings.EqualFold(recoveredAddr.Hex(), req.Wallet) {
+		log.Printf("[AUTH] Address mismatch: recovered %s, claimed %s", recoveredAddr.Hex(), req.Wallet)
+		return c.Status(401).JSON(fiber.Map{"error": "Signature does not match wallet address"})
+	}
+
+	// Clear the used nonce (one-time use)
+	noncesMutex.Lock()
+	delete(nonces, req.Wallet)
+	noncesMutex.Unlock()
+
+	log.Printf("[AUTH] Signature verified for wallet: %s", req.Wallet)
 
 	ctx := c.Context()
 
