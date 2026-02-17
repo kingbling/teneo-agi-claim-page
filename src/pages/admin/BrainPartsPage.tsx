@@ -3,7 +3,7 @@
  */
 
 import { onMount, createSignal, Show, For } from 'solid-js'
-import { Plus, Trash2, Zap, Power, RefreshCw, Pencil } from 'lucide-solid'
+import { Plus, Zap, Power, RefreshCw, Pencil } from 'lucide-solid'
 import { adminStore } from '@/stores/adminStore'
 import type { AdminBrainPart } from '@/stores/adminStore'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
@@ -80,16 +80,6 @@ export default function BrainPartsPage() {
       adminStore.fetchBrainParts()
     }
     setIsSubmitting(false)
-  }
-
-  const handleDelete = async (bp: AdminBrainPart) => {
-    if (bp.synapseCount > 0) {
-      alert(`Cannot delete: ${bp.synapseCount} synapses in this brain part.`)
-      return
-    }
-    if (!confirm(`Delete "${bp.displayName}"? This cannot be undone.`)) return
-    const success = await adminStore.deleteBrainPart(bp.id)
-    if (success) adminStore.fetchBrainParts()
   }
 
   const handleToggle = async (bp: AdminBrainPart) => {
@@ -358,16 +348,26 @@ export default function BrainPartsPage() {
       </Show>
 
       {/* Parts List */}
+      <Show when={adminStore.isLoadingBrainParts}>
+        <Card>
+          <CardContent class="py-12 text-center">
+            <div class="w-8 h-8 mx-auto mb-4 border-2 border-[var(--brand-teal-1)] border-t-transparent rounded-full animate-spin" />
+            <p class="text-[var(--text-secondary)]">Loading brain parts...</p>
+          </CardContent>
+        </Card>
+      </Show>
       <Show
-        when={adminStore.brainParts.length > 0}
+        when={!adminStore.isLoadingBrainParts && adminStore.brainParts.length > 0}
         fallback={
-          <Card>
-            <CardContent class="py-12 text-center">
-              <Zap class="w-12 h-12 mx-auto mb-4 text-[var(--text-tertiary)]" />
-              <p class="text-[var(--text-secondary)]">No brain parts defined</p>
-              <p class="text-sm text-[var(--text-tertiary)]">Create your first brain part to get started</p>
-            </CardContent>
-          </Card>
+          <Show when={!adminStore.isLoadingBrainParts}>
+            <Card>
+              <CardContent class="py-12 text-center">
+                <Zap class="w-12 h-12 mx-auto mb-4 text-[var(--text-tertiary)]" />
+                <p class="text-[var(--text-secondary)]">No brain parts defined</p>
+                <p class="text-sm text-[var(--text-tertiary)]">Create your first brain part to get started</p>
+              </CardContent>
+            </Card>
+          </Show>
         }
       >
         <div class="space-y-4">
@@ -419,14 +419,6 @@ export default function BrainPartsPage() {
                           </Button>
                           <Button size="sm" variant="outline" onClick={() => startEdit(bp)}>
                             <Pencil class="w-4 h-4 mr-1" /> Edit
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => handleDelete(bp)}
-                            disabled={bp.synapseCount > 0}
-                          >
-                            <Trash2 class="w-4 h-4" />
                           </Button>
                         </div>
                       </div>

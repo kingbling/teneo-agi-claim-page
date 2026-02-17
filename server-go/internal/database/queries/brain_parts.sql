@@ -32,8 +32,5 @@ UPDATE brain_parts SET
     updated_at = $14
 WHERE id = $1;
 
--- name: DeleteBrainPart :exec
-DELETE FROM brain_parts WHERE id = $1;
-
 -- name: CountSpacesByRegion :one
 SELECT COUNT(*) FROM spaces WHERE region = $1;

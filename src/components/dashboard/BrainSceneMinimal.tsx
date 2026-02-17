@@ -286,6 +286,8 @@ export interface BrainSceneMinimalProps {
   hasIdleShip?: boolean
   // User level for unlocking synapse types
   userLevel?: number
+  // Hide synapse tooltip (e.g. when a fullscreen overlay is open)
+  disableTooltip?: boolean
 }
 
 /**
@@ -407,6 +409,7 @@ export function BrainSceneMinimal(props: BrainSceneMinimalProps) {
         filterType={props.synapseTypeFilter}
         hasIdleShip={props.hasIdleShip}
         userLevel={props.userLevel}
+        disableTooltip={props.disableTooltip}
       />
 
       {/* Synapse network connections - always mounted */}

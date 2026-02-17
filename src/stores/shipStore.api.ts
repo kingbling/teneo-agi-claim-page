@@ -1,6 +1,6 @@
 import { produce, type SetStoreFunction } from 'solid-js/store'
 import { userStore } from './userStore'
-import { log, fmt } from '@/utils/logger'
+import { log } from '@/utils/logger'
 import type {
   Ship,
   Synapse,
@@ -119,61 +119,6 @@ export function createApiActions(
     }
   }
 
-  /**
-   * Fetch all 500k synapses in compact binary format
-   * Binary format (16 bytes per synapse):
-   * - float32 positionX (4 bytes)
-   * - float32 positionY (4 bytes)
-   * - float32 positionZ (4 bytes)
-   * - uint8   state (1 byte)
-   * - uint8   synapseType (1 byte)
-   * - uint16  reserved (2 bytes)
-   */
-  const fetchBulkSynapses = async (): Promise<boolean> => {
-    try {
-      log.ship.info('Fetching bulk synapses...')
-      const response = await fetch(`${API_URL}/api/synapses/bulk`)
-      if (!response.ok) throw new Error('Failed to fetch bulk synapses')
-
-      const buffer = await response.arrayBuffer()
-      const view = new DataView(buffer)
-
-      // Read header: version (1 byte) + count (4 bytes)
-      const version = view.getUint8(0)
-      const count = view.getUint32(1, true) // little-endian
-
-      log.ship.success(`Loaded ${fmt.num(count)} raw synapses (v${version})`)
-
-      // Allocate typed arrays
-      const positions = new Float32Array(count * 3)
-      const states = new Uint8Array(count)
-      const types = new Uint8Array(count)
-
-      const HEADER = 5
-      const RECORD = 16
-
-      // Parse binary data
-      for (let i = 0; i < count; i++) {
-        const off = HEADER + i * RECORD
-        positions[i * 3] = view.getFloat32(off, true)
-        positions[i * 3 + 1] = view.getFloat32(off + 4, true)
-        positions[i * 3 + 2] = view.getFloat32(off + 8, true)
-        states[i] = view.getUint8(off + 12)
-        types[i] = view.getUint8(off + 13)
-      }
-
-      setState({
-        rawSynapseData: { count, positions, states, types, version },
-        rawSynapseDataVersion: v => v + 1,
-      })
-
-      return true
-    } catch (error) {
-      log.ship.error('Failed to fetch bulk synapses:', error)
-      return false
-    }
-  }
-
   const fetchSynapseDetails = async (synapseId: string): Promise<Synapse | null> => {
     try {
       const response = await fetch(`${API_URL}/api/synapses/${synapseId}`)
@@ -232,7 +177,6 @@ export function createApiActions(
   return {
     fetchUserShips,
     fetchWorldState,
-    fetchBulkSynapses,
     fetchSynapseDetails,
     fetchSynapseByPosition,
     fetchSynapseExplorers,

@@ -65,6 +65,7 @@ interface SynapseMarkersProps {
   // Solvable density control (performance optimization for LOD 0)
   solvableDensity?: number  // 0.0-1.0, fraction of solvables visible at once (default 0.3)
   forceSolvableOnly?: boolean  // Override auto-detection, always enable density filtering
+  disableTooltip?: boolean  // Hide tooltip (e.g. when a fullscreen overlay is open)
 }
 
 export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
@@ -124,6 +125,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
   let pointerDownPos: { x: number; y: number } | null = null
   let isDragging = false
   const DRAG_THRESHOLD = 5
+  let pointerHasEntered = false  // Don't hover until pointer actually enters canvas
 
 
   // Hover state signal for tooltip
@@ -609,6 +611,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
 
     const handlePointerMove = (e: PointerEvent) => {
       // Update pointer for raycasting
+      pointerHasEntered = true
       const rect = canvas.getBoundingClientRect()
       pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
       pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
@@ -887,7 +890,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
     const pointerMoved = pointer.x !== lastPointer.x || pointer.y !== lastPointer.y
     const shouldCheckHover = (frameCounter % HOVER_CHECK_INTERVAL === 0) || pointerMoved
 
-    if (shouldCheckHover) {
+    if (shouldCheckHover && pointerHasEntered) {
       lastPointer.copy(pointer)
       const currentHovered = hoveredIndex()
       const closestIndex = findClosestPoint(currentHovered)
@@ -1022,6 +1025,7 @@ export const SynapseMarkers: Component<SynapseMarkersProps> = (props) => {
 
   // Determine if we should show tooltip
   const showTooltip = createMemo(() => {
+    if (props.disableTooltip) return false
     if (!tooltipPosition()) return false
     if (props.useIndividualMode) return hoveredIndividualSynapse() !== null
     return hoveredCluster() !== null

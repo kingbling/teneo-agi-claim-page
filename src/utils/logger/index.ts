@@ -70,8 +70,6 @@ export const log = {
   auth: createLogger('Auth'),
   /** User store operations */
   user: createLogger('UserStore'),
-  /** Event store */
-  event: createLogger('EventStore'),
   /** Configuration */
   config: createLogger('ConfigStore'),
   /** Agent/ship visualization */
@@ -84,10 +82,6 @@ export const log = {
   brain: createLogger('Brain'),
   /** Three.js operations */
   three: createLogger('Three'),
-  /** Admin operations */
-  admin: createLogger('Admin'),
   /** Dashboard UI */
   dashboard: createLogger('Dashboard'),
-  /** General app logger */
-  app: createLogger('App'),
 }

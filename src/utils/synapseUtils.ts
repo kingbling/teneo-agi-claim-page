@@ -27,21 +27,3 @@ export function getDominantSynapseType(
 
   return dominantType
 }
-
-/**
- * Format synapse type for display
- */
-export function formatSynapseType(type: SynapseType): string {
-  return type.charAt(0).toUpperCase() + type.slice(1)
-}
-
-/**
- * Calculate synapse completion percentage
- */
-export function getSynapseProgress(
-  pointsAccumulated: number,
-  pointsRequired: number
-): number {
-  if (pointsRequired <= 0) return 0
-  return Math.min(100, (pointsAccumulated / pointsRequired) * 100)
-}

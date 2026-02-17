@@ -604,13 +604,6 @@ function createAdminStore() {
     return !error
   }
 
-  async function deleteBrainPart(id: string): Promise<boolean> {
-    const { error } = await apiCall(`/api/admin/brain-parts/${id}`, {
-      method: 'DELETE',
-    })
-    return !error
-  }
-
   async function toggleBrainPart(id: string): Promise<boolean> {
     const { error } = await apiCall(`/api/admin/brain-parts/${id}/toggle`, {
       method: 'POST',
@@ -765,7 +758,6 @@ function createAdminStore() {
     fetchBrainParts,
     createBrainPart,
     updateBrainPart,
-    deleteBrainPart,
     toggleBrainPart,
     generateSynapsesForBrainPart,
     wipeSynapses,

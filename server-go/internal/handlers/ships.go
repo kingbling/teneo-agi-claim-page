@@ -187,7 +187,7 @@ func StringToPgUUID(s string) pgtype.UUID {
 }
 
 // CreateShip creates a new ship for a user
-func CreateShip(c *fiber.Ctx, store *database.Store) error {
+func CreateShip(c *fiber.Ctx, store *database.Store, cfg *config.Config) error {
 	ctx := c.Context()
 
 	var req struct {
@@ -230,23 +230,11 @@ func CreateShip(c *fiber.Ctx, store *database.Store) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to look up user"})
 	}
 
-	// Check ship limit based on user level
-	userLevel := dto.CalculateUserLevel(user.UsdcSpent)
-	maxShips := 1 // Default for level 1
-	if userLevel >= 5 {
-		maxShips = 10
-	} else if userLevel >= 4 {
-		maxShips = 5
-	} else if userLevel >= 3 {
-		maxShips = 3
-	} else if userLevel >= 2 {
-		maxShips = 2
-	}
-
+	// Check ship limit
 	existingShips, _ := store.Queries.GetAgentsByOwner(ctx, req.UserID)
-	if len(existingShips) >= maxShips {
+	if len(existingShips) >= cfg.MaxShips {
 		return c.Status(400).JSON(fiber.Map{
-			"error": fmt.Sprintf("Ship limit reached (%d ships at user level %d)", maxShips, userLevel),
+			"error": fmt.Sprintf("Ship limit reached (%d/%d)", len(existingShips), cfg.MaxShips),
 		})
 	}
 

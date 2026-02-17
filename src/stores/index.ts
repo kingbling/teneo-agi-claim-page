@@ -3,7 +3,7 @@
 
 // Config store - game configuration, settings
 export { configStore } from './configStore'
-export type { GameConfig } from './configStore'
+export type { ServerConfig, UserLevelConfig } from './configStore'
 
 // User store - user state, levels, currencies
 export { userStore } from './userStore'

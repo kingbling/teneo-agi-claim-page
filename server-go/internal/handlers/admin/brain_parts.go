@@ -3,7 +3,6 @@ package admin
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"math/rand"
 	"time"
@@ -244,34 +243,6 @@ func UpdateBrainPart(c *fiber.Ctx) error {
 
 	if err := store.Queries.UpdateBrainPart(ctx, params); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update brain part"})
-	}
-
-	return c.JSON(fiber.Map{"success": true})
-}
-
-// DeleteBrainPart deletes a brain part (refused if synapses reference it)
-func DeleteBrainPart(c *fiber.Ctx) error {
-	store := c.Locals("store").(*database.Store)
-	ctx := c.Context()
-	id := c.Params("id")
-
-	p, err := store.Queries.GetBrainPart(ctx, id)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return c.Status(404).JSON(fiber.Map{"error": "Brain part not found"})
-		}
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to check brain part"})
-	}
-
-	count, _ := store.Queries.CountSpacesByRegion(ctx, p.Name)
-	if count > 0 {
-		return c.Status(409).JSON(fiber.Map{
-			"error": fmt.Sprintf("Cannot delete: %d synapses in this brain part.", count),
-		})
-	}
-
-	if err := store.Queries.DeleteBrainPart(ctx, id); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete brain part"})
 	}
 
 	return c.JSON(fiber.Map{"success": true})

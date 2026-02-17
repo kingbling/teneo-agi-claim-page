@@ -201,12 +201,12 @@ export const CreateShipScreen: Component<CreateShipScreenProps> = (props) => {
             <Show
               when={selectedType()}
               fallback={
-                <div class="w-full h-full flex items-center justify-center rounded-2xl border border-white/5 bg-white/[0.02]">
+                <div class="w-full h-full flex items-center justify-center rounded-2xl">
                   <p class="text-gray-500 text-sm">No ship types available</p>
                 </div>
               }
             >
-              <div class="w-full h-full rounded-2xl overflow-hidden border border-white/5 bg-white/[0.02]">
+              <div class="w-full h-full rounded-2xl overflow-hidden">
                 <ShipPreview3D
                   shipType={selectedType()!.name}
                   class="w-full h-full"

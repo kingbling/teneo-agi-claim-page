@@ -94,11 +94,6 @@ export const SYNAPSE_COLORS: Record<SynapseType, SynapseColorConfig> = new Proxy
   }
 )
 
-// Helper to get RGB color as CSS rgba string
-export function rgbToRgba(color: RGBColor, alpha: number = 1): string {
-  return `rgba(${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(color.b * 255)}, ${alpha})`
-}
-
 // Helper to get RGB color as CSS rgb string
 export function rgbToRgb(color: RGBColor): string {
   return `rgb(${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(color.b * 255)})`

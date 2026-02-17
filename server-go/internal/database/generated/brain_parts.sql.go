@@ -83,15 +83,6 @@ func (q *Queries) CreateBrainPart(ctx context.Context, arg CreateBrainPartParams
 	return i, err
 }
 
-const deleteBrainPart = `-- name: DeleteBrainPart :exec
-DELETE FROM brain_parts WHERE id = $1
-`
-
-func (q *Queries) DeleteBrainPart(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, deleteBrainPart, id)
-	return err
-}
-
 const getBrainPart = `-- name: GetBrainPart :one
 SELECT id, name, display_name, description, center_x, center_y, center_z, radius, color_r, color_g, color_b, is_enabled, sort_order, created_at, updated_at FROM brain_parts WHERE id = $1
 `

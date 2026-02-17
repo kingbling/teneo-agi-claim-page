@@ -14,7 +14,6 @@ import type { TeneoPointsEvent, TeneoBurnEvent } from '@/types/api.generated'
 
 export interface TeneoState {
   isLinked: boolean
-  teneoUserId: string | null
   pointsTotal: number
   isLinking: boolean
   linkError: string | null
@@ -22,7 +21,6 @@ export interface TeneoState {
 
 const initialState: TeneoState = {
   isLinked: false,
-  teneoUserId: null,
   pointsTotal: 0,
   isLinking: false,
   linkError: null,
@@ -123,7 +121,6 @@ function createTeneoStore() {
   return {
     // State (reactive getters)
     get isLinked() { return state.isLinked },
-    get teneoUserId() { return state.teneoUserId },
     get pointsTotal() { return state.pointsTotal },
     get isLinking() { return state.isLinking },
     get linkError() { return state.linkError },

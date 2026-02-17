@@ -178,7 +178,7 @@ func main() {
 
 	// Ships routes
 	ships := app.Group("/api/ships")
-	ships.Post("/", func(c *fiber.Ctx) error { return handlers.CreateShip(c, store) })
+	ships.Post("/", func(c *fiber.Ctx) error { return handlers.CreateShip(c, store, cfg) })
 	ships.Post("/:id/deploy", func(c *fiber.Ctx) error { return handlers.DeployShip(c, store, hub, cfg, teneoClient) })
 	ships.Post("/:id/recall", func(c *fiber.Ctx) error { return handlers.RecallShip(c, store) })
 	ships.Post("/:id/travel-to-synapse", func(c *fiber.Ctx) error { return handlers.TravelToSynapse(c, store, hub, cfg, teneoClient) })
@@ -186,7 +186,7 @@ func main() {
 
 	// Users routes
 	users := app.Group("/api/users")
-	users.Post("/", func(c *fiber.Ctx) error { return handlers.LoginOrCreateUser(c, store) })
+	users.Post("/", func(c *fiber.Ctx) error { return handlers.LoginOrCreateUser(c, store, cfg) })
 	users.Get("/:userId/ships", func(c *fiber.Ctx) error { return handlers.GetUserShipsByUserID(c, store) })
 	users.Post("/:userId/usdc-spent", func(c *fiber.Ctx) error { return handlers.RecordUSDCSpent(c, store) })
 
@@ -216,7 +216,7 @@ func main() {
 	// Auth routes
 	auth := app.Group("/api/auth")
 	auth.Get("/nonce", handlers.GetNonce)
-	auth.Post("/verify", func(c *fiber.Ctx) error { return handlers.VerifySignature(c, store) })
+	auth.Post("/verify", func(c *fiber.Ctx) error { return handlers.VerifySignature(c, store, cfg) })
 	auth.Get("/me", func(c *fiber.Ctx) error { return handlers.VerifyToken(c, store) })
 
 	// Admin routes (all require admin authentication)
@@ -284,7 +284,6 @@ func main() {
 	adminGroup.Get("/brain-parts", admin.ListBrainParts)
 	adminGroup.Post("/brain-parts", admin.CreateBrainPart)
 	adminGroup.Patch("/brain-parts/:id", admin.UpdateBrainPart)
-	adminGroup.Delete("/brain-parts/:id", admin.DeleteBrainPart)
 	adminGroup.Post("/brain-parts/:id/toggle", admin.ToggleBrainPart)
 	adminGroup.Post("/brain-parts/:id/generate", admin.GenerateSynapsesForBrainPart)
 	adminGroup.Post("/brain-parts/wipe", admin.WipeSynapses)

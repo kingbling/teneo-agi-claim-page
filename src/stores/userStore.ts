@@ -1,16 +1,35 @@
 import { createRoot } from 'solid-js'
 import { createStore } from 'solid-js/store'
-import {
-  type UserLevel,
-  type SynapseType,
-  calculateUserLevel,
-  getUserLevelConfig,
-  getMaxShipsForUserLevel,
-} from '@/types/game'
+import type { UserLevel } from '@/types/game'
 import { authStore } from './authStore'
 import { shipStore } from './shipStore'
+import { configStore } from './configStore'
 import { API_URL } from '@/constants/api'
 import { log } from '@/utils/logger'
+
+// Local helpers that read level thresholds from configStore
+
+function calculateUserLevel(totalUSDCSpent: number): UserLevel {
+  const levels = configStore.userLevels
+  // Walk levels 5→2, return first where minUSDC is met
+  for (let l = 5; l >= 2; l--) {
+    const cfg = levels[String(l)]
+    if (cfg && totalUSDCSpent >= cfg.minUSDC) return l as UserLevel
+  }
+  return 1
+}
+
+function getLevelMultiplier(level: UserLevel): number {
+  return configStore.userLevels[String(level)]?.multiplier ?? 1.0
+}
+
+function getLevelMaxShips(level: UserLevel): number {
+  return configStore.userLevels[String(level)]?.maxShips ?? configStore.maxShips
+}
+
+function getLevelLabel(level: UserLevel): string {
+  return configStore.userLevels[String(level)]?.label ?? 'Explorer'
+}
 
 // ============================================================================
 // MASTERPLAN 2026: USER STORE
@@ -45,9 +64,6 @@ export interface UserState {
   maxShips: number                   // Max ships allowed (from user level)
   currentShipCount: number           // Current ships owned
 
-  // Masterplan 2026: Unlocked Content
-  unlockedSynapseTypes: SynapseType[]
-
   // Loading State
   isLoading: boolean
   error: string | null
@@ -80,9 +96,6 @@ const initialState: UserState = {
   maxShips: 1,  // L1 starts with 1 ship
   currentShipCount: 0,
 
-  // Unlocks
-  unlockedSynapseTypes: [],  // All types unlocked (populated from configStore)
-
   // UI State
   isLoading: false,
   error: null,
@@ -114,7 +127,6 @@ function createUserStore() {
 
       // Calculate derived state (Masterplan 2026: Single USDC-based level system)
       const userLevel = calculateUserLevel(user.usdc_spent || 0)
-      const levelConfig = getUserLevelConfig(userLevel)
 
       setState({
         userId: user.id,
@@ -125,7 +137,7 @@ function createUserStore() {
         // User Level (Masterplan 2026)
         userLevel,
         usdcSpent: user.usdc_spent || 0,
-        pointsPerMinMultiplier: levelConfig.multiplier,
+        pointsPerMinMultiplier: getLevelMultiplier(userLevel),
 
         // Tokens
         agenticBalance: user.agentic_balance || 0,
@@ -137,11 +149,8 @@ function createUserStore() {
         nftCount: user.nft_count || 0,
 
         // Ships (from User Level only)
-        maxShips: getMaxShipsForUserLevel(userLevel),
+        maxShips: getLevelMaxShips(userLevel),
         currentShipCount: 0, // Will be set by shipStore
-
-        // Unlocks (from User Level)
-        unlockedSynapseTypes: [],  // All types unlocked
 
         isLoading: false,
       })
@@ -185,14 +194,12 @@ function createUserStore() {
 
       const newTotal = state.usdcSpent + amount
       const newLevel = calculateUserLevel(newTotal)
-      const levelConfig = getUserLevelConfig(newLevel)
 
       setState({
         usdcSpent: newTotal,
         userLevel: newLevel,
-        pointsPerMinMultiplier: levelConfig.multiplier,
-        maxShips: getMaxShipsForUserLevel(newLevel),
-        unlockedSynapseTypes: [],  // All types unlocked
+        pointsPerMinMultiplier: getLevelMultiplier(newLevel),
+        maxShips: getLevelMaxShips(newLevel),
       })
 
       return true
@@ -254,8 +261,7 @@ function createUserStore() {
   }
 
   const getUserLevelLabel = (): string => {
-    const config = getUserLevelConfig(state.userLevel)
-    return `L${state.userLevel} ${config.label}`
+    return `L${state.userLevel} ${getLevelLabel(state.userLevel)}`
   }
 
   return {
@@ -285,9 +291,6 @@ function createUserStore() {
     // Ships
     get maxShips() { return state.maxShips },
     get currentShipCount() { return state.currentShipCount },
-
-    // Unlocks
-    get unlockedSynapseTypes() { return state.unlockedSynapseTypes },
 
     // Loading State
     get isLoading() { return state.isLoading },

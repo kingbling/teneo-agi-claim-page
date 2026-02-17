@@ -82,67 +82,6 @@ function DialogContent(props: DialogContentProps) {
   )
 }
 
-type DialogHeaderProps = JSX.HTMLAttributes<HTMLDivElement>
-
-function DialogHeader(props: DialogHeaderProps) {
-  const [local, others] = splitProps(props, ['class'])
-
-  return (
-    <div
-      class={cn(
-        'flex flex-col space-y-2 text-center sm:text-left',
-        local.class
-      )}
-      {...others}
-    />
-  )
-}
-
-type DialogFooterProps = JSX.HTMLAttributes<HTMLDivElement>
-
-function DialogFooter(props: DialogFooterProps) {
-  const [local, others] = splitProps(props, ['class'])
-
-  return (
-    <div
-      class={cn(
-        'flex flex-col-reverse gap-6 sm:flex-row sm:justify-end pt-6 mt-4 border-t border-[var(--card-border)]/50',
-        local.class
-      )}
-      {...others}
-    />
-  )
-}
-
-type DialogTitleProps = JSX.HTMLAttributes<HTMLHeadingElement>
-
-function DialogTitle(props: DialogTitleProps) {
-  const [local, others] = splitProps(props, ['class'])
-
-  return (
-    <DialogPrimitive.Title
-      class={cn(
-        'text-2xl font-bold leading-tight tracking-tight text-[var(--text-primary)]',
-        local.class
-      )}
-      {...others}
-    />
-  )
-}
-
-type DialogDescriptionProps = JSX.HTMLAttributes<HTMLParagraphElement>
-
-function DialogDescription(props: DialogDescriptionProps) {
-  const [local, others] = splitProps(props, ['class'])
-
-  return (
-    <DialogPrimitive.Description
-      class={cn('text-sm text-[var(--text-tertiary)] leading-relaxed mt-1', local.class)}
-      {...others}
-    />
-  )
-}
-
 export {
   Dialog,
   DialogPortal,
@@ -150,8 +89,4 @@ export {
   DialogClose,
   DialogTrigger,
   DialogContent,
-  DialogHeader,
-  DialogFooter,
-  DialogTitle,
-  DialogDescription,
 }

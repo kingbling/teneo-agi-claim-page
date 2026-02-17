@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"teneo/server-go/internal/config"
 	"teneo/server-go/internal/database"
 	"teneo/server-go/internal/database/generated"
 
@@ -140,7 +141,7 @@ func verifyEthSignature(message string, signatureHex string) (common.Address, er
 }
 
 // VerifySignature verifies a wallet signature and returns a JWT
-func VerifySignature(c *fiber.Ctx, store *database.Store) error {
+func VerifySignature(c *fiber.Ctx, store *database.Store, cfg *config.Config) error {
 	var req struct {
 		Wallet    string `json:"wallet"`
 		Signature string `json:"signature"`
@@ -209,8 +210,8 @@ func VerifySignature(c *fiber.Ctx, store *database.Store) error {
 			Tier:      "free",
 			UserLevel: 1,
 			UsdcSpent: 0,
-			Points:    1000, // Starting points
-			MaxShips:  1,
+			Points:    cfg.StartingPoints,
+			MaxShips:  int32(cfg.StartingMaxShips),
 			CreatedAt: time.Now().UnixMilli(),
 		})
 		if err != nil {

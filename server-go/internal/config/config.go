@@ -85,6 +85,11 @@ type Config struct {
 	AmbientShipsMax    int     // 15 — maximum ambient ships (when no real ships)
 	AmbientSpeedFactor float64 // 0.8 — speed relative to real ships
 
+	// Game Mechanics
+	MaxShips         int     // Max ships per user (default 10)
+	StartingPoints   float64 // Points given to new users (default 1000)
+	StartingMaxShips int     // max_ships column for new users (default 10)
+
 	// Teneo Community API
 	TeneoCommunityAPIURL string
 	TeneoCommunityAPIKey string
@@ -116,6 +121,10 @@ func Load() *Config {
 		TravelCostPerUnit:   getEnvFloat("TRAVEL_COST_PER_UNIT", 10.0),
 		TravelCostMinimum:   getEnvFloat("TRAVEL_COST_MINIMUM", 5.0),
 		TravelTimePerUnit:   getEnvFloat("TRAVEL_TIME_PER_UNIT", 950000), // ~16 min game time per unit
+
+		MaxShips:         getEnvInt("MAX_SHIPS", 10),
+		StartingPoints:   getEnvFloat("STARTING_POINTS", 1000),
+		StartingMaxShips: getEnvInt("STARTING_MAX_SHIPS", 10),
 
 		AmbientShipsMin:    getEnvInt("AMBIENT_SHIPS_MIN", 5),
 		AmbientShipsMax:    getEnvInt("AMBIENT_SHIPS_MAX", 15),

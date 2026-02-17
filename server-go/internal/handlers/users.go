@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"teneo/server-go/internal/config"
 	"teneo/server-go/internal/database"
 	"teneo/server-go/internal/database/generated"
 	"teneo/server-go/internal/dto"
@@ -15,7 +16,7 @@ import (
 )
 
 // LoginOrCreateUser logs in or creates a user by wallet address
-func LoginOrCreateUser(c *fiber.Ctx, store *database.Store) error {
+func LoginOrCreateUser(c *fiber.Ctx, store *database.Store, cfg *config.Config) error {
 	var req struct {
 		Wallet string `json:"wallet"`
 	}
@@ -46,8 +47,8 @@ func LoginOrCreateUser(c *fiber.Ctx, store *database.Store) error {
 			Tier:      "free",
 			UserLevel: 1,
 			UsdcSpent: 0,
-			Points:    0,
-			MaxShips:  1,
+			Points:    cfg.StartingPoints,
+			MaxShips:  int32(cfg.StartingMaxShips),
 			CreatedAt: time.Now().UnixMilli(),
 		})
 		if err != nil {

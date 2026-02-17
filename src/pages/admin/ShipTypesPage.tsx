@@ -250,16 +250,26 @@ export default function ShipTypesPage() {
       </Show>
 
       {/* Type List */}
+      <Show when={adminStore.isLoadingShipTypes}>
+        <Card>
+          <CardContent class="py-12 text-center">
+            <div class="w-8 h-8 mx-auto mb-4 border-2 border-[var(--brand-teal-1)] border-t-transparent rounded-full animate-spin" />
+            <p class="text-[var(--text-secondary)]">Loading ship types...</p>
+          </CardContent>
+        </Card>
+      </Show>
       <Show
-        when={adminStore.shipTypes.length > 0}
+        when={!adminStore.isLoadingShipTypes && adminStore.shipTypes.length > 0}
         fallback={
-          <Card>
-            <CardContent class="py-12 text-center">
-              <Rocket class="w-12 h-12 mx-auto mb-4 text-[var(--text-tertiary)]" />
-              <p class="text-[var(--text-secondary)]">No ship types defined</p>
-              <p class="text-sm text-[var(--text-tertiary)]">Create your first ship type to get started</p>
-            </CardContent>
-          </Card>
+          <Show when={!adminStore.isLoadingShipTypes}>
+            <Card>
+              <CardContent class="py-12 text-center">
+                <Rocket class="w-12 h-12 mx-auto mb-4 text-[var(--text-tertiary)]" />
+                <p class="text-[var(--text-secondary)]">No ship types defined</p>
+                <p class="text-sm text-[var(--text-tertiary)]">Create your first ship type to get started</p>
+              </CardContent>
+            </Card>
+          </Show>
         }
       >
         <div class="space-y-4">

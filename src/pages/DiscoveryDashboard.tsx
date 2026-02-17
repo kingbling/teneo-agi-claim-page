@@ -233,6 +233,7 @@ export const DiscoveryDashboard: Component = () => {
           followTrigger={followTrigger()}
           synapseTypeFilter={synapseTypeFilter() === 'all' ? null : synapseTypeFilter()}
           explorationTarget={shipStore.explorationTarget}
+          disableTooltip={!!deployTarget() || panels.showCreateShipDialog}
         />
         {/* Explore Prompt - shown when searching ship clicks a synapse */}
         <Show when={explorePromptData() && shipStore.selectedShip}>

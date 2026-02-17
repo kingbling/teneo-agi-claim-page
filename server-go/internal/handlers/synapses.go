@@ -486,15 +486,7 @@ func UpdateExplorationRate(c *fiber.Ctx, store *database.Store) error {
 
 // GetGameConfig returns the game configuration in frontend-compatible format
 func GetGameConfig(c *fiber.Ctx, cfg *config.Config) error {
-	// Return the format expected by the frontend (src/stores/configStore.ts)
-	return c.JSON(dto.GetFrontendGameConfig(
-		cfg.TickInterval,
-		cfg.TimeMultiplier,
-		cfg.BrainBoundsMin,
-		cfg.BrainBoundsMax,
-		cfg.BoundaryMargin,
-		cfg.BoundarySteerStrength,
-	))
+	return c.JSON(dto.GetFrontendConfig(cfg.MaxShips))
 }
 
 // convertGenSpaceToSynapseDTO converts a generated.Space to a dto.Synapse
